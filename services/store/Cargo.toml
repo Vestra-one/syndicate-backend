@@ -1,0 +1,12 @@
+[package]
+name = "syndicate-store"
+version = "0.1.0"
+edition = "2021"
+description = "Append-only, hash-chained event store for the authoritative match log (event sourcing). Tamper-evident: every record is chained via sha256, and load re-verifies the chain. In-memory + file-backed implementations."
+
+[lib]
+name = "syndicate_store"
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.10"

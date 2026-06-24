@@ -1,0 +1,10 @@
+{
+  "name": "@syndicate/config",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Versioned game parameters: schema, validation guardrails, per-match bind + replay hash.",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

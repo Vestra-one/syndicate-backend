@@ -1,0 +1,19 @@
+# Syndicate backend — Rust workspace.
+# `programs` (Anchor/Solana) is its own workspace (needs the Solana toolchain) and is
+# intentionally excluded here so the deterministic core builds with zero external deps.
+[workspace]
+resolver = "2"
+members = [
+    "services/shared",
+    "services/settlement",
+    "services/match-engine",
+    "services/oracle-adapter",
+    "services/timelock",
+    "services/store",
+    "services/worker",
+]
+# The Anchor program builds with the Solana toolchain (`anchor build`), not the host
+# cargo workspace, so it is excluded here. It still links `services/shared` by path.
+exclude = [
+    "services/programs",
+]

@@ -1,0 +1,12 @@
+[package]
+name = "syndicate-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Authoritative match engine core: state machine, betting legality, turn order, contribution tracking, end-condition detection. Pure + deterministic; produces the settlement inputs consumed by syndicate-shared. Networking/persistence (tokio, lease) layer on top."
+
+[lib]
+name = "syndicate_engine"
+path = "src/lib.rs"
+
+[dependencies]
+syndicate-shared = { path = "../shared" }

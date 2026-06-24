@@ -1,0 +1,10 @@
+{
+  "name": "@syndicate/trust-safety",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Collusion / bot / Sybil detection heuristics + enforcement decision.",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

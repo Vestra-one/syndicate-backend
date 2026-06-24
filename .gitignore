@@ -1,0 +1,18 @@
+# Rust build artifacts.
+# NOTE: in some mounted/dev environments the working dir rejects cargo's temp-file
+# ops; build with the target dir off-mount, e.g.  CARGO_TARGET_DIR=$HOME/syndicate-target
+/target/
+target/
+/syndicate-target/
+
+# TypeScript / Node (edge services)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Logs, env, secrets
+*.log
+.env
+.env.*
+*.key
+*.pem

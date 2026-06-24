@@ -1,0 +1,11 @@
+[package]
+name = "syndicate-settlement"
+version = "0.1.0"
+edition = "2021"
+description = "Settlement service: the convergence point. Wires the match engine, oracle adapter, and time-lock together, computes the outcome via syndicate-shared, builds the on-chain submission bundle, and orchestrates VOID/refund on any guard failure. All outcome math is delegated to syndicate-shared."
+
+[dependencies]
+syndicate-shared = { path = "../shared" }
+syndicate-engine = { path = "../match-engine" }
+syndicate-oracle = { path = "../oracle-adapter" }
+syndicate-timelock = { path = "../timelock" }

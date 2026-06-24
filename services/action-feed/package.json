@@ -1,0 +1,10 @@
+{
+  "name": "@syndicate/action-feed",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Public match event projection (with strict redaction) + live-games dashboard ranking/sort.",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

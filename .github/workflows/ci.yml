@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The determinism + conservation + parity suites (in rust-core) are the merge gate:
+# a red run here means the chain could disagree with the off-chain builder, which is a
+# foundation-level regression and must block merge.
+jobs:
+  rust-core:
+    name: Rust core (determinism + conservation + parity gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test (workspace) — includes golden vectors, 100k conservation property, e2e parity
+        run: cargo test --workspace
+
+  ts-edge:
+    name: TypeScript edge/read-path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test (type-stripped, zero-dep)
+        run: node --experimental-strip-types --test $(find services -name '*.test.ts' | sort)
+
+  anchor-program:
+    name: Anchor program (build + litesvm parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Solana + Anchor
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked
+          avm install 0.30.1 && avm use 0.30.1
+      - name: Anchor test — program must reproduce golden/ vectors
+        working-directory: services/programs
+        run: anchor test

@@ -1,0 +1,18 @@
+[package]
+name = "syndicate-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Runnable settlement worker daemon (tokio): consumes completed matches off a channel, settles via the shared core, finalizes (submit/refund), and persists each settlement to the hash-chained event store. Demonstrates a real async service runtime wiring the libraries together."
+
+[[bin]]
+name = "syndicate-worker"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+syndicate-shared = { path = "../shared" }
+syndicate-engine = { path = "../match-engine" }
+syndicate-oracle = { path = "../oracle-adapter" }
+syndicate-timelock = { path = "../timelock" }
+syndicate-settlement = { path = "../settlement" }
+syndicate-store = { path = "../store" }

@@ -1,0 +1,19 @@
+[package]
+name = "syndicate-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Modular pull-oracle core + real Switchboard Crossbar client. Window sampling, guards, S finalization (median) via syndicate-shared. Crossbar response structs/parsers are real and tested offline (float-free decimal→fixed-point); the live HTTP fetch is behind the `net` feature."
+
+[lib]
+name = "syndicate_oracle"
+path = "src/lib.rs"
+
+[dependencies]
+syndicate-shared = { path = "../shared" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", optional = true }
+
+[features]
+# Live Switchboard Crossbar HTTP client (ureq). Off by default; CI enables it.
+net = ["dep:ureq"]

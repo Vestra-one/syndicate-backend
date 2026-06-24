@@ -1,0 +1,12 @@
+[package]
+name = "syndicate-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Syndicate deterministic core: integer money math, side-pot construction, S median, winner/tie logic, replay. Zero external dependencies (so it builds anywhere and is byte-identical to the on-chain validator)."
+
+[lib]
+name = "syndicate_shared"
+path = "src/lib.rs"
+
+[dependencies]
+# Intentionally none. Determinism + portability require std-only.

@@ -1,0 +1,21 @@
+{
+  "description": "Cross-implementation PARITY contract. The Anchor program's litesvm test MUST reproduce `expected` from `inputs` using the shared deterministic crate (syndicate-shared), exactly as the off-chain pipeline does. This equality is the off-chain<->on-chain determinism guarantee (04 §18). Mirrors services/settlement/tests/e2e.rs::e2e_contested_showdown_parity_and_tamper_rejection and services/shared/tests/core.rs golden vectors.",
+  "scenario": "3-handed limped hand to showdown; blinds 1/2; each player contributes 2 (pot 6); seat 0 closest to S=100000.",
+  "inputs": {
+    "players": [
+      { "seat": 0, "contribution": 2, "folded": false, "prediction": 100010, "seal_seq": 0 },
+      { "seat": 1, "contribution": 2, "folded": false, "prediction": 99000, "seal_seq": 1 },
+      { "seat": 2, "contribution": 2, "folded": false, "prediction": 100500, "seal_seq": 2 }
+    ],
+    "settlement_samples": [100000, 100000, 100000, 100000, 100000],
+    "min_samples": 3,
+    "rake_bps": 0,
+    "rake_cap": 0
+  },
+  "expected": {
+    "settlement_price": 100000,
+    "pot_awards": [{ "seat": 0, "amount": 6 }],
+    "uncalled_returns": [],
+    "rake_collected": 0
+  }
+}
