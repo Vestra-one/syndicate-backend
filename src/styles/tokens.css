@@ -1,0 +1,52 @@
+/**
+ * Design tokens — the candlelit / baroque casino aesthetic of the table,
+ * lifted into the 2D HUD so the overlay reads as one world with the 3D scene.
+ */
+:root {
+  /* surfaces — deep warm near-black, matching scene.background #05030a */
+  --bg-void: #05030a;
+  --bg-panel: rgba(20, 12, 6, 0.72);
+  --bg-panel-strong: rgba(28, 16, 8, 0.9);
+  --bg-raised: rgba(58, 34, 16, 0.55);
+
+  /* gold — the engraved-rim palette */
+  --gold: #caa23f;
+  --gold-bright: #f3d98a;
+  --gold-deep: #8a6a22;
+  --gold-line: #e6c163;
+
+  /* ink / text */
+  --text: #f3e4c4;
+  --text-dim: #b59b6e;
+  --text-faint: #6f5d3e;
+
+  /* directional accents */
+  --up: #4fd18b;
+  --up-glow: rgba(79, 209, 139, 0.35);
+  --down: #e7644d;
+  --down-glow: rgba(231, 100, 77, 0.35);
+
+  /* status */
+  --live: #6fe39a;
+  --warn: #e7b24d;
+
+  /* edges & glow */
+  --hairline: rgba(202, 162, 63, 0.28);
+  --hairline-strong: rgba(202, 162, 63, 0.55);
+  --glow-warm: 0 0 24px rgba(255, 180, 90, 0.18);
+  --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.6);
+
+  /* type */
+  --font-display: 'Georgia', 'Times New Roman', serif;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* geometry */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --pad: 16px;
+  --hud-gap: 14px;
+
+  /* motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
