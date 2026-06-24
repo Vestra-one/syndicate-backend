@@ -1,5 +1,4 @@
 import { Brand } from './Brand'
-import { PriceTicker } from './PriceTicker'
 import { WalletBadge } from './WalletBadge'
 import { RoundStatus } from './RoundStatus'
 import { BettingPanel } from './BettingPanel'
@@ -15,8 +14,9 @@ export function Hud() {
   return (
     <div className="hud">
       <header className="hud-top">
+        {/* The market price/chart now lives on the 3D board itself, so the
+            redundant 2D ticker has been retired. */}
         <Brand />
-        <PriceTicker />
         <WalletBadge />
       </header>
 

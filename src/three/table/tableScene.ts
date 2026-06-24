@@ -646,10 +646,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     0.1,
     200,
   )
-  // Front-on hero framing of the price board (matches price.png). The board is
-  // the centrepiece, so the camera sits near eye level and looks at it head-on.
-  const camBase = new THREE.Vector3(0, 2.5, 6.5)
-  const LOOK = new THREE.Vector3(0, 2.15, -0.2)
+  const camBase = new THREE.Vector3(0, 3.3, 7.9)
+  const LOOK = new THREE.Vector3(0, -0.25, 0)
   camera.position.copy(camBase)
   camera.lookAt(LOOK)
 
@@ -780,10 +778,12 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   // ---- price board (stands on the felt) ----
   const priceBoard = createPriceBoard()
-  // rest the board's base on the felt, pushed back toward the rim so the whole
-  // board frames centred in the fixed camera (matching price.png)
-  priceBoard.group.position.set(0, yFelt + 1.75 + 0.52, -0.2)
-  priceBoard.group.rotation.x = -0.03
+  // a tabletop-scale board: shrunk to sit on the felt and read fully under the
+  // original overhead camera, leaning back slightly to face it.
+  const PB_SCALE = 0.6
+  priceBoard.group.scale.setScalar(PB_SCALE)
+  priceBoard.group.position.set(0, yFelt + 2.27 * PB_SCALE, -0.6)
+  priceBoard.group.rotation.x = -0.1
   scene.add(priceBoard.group)
 
   // ---- floor ----
