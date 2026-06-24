@@ -3,15 +3,15 @@ import { useGameStore } from '@/store/gameStore'
 import type { PriceTick } from '@/lib/types'
 
 /**
- * The price-board cabinet that stands on the felt: a real 3D housing (beveled
- * frame, dark sides, gold rim, base plinth) that catches the room's candlelight
- * and casts a shadow, with a clean, minimal live BTC/USD chart on its screen —
- * focused on price and time, no ornament.
+ * The price-board cabinet that stands on the felt: a real 3D housing (a beveled
+ * frame with an open screen well, dark sides, gold rim, base plinth) that catches
+ * the room's candlelight and casts a shadow, with a clean, minimal live BTC/USD
+ * chart recessed into it — focused on price and time, no ornament.
  *
  * The screen reads live ticks straight from the game store, so it tracks the
  * same feed the rest of the app uses.
  *
- * Local space: origin centred on the cabinet face, +y up, front toward +z.
+ * Local space: origin centred on the cabinet front face, +y up, front toward +z.
  */
 export interface PriceBoardHandle {
   group: THREE.Group
@@ -19,16 +19,31 @@ export interface PriceBoardHandle {
   dispose: () => void
 }
 
+/** trace a centred rounded rectangle onto a Shape or Path */
+function roundRect(p: THREE.Shape | THREE.Path, halfW: number, halfH: number, r: number) {
+  p.moveTo(-halfW + r, -halfH)
+  p.lineTo(halfW - r, -halfH)
+  p.quadraticCurveTo(halfW, -halfH, halfW, -halfH + r)
+  p.lineTo(halfW, halfH - r)
+  p.quadraticCurveTo(halfW, halfH, halfW - r, halfH)
+  p.lineTo(-halfW + r, halfH)
+  p.quadraticCurveTo(-halfW, halfH, -halfW, halfH - r)
+  p.lineTo(-halfW, -halfH + r)
+  p.quadraticCurveTo(-halfW, -halfH, -halfW + r, -halfH)
+}
+
 export function createPriceBoard(): PriceBoardHandle {
   const group = new THREE.Group()
 
   // cabinet face dimensions (local units)
-  const W = 4.8
+  const W = 7.1
   const H = 3.2
   const hw = W / 2
   const hh = H / 2
   const DEPTH = 0.4
-  const BEZEL = 0.2
+  const BEZEL = 0.26
+  const shw = hw - BEZEL // screen half-width
+  const shh = hh - BEZEL // screen half-height
 
   // ---- materials ----
   const shellMat = new THREE.MeshStandardMaterial({
@@ -44,38 +59,36 @@ export function createPriceBoard(): PriceBoardHandle {
     envMapIntensity: 1.4,
   })
 
-  // ---- cabinet body (rounded-rect beveled slab) ----
-  const shape = new THREE.Shape()
-  const r = 0.14
-  const bx = hw
-  const by = hh
-  shape.moveTo(-bx + r, -by)
-  shape.lineTo(bx - r, -by)
-  shape.quadraticCurveTo(bx, -by, bx, -by + r)
-  shape.lineTo(bx, by - r)
-  shape.quadraticCurveTo(bx, by, bx - r, by)
-  shape.lineTo(-bx + r, by)
-  shape.quadraticCurveTo(-bx, by, -bx, by - r)
-  shape.lineTo(-bx, -by + r)
-  shape.quadraticCurveTo(-bx, -by, -bx + r, -by)
-  const body = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(shape, {
+  // ---- cabinet frame: rounded-rect outline with a screen opening ----
+  const outline = new THREE.Shape()
+  roundRect(outline, hw, hh, 0.14)
+  const hole = new THREE.Path()
+  roundRect(hole, shw, shh, 0.07)
+  outline.holes.push(hole)
+  const frame = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(outline, {
       depth: DEPTH,
       bevelEnabled: true,
-      bevelThickness: 0.05,
-      bevelSize: 0.06,
+      bevelThickness: 0.04,
+      bevelSize: 0.05,
       bevelSegments: 3,
     }),
     shellMat,
   )
-  body.position.z = -DEPTH / 2
-  body.castShadow = true
-  body.receiveShadow = true
-  group.add(body)
+  frame.position.z = -DEPTH // front face sits at z = 0
+  frame.castShadow = true
+  frame.receiveShadow = true
+  group.add(frame)
 
-  // ---- live chart screen ----
-  const SCW = 1180
-  const SCH = Math.round((SCW * (H - 2 * BEZEL)) / (W - 2 * BEZEL))
+  // ---- back panel closing the cabinet behind the screen ----
+  const backPanel = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, H * 0.94, 0.06), shellMat)
+  backPanel.position.z = -DEPTH + 0.04
+  backPanel.receiveShadow = true
+  group.add(backPanel)
+
+  // ---- live chart screen, recessed into the opening ----
+  const SCW = 1280
+  const SCH = Math.round((SCW * shh) / shw)
   const screenCanvas = document.createElement('canvas')
   screenCanvas.width = SCW
   screenCanvas.height = SCH
@@ -86,64 +99,52 @@ export function createPriceBoard(): PriceBoardHandle {
   screenTex.colorSpace = THREE.SRGBColorSpace
   screenTex.anisotropy = 16
   const screen = new THREE.Mesh(
-    new THREE.PlaneGeometry(W - 2 * BEZEL, H - 2 * BEZEL),
-    new THREE.MeshStandardMaterial({
-      emissiveMap: screenTex,
-      emissive: 0xffffff,
-      emissiveIntensity: 1.0,
-      color: 0x000000,
-      metalness: 0,
-      roughness: 0.6,
-    }),
+    new THREE.PlaneGeometry(shw * 2 + 0.04, shh * 2 + 0.04),
+    new THREE.MeshBasicMaterial({ map: screenTex }),
   )
-  screen.position.z = DEPTH / 2 + 0.01
+  screen.position.z = -0.05 // recessed behind the front face, seen through the well
   group.add(screen)
 
-  // ---- slim gold rim around the screen ----
-  const rimT = 0.06
-  const rimZ = DEPTH / 2 + 0.03
-  const sw = W - 2 * BEZEL
-  const sh = H - 2 * BEZEL
+  // ---- slim gold rim around the screen opening ----
+  const rimT = 0.05
+  const rimZ = 0.02
   const mkBar = (w: number, h: number, x: number, y: number) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, rimT * 1.4), goldMat)
     m.position.set(x, y, rimZ)
     m.castShadow = true
     group.add(m)
   }
-  mkBar(sw + rimT * 2, rimT, 0, sh / 2 + rimT / 2)
-  mkBar(sw + rimT * 2, rimT, 0, -sh / 2 - rimT / 2)
-  mkBar(rimT, sh + rimT * 2, -sw / 2 - rimT / 2, 0)
-  mkBar(rimT, sh + rimT * 2, sw / 2 + rimT / 2, 0)
+  mkBar(shw * 2 + rimT * 2, rimT, 0, shh + rimT / 2)
+  mkBar(shw * 2 + rimT * 2, rimT, 0, -shh - rimT / 2)
+  mkBar(rimT, shh * 2 + rimT * 2, -shw - rimT / 2, 0)
+  mkBar(rimT, shh * 2 + rimT * 2, shw + rimT / 2, 0)
 
   // ---- base plinth so it sits believably on the felt ----
   const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.08, 0.34, DEPTH + 0.45), shellMat)
-  base.position.set(0, -hh - 0.17, 0)
+  base.position.set(0, -hh - 0.17, -DEPTH / 2)
   base.castShadow = true
   base.receiveShadow = true
   group.add(base)
   const baseBand = new THREE.Mesh(new THREE.BoxGeometry(W * 1.08, 0.04, DEPTH + 0.46), goldMat)
-  baseBand.position.set(0, -hh - 0.01, 0)
+  baseBand.position.set(0, -hh - 0.01, -DEPTH / 2)
   group.add(baseBand)
 
   // ================= minimal live chart =================
-  const PAD = { l: 18, r: 96, t: 96, b: 50 }
+  const PAD = { l: 18, r: 98, t: 98, b: 52 }
   const fmtPrice = (v: number) =>
     v >= 1000
       ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
       : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
   const fmtTime = (ts: number) => {
     const d = new Date(ts)
-    const hh2 = d.getHours().toString().padStart(2, '0')
-    const mm = d.getMinutes().toString().padStart(2, '0')
-    return `${hh2}:${mm}`
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
   }
 
   function drawChart(history: PriceTick[], price: number | null) {
     cx.clearRect(0, 0, SCW, SCH)
-    // background
     const bg = cx.createLinearGradient(0, 0, 0, SCH)
     bg.addColorStop(0, '#0b1016')
-    bg.addColorStop(1, '#070a0e')
+    bg.addColorStop(1, '#060a0e')
     cx.fillStyle = bg
     cx.fillRect(0, 0, SCW, SCH)
 
@@ -151,23 +152,21 @@ export function createPriceBoard(): PriceBoardHandle {
     const gx1 = SCW - PAD.r
     const gy0 = PAD.t
     const gy1 = SCH - PAD.b
-
     const accent = '#e9a23b'
-    const muted = 'rgba(150,166,182,0.7)'
+    const muted = 'rgba(156,172,188,0.72)'
     const faint = 'rgba(150,170,190,0.10)'
     const sans = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
 
-    // header — focus on price
     cx.textBaseline = 'alphabetic'
     cx.textAlign = 'left'
     cx.fillStyle = muted
     cx.font = `600 22px ${sans}`
-    cx.fillText('B T C   /   U S D', gx0 + 4, 40)
+    cx.fillText('B T C   /   U S D', gx0 + 4, 42)
 
     const pts = history.filter((h) => Number.isFinite(h.price))
     if (pts.length < 2 || price == null) {
-      cx.fillStyle = 'rgba(180,196,212,0.5)'
-      cx.font = `500 26px ${sans}`
+      cx.fillStyle = 'rgba(180,196,212,0.55)'
+      cx.font = `500 28px ${sans}`
       cx.textAlign = 'center'
       cx.fillText('awaiting price feed…', SCW / 2, SCH / 2)
       screenTex.needsUpdate = true
@@ -178,36 +177,36 @@ export function createPriceBoard(): PriceBoardHandle {
     const lo = Math.min(...prices)
     const hi = Math.max(...prices)
     const span = hi - lo || hi * 0.001 || 1
-    const padv = span * 0.18
-    const vmin = lo - padv
-    const vmax = hi + padv
+    const vmin = lo - span * 0.2
+    const vmax = hi + span * 0.2
     const t0 = pts[0].ts
     const t1 = pts[pts.length - 1].ts
     const tspan = t1 - t0 || 1
     const toX = (ts: number) => gx0 + ((ts - t0) / tspan) * (gx1 - gx0)
     const toY = (v: number) => gy1 - ((v - vmin) / (vmax - vmin)) * (gy1 - gy0)
 
-    const first = prices[0]
-    const change = ((price - first) / first) * 100
+    const change = ((price - prices[0]) / prices[0]) * 100
     const up = change >= 0
 
-    // big current price + change
+    // prominent current price + change
     cx.textAlign = 'left'
     cx.fillStyle = '#f2f6fa'
-    cx.font = `600 52px ${sans}`
-    cx.fillText(`$${fmtPrice(price)}`, gx0 + 4, 84)
+    cx.font = `600 54px ${sans}`
+    const priceStr = `$${fmtPrice(price)}`
+    cx.fillText(priceStr, gx0 + 4, 86)
     cx.fillStyle = up ? '#46d18b' : '#f06a6a'
     cx.font = `600 24px ${sans}`
-    const pm = `${up ? '▲' : '▼'} ${up ? '+' : ''}${change.toFixed(2)}%`
-    const pw = cx.measureText(`$${fmtPrice(price)}`).width
-    cx.fillText(pm, gx0 + 4 + pw + 22, 80)
+    cx.fillText(
+      `${up ? '▲' : '▼'} ${up ? '+' : ''}${change.toFixed(2)}%`,
+      gx0 + 4 + cx.measureText(priceStr).width + 22,
+      82,
+    )
 
     // horizontal grid + price axis (right)
     cx.textBaseline = 'middle'
     cx.font = `500 19px ${sans}`
-    const rows = 4
-    for (let i = 0; i <= rows; i++) {
-      const v = vmin + ((vmax - vmin) * i) / rows
+    for (let i = 0; i <= 4; i++) {
+      const v = vmin + ((vmax - vmin) * i) / 4
       const gy = toY(v)
       cx.strokeStyle = faint
       cx.lineWidth = 1
@@ -222,9 +221,8 @@ export function createPriceBoard(): PriceBoardHandle {
 
     // vertical grid + time axis (bottom)
     cx.textBaseline = 'top'
-    const cols = 4
-    for (let i = 0; i <= cols; i++) {
-      const ts = t0 + (tspan * i) / cols
+    for (let i = 0; i <= 4; i++) {
+      const ts = t0 + (tspan * i) / 4
       const gx = toX(ts)
       cx.strokeStyle = faint
       cx.lineWidth = 1
@@ -233,28 +231,28 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.lineTo(gx, gy1)
       cx.stroke()
       cx.fillStyle = muted
-      cx.textAlign = i === 0 ? 'left' : i === cols ? 'right' : 'center'
+      cx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center'
       cx.fillText(fmtTime(ts), gx, gy1 + 12)
     }
 
     // area fill under the line
     cx.beginPath()
-    cx.moveTo(toX(pts[0].ts), gy1)
+    cx.moveTo(toX(t0), gy1)
     for (const p of pts) cx.lineTo(toX(p.ts), toY(p.price))
     cx.lineTo(toX(t1), gy1)
     cx.closePath()
     const area = cx.createLinearGradient(0, gy0, 0, gy1)
-    area.addColorStop(0, 'rgba(233,162,59,0.22)')
+    area.addColorStop(0, 'rgba(233,162,59,0.24)')
     area.addColorStop(1, 'rgba(233,162,59,0)')
     cx.fillStyle = area
     cx.fill()
 
     // the price line
     cx.beginPath()
-    cx.moveTo(toX(pts[0].ts), toY(pts[0].price))
+    cx.moveTo(toX(t0), toY(pts[0].price))
     for (const p of pts) cx.lineTo(toX(p.ts), toY(p.price))
     cx.strokeStyle = accent
-    cx.lineWidth = 2.4
+    cx.lineWidth = 2.6
     cx.lineJoin = 'round'
     cx.lineCap = 'round'
     cx.save()
@@ -263,7 +261,7 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.stroke()
     cx.restore()
 
-    // latest point: guide line + dot + label pill
+    // latest point + guide + price pill
     const lx = toX(t1)
     const ly = toY(price)
     cx.strokeStyle = 'rgba(233,162,59,0.35)'
@@ -278,11 +276,10 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.beginPath()
     cx.arc(lx, ly, 5, 0, Math.PI * 2)
     cx.fill()
-    cx.fillStyle = 'rgba(255,255,255,0.9)'
+    cx.fillStyle = 'rgba(255,255,255,0.92)'
     cx.beginPath()
     cx.arc(lx, ly, 2, 0, Math.PI * 2)
     cx.fill()
-    // current price pill on the right axis
     cx.fillStyle = accent
     const pill = fmtPrice(price)
     cx.font = `600 19px ${sans}`
@@ -296,26 +293,23 @@ export function createPriceBoard(): PriceBoardHandle {
     screenTex.needsUpdate = true
   }
 
-  // initial paint + throttled live updates
-  let lastDraw = -1
+  // initial paint + throttled live refresh
+  // Refresh from the live feed on a timer (not the RAF loop — RAF can be
+  // throttled; the data cadence is ~250ms anyway). The scene's render loop
+  // uploads the updated canvas each frame.
   const refresh = () => {
     const s = useGameStore.getState()
-    if ((globalThis as { __pbLog?: number }).__pbLog !== s.priceHistory.length) {
-      ;(globalThis as { __pbLog?: number }).__pbLog = s.priceHistory.length
-      console.log('[priceBoard] history', s.priceHistory.length, 'price', s.price, 'status', s.status)
-    }
     drawChart(s.priceHistory, s.price)
   }
   refresh()
+  const timer = setInterval(refresh, 250)
 
-  function update(t: number) {
-    if (lastDraw < 0 || t - lastDraw > 0.12) {
-      lastDraw = t
-      refresh()
-    }
+  function update(_t: number) {
+    // chart refresh is timer-driven; nothing to do per frame
   }
 
   function dispose() {
+    clearInterval(timer)
     group.traverse((o) => {
       const m = o as THREE.Mesh
       if (m.geometry) m.geometry.dispose()

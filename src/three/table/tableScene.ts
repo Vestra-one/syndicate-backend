@@ -781,7 +781,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   // a tabletop-scale cabinet; rest its base on the felt. Stand it nearly upright
   // (only a hair of back-lean) so it foreshortens like a real object on the
   // table rather than reading as a flat image aimed at the camera.
-  const PB_SCALE = 0.62
+  const PB_SCALE = 0.8
   const PB_BASE_DROP = 1.94 // local distance from face centre to base underside
   priceBoard.group.scale.setScalar(PB_SCALE)
   priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
