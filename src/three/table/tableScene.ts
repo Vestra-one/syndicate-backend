@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { createPriceBoard } from './priceBoard'
 
 /**
  * The centerpiece: a candlelit, baroque price-betting table.
@@ -645,8 +646,10 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     0.1,
     200,
   )
-  const camBase = new THREE.Vector3(0, 3.3, 7.9)
-  const LOOK = new THREE.Vector3(0, -0.25, 0)
+  // Front-on hero framing of the price board (matches price.png). The board is
+  // the centrepiece, so the camera sits near eye level and looks at it head-on.
+  const camBase = new THREE.Vector3(0, 2.5, 6.5)
+  const LOOK = new THREE.Vector3(0, 2.15, -0.2)
   camera.position.copy(camBase)
   camera.lookAt(LOOK)
 
@@ -774,6 +777,14 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   ped.position.y = -THICK / 2 - 1.5
   ped.castShadow = true
   scene.add(ped)
+
+  // ---- price board (stands on the felt) ----
+  const priceBoard = createPriceBoard()
+  // rest the board's base on the felt, pushed back toward the rim so the whole
+  // board frames centred in the fixed camera (matching price.png)
+  priceBoard.group.position.set(0, yFelt + 1.75 + 0.52, -0.2)
+  priceBoard.group.rotation.x = -0.03
+  scene.add(priceBoard.group)
 
   // ---- floor ----
   const floorTex = (() => {
@@ -970,6 +981,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     pool.intensity = 60 * (0.94 + 0.06 * flick(5.0))
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
+    priceBoard.update(t)
     composer.render()
   }
   animate()
@@ -978,6 +990,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   function dispose() {
     running = false
     cancelAnimationFrame(raf)
+    priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
     composer.dispose()
