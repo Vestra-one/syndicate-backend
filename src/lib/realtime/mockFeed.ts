@@ -1,4 +1,4 @@
-import type { Bet, Direction, MarketId, PriceTick, Round } from '@/lib/types'
+import type { Bet, Direction, MarketId, Round } from '@/lib/types'
 import type { FeedEvent, FeedListener, GameFeed } from './feed'
 
 /**

@@ -236,9 +236,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     }
     cx.lineCap = 'round'
     for (let i = 0; i < 320; i++) {
-      let a = rand(0, 7),
-        rr = Math.sqrt(Math.random()) * R * 0.97,
-        x = C + Math.cos(a) * rr,
+      const a = rand(0, 7),
+        rr = Math.sqrt(Math.random()) * R * 0.97
+      let x = C + Math.cos(a) * rr,
         y = C + Math.sin(a) * rr
       cx.strokeStyle = `rgba(${(150 + rand(0, 60)) | 0},${(110 + rand(0, 40)) | 0},${(40 + rand(0, 30)) | 0},${rand(0.05, 0.2)})`
       cx.lineWidth = rand(0.6, 1.5)
