@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createPriceBoard } from './priceBoard'
+import { bindTableView, unbindTableView } from './tableView'
 
 /**
  * The centerpiece: a candlelit, baroque price-betting table.
@@ -650,6 +651,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   const LOOK = new THREE.Vector3(0, -0.25, 0)
   camera.position.copy(camBase)
   camera.lookAt(LOOK)
+  // expose the live camera so the HUD can pin seats/pot to the table
+  bindTableView(camera, renderer.domElement)
 
   // ---- table ----
   const R_OUTER = 5.0,
@@ -992,6 +995,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   function dispose() {
     running = false
     cancelAnimationFrame(raf)
+    unbindTableView()
     priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()

@@ -39,15 +39,20 @@ interface GameState {
 
   settlement: SettlementView | null
   voided: { reason: VoidReason } | null
+  reviewing: boolean // resolution dismissed to inspect the final table
+  seated: boolean // deposit confirmed → seat taken (gates the lobby)
 
   // actions
   connect: () => Promise<void>
   disconnect: () => void
+  joinTable: () => Promise<void>
   sealPrediction: (price: FixedPrice) => Promise<void>
   act: (action: BettingAction) => Promise<void>
   setDefault: (def: DefaultAction) => void
   claim: () => Promise<string | null>
   refund: () => Promise<string | null>
+  setReviewing: (v: boolean) => void
+  playAgain: () => Promise<void>
 }
 
 let adapters: Adapters | null = null
@@ -73,11 +78,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   settlement: null,
   voided: null,
+  reviewing: false,
+  seated: false,
 
   connect: async () => {
     if (gateway) return
     set({ status: 'connecting' })
-    adapters = createAdapters()
+    if (!adapters) adapters = createAdapters()
     // Capture the instance locally — `gateway` (module-global) can be reassigned
     // by a StrictMode unmount/remount across the awaits below; we must act on the
     // instance we created, never whatever global points at after the await.
@@ -114,7 +121,24 @@ export const useGameStore = create<GameState>((set, get) => ({
       yourPrediction: null,
       settlement: null,
       voided: null,
+      seated: false,
     })
+  },
+
+  /** Take your seat: deposit buy-in + entry fee. Seat is granted on finality (§7). */
+  joinTable: async () => {
+    const { match, terms, seated } = get()
+    if (!adapters || !match || !terms || seated) return
+    set({ seated: true }) // optimistic; revert on failure
+    depositedFor = match.matchId
+    try {
+      await adapters.chain.deposit(match.matchId, match.yourSeat ?? 0, terms.buyIn + terms.entryFee)
+      void refreshBalance(set)
+    } catch (err) {
+      console.error('deposit failed:', err)
+      set({ seated: false })
+      depositedFor = null
+    }
   },
 
   sealPrediction: async (price) => {
@@ -181,6 +205,43 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
     return sig
   },
+
+  setReviewing: (v) => set({ reviewing: v }),
+
+  /** Leave the finished match and join a fresh one — no page refresh needed.
+   * Tears down the gateway but keeps the wallet/chain so the balance carries over. */
+  playAgain: async () => {
+    unsub?.()
+    gateway?.disconnect()
+    gateway = null
+    unsub = null
+    depositedFor = null
+    set({
+      status: 'connecting',
+      match: null,
+      yourTurn: null,
+      sealStatus: 'unsealed',
+      yourPrediction: null,
+      settlement: null,
+      voided: null,
+      reviewing: false,
+      seated: false,
+      feed: [],
+      priceHistory: [],
+    })
+    if (!adapters) adapters = createAdapters()
+    const gw = createGateway(adapters)
+    gateway = gw
+    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
+    try {
+      await gw.connect()
+      set({ status: 'live' })
+      void refreshBalance(set)
+    } catch (err) {
+      console.error('rematch failed:', err)
+      set({ status: 'offline' })
+    }
+  },
 }))
 
 type SetState = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void
@@ -231,9 +292,18 @@ function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameS
     priceHistory: [...s.priceHistory, point].slice(-MAX_HISTORY),
   }))
 
-  // Demo nicety: debit the play-money buy-in once, when we're first seated.
-  if (IS_DEMO && depositedFor !== state.matchId && terms && adapters) {
+  // Fallback (demo only): if the match leaves FILLING and the player never
+  // explicitly took their seat via the lobby, auto-deposit so the demo never
+  // stalls. Live mode never auto-deposits — real custody requires the lobby.
+  if (
+    IS_DEMO &&
+    depositedFor !== state.matchId &&
+    state.phase !== 'FILLING' &&
+    terms &&
+    adapters
+  ) {
     depositedFor = state.matchId
+    set({ seated: true })
     void adapters.chain
       .deposit(state.matchId, state.yourSeat ?? 0, terms.buyIn + terms.entryFee)
       .then(() => refreshBalance(set))

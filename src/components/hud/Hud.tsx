@@ -6,6 +6,7 @@ import { YourPosition } from './YourPosition'
 import { Seats } from './Seats'
 import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
+import { Lobby } from './Lobby'
 import './hud.css'
 
 /**
@@ -17,9 +18,10 @@ import './hud.css'
 export function Hud() {
   return (
     <div className="hud">
+      <Seats />
+
       <header className="hud-top">
         <Brand />
-        <Seats />
         <WalletBadge />
       </header>
 
@@ -33,6 +35,7 @@ export function Hud() {
         <RoundStatus />
       </footer>
 
+      <Lobby />
       <Resolution />
     </div>
   )

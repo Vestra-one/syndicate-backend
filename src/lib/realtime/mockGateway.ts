@@ -345,9 +345,10 @@ export function createMockGateway(adapters: Adapters): Gateway {
       pushState()
     }
 
-    // SEALING — wait for the player to seal (or time out into a default prediction)
-    await delay(500)
+    // dwell in FILLING so the lobby (table terms + deposit) can be read
+    await delay(4500)
     if (!live) return
+    // SEALING — wait for the player to seal (or time out into a default prediction)
     phase = 'SEALING'
     pushState()
     // bots seal immediately around the current price

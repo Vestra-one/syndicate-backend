@@ -453,73 +453,181 @@
   color: var(--gold-bright);
 }
 
-/* ---- Opponent seats (top arc) ---- */
-.seats {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  flex: 1;
-  justify-content: center;
+/* ---- Players seated at the table ---- */
+.table-seats {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
+  z-index: 2;
 }
-.seat-card {
-  pointer-events: auto;
-  min-width: 104px;
-  padding: 7px 12px;
+.table-seat {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
   display: flex;
   flex-direction: column;
-  gap: 1px;
   align-items: center;
-  transition:
-    border-color 0.2s var(--ease),
-    box-shadow 0.2s var(--ease),
-    opacity 0.2s var(--ease);
+  gap: 6px;
+  transition: opacity 0.2s linear;
 }
-.seat-name {
+/* the seated medallion — a gold-rimmed token catching the candlelight */
+.seat-medallion {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 38% 32%, rgba(243, 217, 138, 0.35), rgba(40, 24, 10, 0.9) 70%),
+    var(--bg-panel-strong);
+  border: 1.5px solid var(--hairline-strong);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.6),
+    0 6px 16px rgba(0, 0, 0, 0.55);
+}
+.seat-monogram {
   font-family: var(--font-display);
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--gold-bright);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+.seat-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 10px;
+  border-radius: 9px;
+  background: rgba(10, 6, 3, 0.66);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--hairline);
+}
+.seat-alias {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.03em;
   color: var(--text-dim);
+  white-space: nowrap;
 }
 .seat-stack {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
 }
-.seat-meta {
-  min-height: 14px;
+/* committed chips, pushed toward the pot (above the medallion) */
+.seat-chip {
+  order: -1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a1206;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  padding: 2px 9px;
+  border-radius: 11px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
-.seat-bet {
-  font-size: 11px;
-  color: var(--gold-bright);
-}
-.seat-bet--idle {
-  color: var(--text-faint);
-}
-.seat-tag {
+/* dealer button — an unmistakable poker disc, distinct from any monogram */
+.seat-dealer {
+  position: absolute;
+  right: -9px;
+  bottom: -7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-ui);
   font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding: 1px 7px;
-  border-radius: 4px;
+  font-weight: 800;
+  letter-spacing: 0;
+  color: #1a1206;
+  background: radial-gradient(circle at 38% 32%, #fff, #d8c8a6);
+  border: 1.5px solid #2a1c0c;
+  box-shadow:
+    0 2px 7px rgba(0, 0, 0, 0.7),
+    0 0 0 2px rgba(255, 255, 255, 0.12);
 }
-.seat-tag--folded {
-  color: var(--text-faint);
-  background: rgba(255, 255, 255, 0.04);
+/* acting — a pulsing gold ring draws the eye to whose turn it is */
+.table-seat--acting .seat-medallion {
+  border-color: var(--gold-bright);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.5),
+    0 0 0 2px var(--gold),
+    0 0 26px rgba(243, 217, 138, 0.55);
+  animation: seat-pulse 1.5s var(--ease) infinite;
 }
-.seat-tag--allin {
+.table-seat--acting .seat-alias {
   color: var(--gold-bright);
-  background: rgba(202, 162, 63, 0.18);
 }
-.seat-tag--acting {
-  color: var(--warn);
+@keyframes seat-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 2px 6px rgba(0, 0, 0, 0.5),
+      0 0 0 2px var(--gold),
+      0 0 18px rgba(243, 217, 138, 0.4);
+  }
+  50% {
+    box-shadow:
+      inset 0 2px 6px rgba(0, 0, 0, 0.5),
+      0 0 0 3px var(--gold-bright),
+      0 0 32px rgba(243, 217, 138, 0.7);
+  }
 }
-.seat-card--acting {
-  border-color: var(--gold);
-  box-shadow: var(--glow-warm);
+.table-seat--folded {
+  opacity: 0.4;
+  filter: grayscale(0.7);
 }
-.seat-card--folded {
-  opacity: 0.45;
+.table-seat--allin .seat-medallion {
+  border-color: var(--down);
+}
+.table-seat--allin .seat-stack {
+  color: var(--down);
+}
+
+/* ---- the pot, pinned to the centre of the felt ---- */
+.table-pot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  transition: opacity 0.2s linear;
+}
+.pot-chips {
+  position: relative;
+  height: 16px;
+  display: flex;
+  justify-content: center;
+}
+.pot-chip {
+  width: 24px;
+  height: 9px;
+  border-radius: 50%;
+  margin: 0 -7px;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.55);
+}
+.pot-chip:nth-child(2) {
+  transform: translateY(-4px);
+}
+.pot-chip:nth-child(3) {
+  transform: translateY(-8px);
+}
+.pot-amount {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--gold-bright);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+}
+.pot-eyebrow {
+  color: var(--text-faint);
 }
 
 /* ---- Action feed ---- */
@@ -567,16 +675,109 @@
   }
 }
 
+/* ---- Lobby (join + table terms) ---- */
+.lobby {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 20px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent 34%, rgba(0, 0, 0, 0.5) 66%, rgba(0, 0, 0, 0.84));
+  animation: ceremony-fade 0.5s var(--ease);
+}
+.lobby-card {
+  pointer-events: auto;
+  width: min(460px, 94vw);
+  padding: 20px 24px 22px;
+  background: var(--bg-panel-strong);
+  border-color: var(--hairline-strong);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.7);
+}
+.lobby-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.lobby-feed {
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--gold-bright);
+  margin-top: 2px;
+}
+.lobby-players {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.lobby-players-count {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.lobby-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+.lobby-term {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lobby-term-value {
+  font-size: 14px;
+  color: var(--text);
+}
+.lobby-cost {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 16px 0 12px;
+}
+.lobby-cost-amount {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--gold-bright);
+}
+.lobby-join {
+  width: 100%;
+}
+.lobby-note {
+  text-align: center;
+  color: var(--text-dim);
+  margin: 10px 0 0;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 11px;
+}
+
 /* ---- Resolution ceremony ---- */
+/* The card sits in the lower area so the price board stays visible above it —
+ * the result is read against the final chart, not on top of it. */
 .ceremony {
   position: fixed;
   inset: 0;
   z-index: 3;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at 50% 40%, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.92));
-  backdrop-filter: blur(3px);
-  animation: ceremony-fade 0.6s var(--ease);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 20px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 36%,
+    rgba(0, 0, 0, 0.45) 64%,
+    rgba(0, 0, 0, 0.82)
+  );
+  animation: ceremony-fade 0.5s var(--ease);
 }
 @keyframes ceremony-fade {
   from {
@@ -584,40 +785,42 @@
   }
 }
 .ceremony-card {
+  pointer-events: auto;
   width: min(440px, 92vw);
-  padding: 32px 34px;
+  padding: 22px 30px 24px;
   text-align: center;
   background: var(--bg-panel-strong);
   border-color: var(--hairline-strong);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.7);
 }
 .ceremony-eyebrow {
   color: var(--text-faint);
 }
 .ceremony-price {
-  font-size: 46px;
+  font-size: 40px;
   font-weight: 600;
   color: var(--gold-bright);
   text-shadow: var(--glow-warm);
-  margin: 6px 0 2px;
+  margin: 4px 0 2px;
 }
 .ceremony-sub {
   color: var(--text-dim);
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 .reveal-list {
   list-style: none;
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 .reveal-row {
   display: grid;
   grid-template-columns: 28px 1fr auto auto;
   gap: 12px;
   align-items: baseline;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.03);
   text-align: left;
@@ -676,6 +879,50 @@
 }
 .ceremony-claim {
   width: 100%;
+}
+.ceremony-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.ghost-btn {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+  font-size: 13px;
+  transition: all 0.15s var(--ease);
+}
+.ghost-btn:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text);
+}
+.ghost-btn--primary {
+  color: var(--gold-bright);
+  border-color: var(--gold);
+}
+.ghost-btn--primary:hover {
+  background: rgba(202, 162, 63, 0.14);
+}
+/* dismissed-ceremony bar — sits low, clear of the price board */
+.review-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 18px;
+}
+.review-bar .ghost-btn {
+  flex: 0 0 auto;
+  padding: 7px 14px;
 }
 .ceremony-void-title {
   font-family: var(--font-display);

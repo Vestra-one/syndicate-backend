@@ -130,21 +130,88 @@ export function createPriceBoard(): PriceBoardHandle {
   group.add(baseBand)
 
   // ================= minimal live chart =================
-  const PAD = { l: 18, r: 98, t: 98, b: 52 }
+  const PAD = { l: 26, r: 104, t: 104, b: 50 }
+  const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
   const fmtPrice = (v: number) =>
     v >= 1000
       ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
       : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  const fmtTime = (ts: number) => {
-    const d = new Date(ts)
-    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+  // the trailing slice of time the board shows; the line is resampled onto a
+  // uniform grid across this window so spacing is even regardless of how
+  // irregularly ticks actually arrived.
+  const WINDOW_MS = 60_000
+
+  // canvas rounded-rect path
+  const rr = (x: number, y: number, w: number, h: number, r: number) => {
+    const k = Math.min(r, h / 2, w / 2)
+    cx.beginPath()
+    cx.moveTo(x + k, y)
+    cx.arcTo(x + w, y, x + w, y + h, k)
+    cx.arcTo(x + w, y + h, x, y + h, k)
+    cx.arcTo(x, y + h, x, y, k)
+    cx.arcTo(x, y, x + w, y, k)
+    cx.closePath()
+  }
+  // tracked-out caps with real letter-spacing (Chrome canvas supports ctx.letterSpacing)
+  const tracked = (text: string, x: number, y: number, ls: string) => {
+    const c = cx as CanvasRenderingContext2D & { letterSpacing?: string }
+    const prev = c.letterSpacing
+    c.letterSpacing = ls
+    cx.fillText(text, x, y)
+    c.letterSpacing = prev ?? '0px'
+  }
+  // Tabular figures: lay numerals on a fixed cell so the live price never
+  // shimmies as digits change (system-ui digits aren't tabular by default).
+  // Non-digit glyphs ($ , .) keep their natural width. Returns total advance.
+  const digitCell = () => {
+    let w = 0
+    for (let d = 0; d <= 9; d++) w = Math.max(w, cx.measureText(String(d)).width)
+    return w
+  }
+  const drawTabular = (text: string, x: number, y: number, cell: number) => {
+    cx.textAlign = 'left'
+    let cur = x
+    for (const ch of text) {
+      if (ch >= '0' && ch <= '9') {
+        const w = cx.measureText(ch).width
+        cx.fillText(ch, cur + (cell - w) / 2, y)
+        cur += cell
+      } else {
+        cx.fillText(ch, cur, y)
+        cur += cx.measureText(ch).width
+      }
+    }
+    return cur - x
   }
 
-  function drawChart(history: PricePoint[], price: number | null, prediction: number | null) {
+  // Resample an irregular series onto `n` points evenly spaced over [t0, t1],
+  // linearly interpolating between the source samples. Even X spacing kills the
+  // jerky/stair-stepped look that comes from non-uniform tick arrival.
+  const resample = (src: PricePoint[], t0: number, t1: number, n: number): PricePoint[] => {
+    const out: PricePoint[] = []
+    let j = 0
+    for (let i = 0; i < n; i++) {
+      const ts = t0 + ((t1 - t0) * i) / (n - 1)
+      while (j < src.length - 2 && src[j + 1].ts < ts) j++
+      const a = src[j]
+      const b = src[Math.min(j + 1, src.length - 1)]
+      const f = b.ts > a.ts ? Math.max(0, Math.min(1, (ts - a.ts) / (b.ts - a.ts))) : 0
+      out.push({ ts, price: a.price + (b.price - a.price) * f })
+    }
+    return out
+  }
+
+  function drawChart(
+    history: PricePoint[],
+    price: number | null,
+    prediction: number | null,
+    tNow: number,
+    clock: number,
+  ) {
     cx.clearRect(0, 0, SCW, SCH)
     const bg = cx.createLinearGradient(0, 0, 0, SCH)
-    bg.addColorStop(0, '#0b1016')
-    bg.addColorStop(1, '#060a0e')
+    bg.addColorStop(0, '#0c1219')
+    bg.addColorStop(1, '#05080c')
     cx.fillStyle = bg
     cx.fillRect(0, 0, SCW, SCH)
 
@@ -153,59 +220,78 @@ export function createPriceBoard(): PriceBoardHandle {
     const gy0 = PAD.t
     const gy1 = SCH - PAD.b
     const accent = '#e9a23b'
-    const muted = 'rgba(156,172,188,0.72)'
-    const faint = 'rgba(150,170,190,0.10)'
-    const sans = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    const ink = '#f4f7fa'
+    const dim = 'rgba(160,178,196,0.66)'
+    const faint = 'rgba(150,170,190,0.085)'
 
+    // ---- header: symbol (always shown, even before the feed warms up) ----
     cx.textBaseline = 'alphabetic'
     cx.textAlign = 'left'
-    cx.fillStyle = muted
-    cx.font = `600 22px ${sans}`
-    cx.fillText('B T C   /   U S D', gx0 + 4, 42)
+    cx.fillStyle = dim
+    cx.font = `600 19px ${SANS}`
+    tracked('BTC / USD', gx0 + 2, 40, '7px')
 
-    const pts = history.filter((h) => Number.isFinite(h.price))
-    if (pts.length < 2 || price == null) {
-      cx.fillStyle = 'rgba(180,196,212,0.55)'
-      cx.font = `500 28px ${sans}`
+    const raw = history.filter((h) => Number.isFinite(h.price))
+    if (raw.length < 2 || price == null) {
+      cx.fillStyle = 'rgba(180,196,212,0.5)'
+      cx.font = `500 26px ${SANS}`
       cx.textAlign = 'center'
       cx.fillText('awaiting price feed…', SCW / 2, SCH / 2)
       screenTex.needsUpdate = true
       return
     }
 
+    // ---- resample the raw ticks onto a uniform trailing window ----
+    const tEnd = Math.max(raw[raw.length - 1].ts, clock)
+    const tStart = Math.max(raw[0].ts, tEnd - WINDOW_MS)
+    const SAMPLES = 96
+    const pts = resample(raw, tStart, tEnd, SAMPLES)
+    // pin the final sample to the (eased) live price so line, marker, and pill agree
+    pts[pts.length - 1] = { ts: tEnd, price }
+    const first = pts[0].price
+
     const prices = pts.map((p) => p.price)
-    // include the sealed prediction in the visible range so the conviction line shows
     const lo = Math.min(...prices, prediction ?? Infinity)
     const hi = Math.max(...prices, prediction ?? -Infinity)
     const span = hi - lo || hi * 0.001 || 1
-    const vmin = lo - span * 0.2
-    const vmax = hi + span * 0.2
-    const t0 = pts[0].ts
-    const t1 = pts[pts.length - 1].ts
-    const tspan = t1 - t0 || 1
-    const toX = (ts: number) => gx0 + ((ts - t0) / tspan) * (gx1 - gx0)
+    const vmin = lo - span * 0.22
+    const vmax = hi + span * 0.22
+    const toX = (ts: number) => gx0 + ((ts - tStart) / (tEnd - tStart || 1)) * (gx1 - gx0)
     const toY = (v: number) => gy1 - ((v - vmin) / (vmax - vmin)) * (gy1 - gy0)
 
-    const change = ((price - prices[0]) / prices[0]) * 100
+    const change = first !== 0 ? ((price - first) / first) * 100 : 0
     const up = change >= 0
+    const ly = toY(price)
+    const hasPred = prediction != null && Number.isFinite(prediction)
+    const py = hasPred ? toY(prediction!) : null
+    const dirCol = up ? '#4fd18b' : '#f0716e'
 
-    // prominent current price + change
-    cx.textAlign = 'left'
-    cx.fillStyle = '#f2f6fa'
-    cx.font = `600 54px ${sans}`
-    const priceStr = `$${fmtPrice(price)}`
-    cx.fillText(priceStr, gx0 + 4, 86)
-    cx.fillStyle = up ? '#46d18b' : '#f06a6a'
-    cx.font = `600 24px ${sans}`
-    cx.fillText(
-      `${up ? '▲' : '▼'} ${up ? '+' : ''}${change.toFixed(2)}%`,
-      gx0 + 4 + cx.measureText(priceStr).width + 22,
-      82,
-    )
+    // ---- header: hero price (tabular) + change chip at a fixed anchor ----
+    cx.fillStyle = ink
+    cx.font = `600 52px ${SANS}`
+    cx.textBaseline = 'alphabetic'
+    const cell = digitCell()
+    const priceBaseline = 88
+    drawTabular(`$${fmtPrice(price)}`, gx0 + 2, priceBaseline, cell)
+    // anchor the chip off a reserved max-width price so it never dances tick-to-tick
+    const reserveW = cx.measureText('$').width + cell * 6 + cx.measureText(',').width
 
-    // horizontal grid + price axis (right)
+    cx.font = `600 22px ${SANS}`
+    const chTxt = `${up ? '▲' : '▼'} ${up ? '+' : ''}${change.toFixed(2)}%`
+    const chW = cx.measureText(chTxt).width
+    const chPadX = 13
+    const chH = 32
+    const chX = gx0 + 2 + reserveW + 22
+    const chCenter = priceBaseline - 17
+    cx.fillStyle = up ? 'rgba(79,209,139,0.16)' : 'rgba(240,113,110,0.16)'
+    rr(chX, chCenter - chH / 2, chW + chPadX * 2, chH, chH / 2)
+    cx.fill()
+    cx.fillStyle = dirCol
     cx.textBaseline = 'middle'
-    cx.font = `500 19px ${sans}`
+    cx.fillText(chTxt, chX + chPadX, chCenter + 1)
+
+    // ---- horizontal grid + right price axis (skip ticks that collide with a pill) ----
+    cx.font = `500 18px ${SANS}`
     for (let i = 0; i <= 4; i++) {
       const v = vmin + ((vmax - vmin) * i) / 4
       const gy = toY(v)
@@ -215,15 +301,20 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.moveTo(gx0, gy)
       cx.lineTo(gx1, gy)
       cx.stroke()
-      cx.fillStyle = muted
+      const collides = Math.abs(gy - ly) < 20 || (py != null && Math.abs(gy - py) < 20)
+      if (collides) continue
+      cx.fillStyle = dim
       cx.textAlign = 'left'
-      cx.fillText(fmtPrice(v), gx1 + 12, gy)
+      cx.textBaseline = 'middle'
+      cx.fillText(fmtPrice(v), gx1 + 14, gy)
     }
 
-    // vertical grid + time axis (bottom)
+    // ---- vertical grid + bottom time axis (relative elapsed: −45s … now) ----
     cx.textBaseline = 'top'
-    for (let i = 0; i <= 4; i++) {
-      const ts = t0 + (tspan * i) / 4
+    cx.fillStyle = dim
+    for (const back of [0, 15, 30, 45, 60]) {
+      const ts = tEnd - back * 1000
+      if (ts < tStart - 1) continue
       const gx = toX(ts)
       cx.strokeStyle = faint
       cx.lineWidth = 1
@@ -231,26 +322,25 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.moveTo(gx, gy0)
       cx.lineTo(gx, gy1)
       cx.stroke()
-      cx.fillStyle = muted
-      cx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center'
-      cx.fillText(fmtTime(ts), gx, gy1 + 12)
+      cx.textAlign = back === 0 ? 'right' : ts <= tStart + 1 ? 'left' : 'center'
+      cx.fillText(back === 0 ? 'now' : `−${back}s`, gx, gy1 + 14)
     }
 
-    // area fill under the line
+    // ---- area fill under the line ----
     cx.beginPath()
-    cx.moveTo(toX(t0), gy1)
+    cx.moveTo(toX(pts[0].ts), gy1)
     for (const p of pts) cx.lineTo(toX(p.ts), toY(p.price))
-    cx.lineTo(toX(t1), gy1)
+    cx.lineTo(toX(tEnd), gy1)
     cx.closePath()
     const area = cx.createLinearGradient(0, gy0, 0, gy1)
-    area.addColorStop(0, 'rgba(233,162,59,0.24)')
+    area.addColorStop(0, 'rgba(233,162,59,0.26)')
     area.addColorStop(1, 'rgba(233,162,59,0)')
     cx.fillStyle = area
     cx.fill()
 
-    // the price line
+    // ---- the price line ----
     cx.beginPath()
-    cx.moveTo(toX(t0), toY(pts[0].price))
+    cx.moveTo(toX(pts[0].ts), toY(pts[0].price))
     for (const p of pts) cx.lineTo(toX(p.ts), toY(p.price))
     cx.strokeStyle = accent
     cx.lineWidth = 2.6
@@ -262,15 +352,28 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.stroke()
     cx.restore()
 
-    // sealed-prediction line — your "conviction" target (distance-to-conviction).
+    // a pill drawn at the right edge, anchored on a value's y, with a short
+    // connector tab into the plot — shared by the live price and the call line.
+    const edgePill = (text: string, y: number, fill: string, fg: string) => {
+      cx.font = `600 19px ${SANS}`
+      const w = cx.measureText(text).width + 20
+      const h = 30
+      cx.fillStyle = fill
+      rr(gx1 + 8, y - h / 2, w, h, 7)
+      cx.fill()
+      cx.fillStyle = fg
+      cx.textBaseline = 'middle'
+      cx.textAlign = 'left'
+      cx.fillText(text, gx1 + 18, y + 1)
+    }
+
+    // ---- sealed-prediction line — your "conviction" target ----
     // The hero of the screen once sealed: where you've staked your read of the market.
-    if (prediction != null && Number.isFinite(prediction)) {
-      const py = toY(prediction)
+    if (hasPred && py != null) {
       const pred = '#7fd0ff'
       // faint band between the live price and your call — the "gap to conviction"
       cx.fillStyle = 'rgba(127,208,255,0.07)'
-      cx.fillRect(gx0, Math.min(py, toY(price)), gx1 - gx0, Math.abs(toY(price) - py))
-      // the call line
+      cx.fillRect(gx0, Math.min(py, ly), gx1 - gx0, Math.abs(ly - py))
       cx.strokeStyle = pred
       cx.lineWidth = 2
       cx.setLineDash([7, 6])
@@ -279,27 +382,17 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.lineTo(gx1, py)
       cx.stroke()
       cx.setLineDash([])
-      // left label
       cx.fillStyle = pred
       cx.textBaseline = 'bottom'
       cx.textAlign = 'left'
-      cx.font = `700 16px ${sans}`
-      cx.fillText('YOUR CALL', gx0 + 6, py - 6)
-      // right-edge pill, mirroring the live-price pill
-      const pill = fmtPrice(prediction)
-      cx.font = `600 19px ${sans}`
-      const pillW = cx.measureText(pill).width + 16
-      cx.fillStyle = pred
-      cx.fillRect(gx1 + 6, py - 15, pillW, 30)
-      cx.fillStyle = '#06121c'
-      cx.textBaseline = 'middle'
-      cx.fillText(pill, gx1 + 14, py + 1)
+      cx.font = `700 15px ${SANS}`
+      tracked('YOUR CALL', gx0 + 6, py - 7, '2px')
+      edgePill(fmtPrice(prediction!), py, pred, '#06121c')
     }
 
-    // latest point + guide + price pill
-    const lx = toX(t1)
-    const ly = toY(price)
-    cx.strokeStyle = 'rgba(233,162,59,0.35)'
+    // ---- latest point: dashed guide, pulsing live marker, live-price pill ----
+    const lx = toX(tEnd)
+    cx.strokeStyle = 'rgba(233,162,59,0.32)'
     cx.lineWidth = 1
     cx.setLineDash([5, 5])
     cx.beginPath()
@@ -307,50 +400,77 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.lineTo(gx1, ly)
     cx.stroke()
     cx.setLineDash([])
+    // a soft halo that breathes — the "this is live" cue
+    const pulse = 0.5 + 0.5 * Math.sin(tNow * 3.2)
+    cx.save()
+    cx.fillStyle = `rgba(233,162,59,${0.16 + 0.14 * pulse})`
+    cx.beginPath()
+    cx.arc(lx, ly, 9 + 4 * pulse, 0, Math.PI * 2)
+    cx.fill()
+    cx.restore()
+    cx.save()
+    cx.shadowColor = 'rgba(233,162,59,0.85)'
+    cx.shadowBlur = 12
     cx.fillStyle = accent
     cx.beginPath()
     cx.arc(lx, ly, 5, 0, Math.PI * 2)
     cx.fill()
-    cx.fillStyle = 'rgba(255,255,255,0.92)'
+    cx.restore()
+    cx.fillStyle = 'rgba(255,255,255,0.95)'
     cx.beginPath()
     cx.arc(lx, ly, 2, 0, Math.PI * 2)
     cx.fill()
-    cx.fillStyle = accent
-    const pill = fmtPrice(price)
-    cx.font = `600 19px ${sans}`
-    const pillW = cx.measureText(pill).width + 16
-    cx.fillRect(gx1 + 6, ly - 15, pillW, 30)
-    cx.fillStyle = '#1a1206'
-    cx.textBaseline = 'middle'
-    cx.textAlign = 'left'
-    cx.fillText(pill, gx1 + 14, ly + 1)
+    edgePill(fmtPrice(price), ly, accent, '#1a1206')
 
     screenTex.needsUpdate = true
   }
 
-  // initial paint + throttled live refresh
-  // Refresh from the live feed on a timer (not the RAF loop — RAF can be
-  // throttled; the data cadence is ~250ms anyway). The scene's render loop
-  // uploads the updated canvas each frame.
-  const refresh = () => {
+  // ---- live data + animation state ----
+  // We don't repaint on a fixed timer. Instead we read the latest target from
+  // the store whenever it changes, then ease toward it each animation frame and
+  // repaint only while something is actually moving (or pulsing) — smooth when
+  // live, zero cost when idle.
+  let history: PricePoint[] = []
+  let targetPrice: number | null = null
+  let prediction: number | null = null
+  let dispPrice = 0 // eased toward targetPrice for the "live ticker" feel
+  let dirty = true
+  let liveUntil = 0 // keep painting (pulse + ease) until this wall-clock time
+
+  const readData = () => {
     const s = useGameStore.getState()
-    const price = s.priceHistory.at(-1)?.price ?? null
+    history = s.priceHistory
+    targetPrice = s.priceHistory.at(-1)?.price ?? null
     const decimals = s.terms?.decimals ?? 2
-    const prediction =
+    prediction =
       s.sealStatus === 'sealed' && s.yourPrediction != null
         ? s.yourPrediction / 10 ** decimals
         : null
-    drawChart(s.priceHistory, price, prediction)
+    if (targetPrice != null && dispPrice === 0) dispPrice = targetPrice
+    dirty = true
+    // a fresh tick keeps the board "live" (and the pulse breathing) for a beat
+    // past the data cadence; once ticks stop, it settles and idles cost-free.
+    liveUntil = Date.now() + 900
   }
-  refresh()
-  const timer = setInterval(refresh, 250)
+  readData()
+  const unsubscribe = useGameStore.subscribe(readData)
 
-  function update(_t: number) {
-    // chart refresh is timer-driven; nothing to do per frame
+  function update(t: number) {
+    const clock = Date.now()
+    if (targetPrice != null) {
+      if (dispPrice === 0) dispPrice = targetPrice
+      // exponential ease — frame-rate-tolerant for the small per-tick deltas
+      dispPrice += (targetPrice - dispPrice) * 0.16
+    }
+    // repaint while data is fresh (animate pulse + ease), or once after a change
+    if (dirty || clock < liveUntil) {
+      dirty = false
+      drawChart(history, targetPrice != null ? dispPrice : null, prediction, t, clock)
+    }
   }
 
   function dispose() {
-    clearInterval(timer)
+    unsubscribe()
     group.traverse((o) => {
       const m = o as THREE.Mesh
       if (m.geometry) m.geometry.dispose()

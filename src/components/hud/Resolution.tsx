@@ -12,9 +12,43 @@ import { seatAlias } from '@/lib/seats'
 export function Resolution() {
   const settlement = useGameStore((s) => s.settlement)
   const voided = useGameStore((s) => s.voided)
-  if (voided) return <VoidCeremony reason={voided.reason} />
-  if (settlement) return <SettledCeremony />
-  return null
+  const reviewing = useGameStore((s) => s.reviewing)
+  if (!settlement && !voided) return null
+  if (reviewing) return <ReviewBar />
+  return voided ? <VoidCeremony reason={voided.reason} /> : <SettledCeremony />
+}
+
+/** Shared footer: leave to inspect the final table, or jump into a fresh match. */
+function CeremonyActions() {
+  const setReviewing = useGameStore((s) => s.setReviewing)
+  const playAgain = useGameStore((s) => s.playAgain)
+  return (
+    <div className="ceremony-actions">
+      <button className="ghost-btn" onClick={() => setReviewing(true)}>
+        Review table
+      </button>
+      <button className="ghost-btn ghost-btn--primary" onClick={() => playAgain()}>
+        Play again
+      </button>
+    </div>
+  )
+}
+
+/** When the ceremony is dismissed, a slim bar keeps the exits one click away. */
+function ReviewBar() {
+  const setReviewing = useGameStore((s) => s.setReviewing)
+  const playAgain = useGameStore((s) => s.playAgain)
+  return (
+    <div className="review-bar panel">
+      <span className="eyebrow">match over</span>
+      <button className="ghost-btn" onClick={() => setReviewing(false)}>
+        Show results
+      </button>
+      <button className="ghost-btn ghost-btn--primary" onClick={() => playAgain()}>
+        Play again
+      </button>
+    </div>
+  )
 }
 
 function SettledCeremony() {
@@ -82,6 +116,8 @@ function SettledCeremony() {
             {tx ? 'Claimed ✓' : claiming ? 'Claiming…' : `Claim ${yourAward}`}
           </button>
         )}
+
+        <CeremonyActions />
       </div>
     </div>
   )
@@ -110,6 +146,8 @@ function VoidCeremony({ reason }: { reason: string }) {
         <button className="seal-btn ceremony-claim" onClick={onRefund} disabled={busy || !!tx}>
           {tx ? 'Refunded ✓' : busy ? 'Refunding…' : `Refund deposit + entry fee`}
         </button>
+
+        <CeremonyActions />
       </div>
     </div>
   )
