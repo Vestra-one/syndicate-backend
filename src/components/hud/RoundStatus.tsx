@@ -1,57 +1,115 @@
+import { useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
-import { useNow } from '@/lib/useNow'
-import { formatClock, formatPrice } from '@/lib/format'
-import type { RoundPhase } from '@/lib/types'
+import { formatPrice } from '@/lib/format'
+import type { MatchPhase } from '@/lib/protocol'
 
-const PHASE_COPY: Record<RoundPhase, { label: string; sub: string }> = {
-  OPEN: { label: 'Place your bets', sub: 'closes in' },
-  LOCKED: { label: 'Bets locked', sub: 'settles in' },
-  SETTLED: { label: 'Round settled', sub: 'next round' },
+const PHASE_COPY: Record<MatchPhase, string> = {
+  FILLING: 'Filling table',
+  SEALING: 'Sealing predictions',
+  LIVE: 'Live',
+  SETTLEMENT_WINDOW: 'Settlement window',
+  DECRYPT: 'Opening time-lock',
+  SETTLED: 'Settled',
+  VOID: 'Voided',
 }
 
+/** Match lifecycle + resolution. Surfaces every exit path (§10.4). */
 export function RoundStatus() {
-  const round = useGameStore((s) => s.round)
-  const now = useNow()
+  const match = useGameStore((s) => s.match)
+  const terms = useGameStore((s) => s.terms)
+  const settlement = useGameStore((s) => s.settlement)
+  const voided = useGameStore((s) => s.voided)
 
-  if (!round) {
+  if (voided) return <VoidPanel reason={voided.reason} />
+  if (settlement) return <SettledPanel />
+
+  if (!match) {
     return (
       <div className="round panel">
-        <span className="eyebrow">round</span>
+        <span className="eyebrow">match</span>
         <div className="round-label">Waiting for the table…</div>
       </div>
     )
   }
 
-  const copy = PHASE_COPY[round.phase]
-  const target =
-    round.phase === 'OPEN' ? round.locksAt : round.phase === 'LOCKED' ? round.settlesAt : round.settlesAt
-  const remaining = Math.max(0, target - now)
-  const span = round.locksAt - round.opensAt
-  const progress =
-    round.phase === 'OPEN' ? 1 - Math.min(1, (round.locksAt - now) / span) : 1
+  const label =
+    match.phase === 'LIVE'
+      ? `Round ${match.round} of ${terms?.roundCount ?? match.round}`
+      : PHASE_COPY[match.phase]
 
   return (
-    <div className={`round panel round--${round.phase.toLowerCase()}`}>
+    <div className={`round panel round--${match.phase.toLowerCase()}`}>
       <div className="round-head">
-        <span className="eyebrow">{copy.sub}</span>
-        <span className="round-clock mono">{formatClock(remaining)}</span>
+        <span className="eyebrow">{PHASE_COPY[match.phase]}</span>
+        <span className="round-clock mono">{match.pot}</span>
       </div>
-      <div className="round-label">{copy.label}</div>
-
-      <div className="round-bar">
-        <div className="round-bar-fill" style={{ transform: `scaleX(${progress})` }} />
+      <div className="round-label">{label}</div>
+      <div className="round-prices mono">
+        <span>pot {match.pot}</span>
+        <span>current bet {match.currentBet}</span>
       </div>
+    </div>
+  )
+}
 
-      {round.phase !== 'OPEN' && round.lockPrice != null && (
-        <div className="round-prices mono">
-          <span>lock {formatPrice(round.lockPrice)}</span>
-          {round.settlePrice != null && (
-            <span className={round.result === 'UP' ? 'up' : 'down'}>
-              {round.result} {formatPrice(round.settlePrice)}
-            </span>
-          )}
-        </div>
+function SettledPanel() {
+  const settlement = useGameStore((s) => s.settlement)!
+  const match = useGameStore((s) => s.match)
+  const terms = useGameStore((s) => s.terms)
+  const claim = useGameStore((s) => s.claim)
+  const [tx, setTx] = useState<string | null>(null)
+  const [claiming, setClaiming] = useState(false)
+
+  const decimals = terms?.decimals ?? 2
+  const yourSeat = match?.yourSeat
+  const yourAward = settlement.awards.find((a) => a.seat === yourSeat)?.amount ?? 0
+  const won = yourAward > 0
+
+  const onClaim = async () => {
+    setClaiming(true)
+    const sig = await claim()
+    setTx(sig)
+    setClaiming(false)
+  }
+
+  return (
+    <div className="round panel round--settled">
+      <span className="eyebrow">settled</span>
+      <div className="round-label">{won ? 'You won the pot' : 'Match settled'}</div>
+      <div className="round-prices mono">
+        <span>settle {formatPrice(settlement.settlementPrice / 10 ** decimals)}</span>
+        <span>{won ? `+${yourAward}` : 'no award'}</span>
+      </div>
+      {won && (
+        <button className="seal-btn" onClick={onClaim} disabled={claiming || !!tx}>
+          {tx ? 'Claimed ✓' : claiming ? 'Claiming…' : `Claim ${yourAward}`}
+        </button>
       )}
+    </div>
+  )
+}
+
+function VoidPanel({ reason }: { reason: string }) {
+  const refund = useGameStore((s) => s.refund)
+  const [tx, setTx] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const onRefund = async () => {
+    setBusy(true)
+    setTx(await refund())
+    setBusy(false)
+  }
+
+  return (
+    <div className="round panel round--void">
+      <span className="eyebrow">match voided</span>
+      <div className="round-label">Funds returned in full</div>
+      <div className="round-prices mono">
+        <span>{reason}</span>
+      </div>
+      <button className="seal-btn" onClick={onRefund} disabled={busy || !!tx}>
+        {tx ? 'Refunded ✓' : busy ? 'Refunding…' : 'Refund deposit'}
+      </button>
     </div>
   )
 }

@@ -283,6 +283,176 @@
   color: var(--text-dim);
 }
 
+/* ---- Seal prediction ---- */
+.seal-note {
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin: 0;
+}
+.seal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  padding: 8px 12px;
+}
+.seal-currency {
+  color: var(--text-dim);
+  font-size: 18px;
+}
+.seal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--gold-bright);
+  font-size: 22px;
+  font-weight: 600;
+}
+.seal-btn {
+  padding: 12px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--gold);
+  background: rgba(202, 162, 63, 0.16);
+  color: var(--gold-bright);
+  font-family: var(--font-display);
+  letter-spacing: 0.1em;
+  font-size: 14px;
+  transition: all 0.15s var(--ease);
+}
+.seal-btn:hover:not(:disabled) {
+  background: rgba(202, 162, 63, 0.28);
+  box-shadow: var(--glow-warm);
+}
+.seal-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---- Exposure (shown before every commit, §10.1) ---- */
+.exposure {
+  display: flex;
+  gap: 18px;
+}
+.exposure-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.exposure-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.exposure-value--accent {
+  color: var(--gold-bright);
+}
+
+/* ---- Poker actions ---- */
+.poker-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.pk-btn {
+  padding: 13px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  font-size: 14px;
+  transition: all 0.15s var(--ease);
+}
+.pk-btn:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+}
+.pk-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pk-fold {
+  color: var(--down);
+  border-color: rgba(231, 100, 77, 0.4);
+}
+.pk-call {
+  color: var(--up);
+  border-color: rgba(79, 209, 139, 0.4);
+}
+.pk-allin {
+  color: var(--gold-bright);
+  border-color: var(--gold);
+}
+.raise-row {
+  display: flex;
+  gap: 10px;
+}
+.raise-input {
+  width: 96px;
+  background: var(--bg-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 15px;
+}
+.pk-raise {
+  flex: 1;
+}
+
+/* ---- Your position ---- */
+.position {
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.position-pred {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.position-pred-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--gold-bright);
+}
+.position-pred-empty {
+  color: var(--text-faint);
+}
+.position-dist {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.position-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+  border-top: 1px solid rgba(202, 162, 63, 0.1);
+  padding-top: 8px;
+}
+.position-default {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.default-chips {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- resolution variants ---- */
+.round--void .round-label {
+  color: var(--up);
+}
+.round--settled .round-label {
+  color: var(--gold-bright);
+}
+
 /* ---- responsive: stack the bottom bar on narrow screens ---- */
 @media (max-width: 820px) {
   .hud-bottom {
@@ -291,7 +461,7 @@
   }
   .betpanel,
   .round,
-  .mybets {
+  .position {
     min-width: 0;
   }
 }

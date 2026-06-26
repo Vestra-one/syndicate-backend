@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { useGameStore } from '@/store/gameStore'
-import type { PriceTick } from '@/lib/types'
+import type { PricePoint } from '@/lib/ui'
 
 /**
  * The price-board cabinet that stands on the felt: a real 3D housing (a beveled
@@ -140,7 +140,7 @@ export function createPriceBoard(): PriceBoardHandle {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
   }
 
-  function drawChart(history: PriceTick[], price: number | null) {
+  function drawChart(history: PricePoint[], price: number | null) {
     cx.clearRect(0, 0, SCW, SCH)
     const bg = cx.createLinearGradient(0, 0, 0, SCH)
     bg.addColorStop(0, '#0b1016')
@@ -299,7 +299,8 @@ export function createPriceBoard(): PriceBoardHandle {
   // uploads the updated canvas each frame.
   const refresh = () => {
     const s = useGameStore.getState()
-    drawChart(s.priceHistory, s.price)
+    const price = s.priceHistory.at(-1)?.price ?? null
+    drawChart(s.priceHistory, price)
   }
   refresh()
   const timer = setInterval(refresh, 250)

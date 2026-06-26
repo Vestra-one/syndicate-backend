@@ -8,7 +8,7 @@ export default function App() {
   const disconnect = useGameStore((s) => s.disconnect)
 
   useEffect(() => {
-    connect()
+    void connect()
     return () => disconnect()
   }, [connect, disconnect])
 

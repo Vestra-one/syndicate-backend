@@ -1,124 +1,235 @@
 import { create } from 'zustand'
 import type {
-  Bet,
-  ConnectionStatus,
-  Direction,
-  MarketId,
-  PriceTick,
-  Round,
-  Wallet,
-} from '@/lib/types'
-import type { GameFeed } from '@/lib/realtime/feed'
-import { createMockFeed } from '@/lib/realtime/mockFeed'
+  BettingAction,
+  DefaultAction,
+  FixedPrice,
+  MatchStateView,
+  PublicEvent,
+  SettlementView,
+  TableTerms,
+  VoidReason,
+} from '@/lib/protocol'
+import { DRAND } from '@/lib/protocol'
+import type { ConnectionStatus, PricePoint } from '@/lib/ui'
+import { createAdapters, IS_DEMO, type Adapters } from '@/lib/adapters'
+import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 
-const MAX_HISTORY = 240 // ~1 min at 250ms ticks — enough to draw a sparkline
+const MAX_HISTORY = 240 // ~2 min at 500ms snapshots — enough for the board chart
+const MAX_FEED = 40 // recent public events kept for the action feed
+
+/** One-way latch for the prediction (§6, seal-once). */
+export type SealStatus = 'unsealed' | 'sealing' | 'sealed'
 
 interface GameState {
-  market: MarketId
   status: ConnectionStatus
-  price: number | null
-  priceHistory: PriceTick[]
-  round: Round | null
-  wallet: Wallet
-  myBets: Bet[]
+  walletAddress: string | null
+  chipBalance: number | null
 
-  connect: () => void
+  terms: TableTerms | null
+  match: MatchStateView | null
+  yourTurn: { toCall: number; minRaiseTo: number; deadline: number } | null
+
+  // self-centric, derived from the feed
+  sealStatus: SealStatus
+  yourPrediction: FixedPrice | null // plaintext, client-only — never sent in the clear
+  defaultAction: DefaultAction
+
+  priceHistory: PricePoint[]
+  feed: PublicEvent[]
+
+  settlement: SettlementView | null
+  voided: { reason: VoidReason } | null
+
+  // actions
+  connect: () => Promise<void>
   disconnect: () => void
-  placeBet: (direction: Direction, amount: number) => void
+  sealPrediction: (price: FixedPrice) => Promise<void>
+  act: (action: BettingAction) => Promise<void>
+  setDefault: (def: DefaultAction) => void
+  claim: () => Promise<string | null>
+  refund: () => Promise<string | null>
 }
 
-let feed: GameFeed | null = null
+let adapters: Adapters | null = null
+let gateway: Gateway | null = null
 let unsub: (() => void) | null = null
-
-const DEFAULT_MARKET = (import.meta.env.VITE_DEFAULT_MARKET as string) || 'BTC-USD'
+let depositedFor: string | null = null
 
 export const useGameStore = create<GameState>((set, get) => ({
-  market: DEFAULT_MARKET,
   status: 'offline',
-  price: null,
-  priceHistory: [],
-  round: null,
-  wallet: { currency: 'FIBO', balance: 1_000 },
-  myBets: [],
+  walletAddress: null,
+  chipBalance: null,
 
-  connect: () => {
-    if (feed) return
+  terms: null,
+  match: null,
+  yourTurn: null,
+
+  sealStatus: 'unsealed',
+  yourPrediction: null,
+  defaultAction: 'check_fold',
+
+  priceHistory: [],
+  feed: [],
+
+  settlement: null,
+  voided: null,
+
+  connect: async () => {
+    if (gateway) return
     set({ status: 'connecting' })
-    feed = createMockFeed(get().market)
-    unsub = feed.subscribe((event) => {
-      switch (event.type) {
-        case 'tick':
-          set((s) => ({
-            price: event.tick.price,
-            priceHistory: [...s.priceHistory, event.tick].slice(-MAX_HISTORY),
-          }))
-          break
-        case 'round':
-          handleRound(event.round, set, get)
-          break
-        case 'bet':
-          // server-acknowledged bet — append if it's ours and not already tracked
-          set((s) =>
-            s.myBets.some((b) => b.id === event.bet.id)
-              ? s
-              : { myBets: [...s.myBets, event.bet] },
-          )
-          break
-      }
-    })
-    void feed.connect().then(() => set({ status: 'live' }))
+    adapters = createAdapters()
+    gateway = createGateway(adapters)
+
+    unsub = gateway.subscribe((msg) => handleServerMessage(msg, set, get))
+
+    try {
+      await adapters.wallet.connect()
+      set({ walletAddress: adapters.wallet.address() })
+      await gateway.connect() // resolves once authenticated
+      set({ status: 'live' })
+      void refreshBalance(set)
+    } catch (err) {
+      // geo-blocked / bad signature / socket error (§9)
+      console.error('gateway connect failed:', err)
+      set({ status: 'offline' })
+    }
   },
 
   disconnect: () => {
     unsub?.()
-    feed?.disconnect()
-    feed = null
+    gateway?.disconnect()
+    gateway = null
     unsub = null
-    set({ status: 'offline' })
+    adapters = null
+    depositedFor = null
+    set({
+      status: 'offline',
+      match: null,
+      yourTurn: null,
+      sealStatus: 'unsealed',
+      yourPrediction: null,
+      settlement: null,
+      voided: null,
+    })
   },
 
-  placeBet: (direction, amount) => {
-    const { round, wallet } = get()
-    if (!feed || !round || round.phase !== 'OPEN') return
-    if (amount <= 0 || amount > wallet.balance) return
-    // optimistic debit; server ack arrives via the 'bet' event
-    set({ wallet: { ...wallet, balance: wallet.balance - amount } })
-    feed.placeBet(direction, amount)
+  sealPrediction: async (price) => {
+    const { terms, match, sealStatus } = get()
+    if (!adapters || !gateway || !terms || !match) return
+    if (sealStatus !== 'unsealed') return // seal-once
+    set({ sealStatus: 'sealing' })
+    try {
+      const ciphertext = await adapters.tlock.seal(
+        price,
+        terms.timelockTargetRound,
+        DRAND.chainHash,
+        DRAND.api,
+      )
+      gateway.send({ type: 'sealPrediction', matchId: match.matchId, ciphertext })
+      // The plaintext stays on the client for the distance-to-conviction chart.
+      set({ sealStatus: 'sealed', yourPrediction: price })
+    } catch (err) {
+      console.error('seal failed:', err)
+      set({ sealStatus: 'unsealed' })
+    }
+  },
+
+  act: async (action) => {
+    const { match, yourTurn } = get()
+    if (!adapters || !gateway || !match || !yourTurn) return
+    // Each action is a SIGNED intent (replay-safe log, §5).
+    const intent = JSON.stringify({ matchId: match.matchId, action })
+    const signature = await adapters.wallet.signMessageBase64(intent)
+    gateway.send({ type: 'act', matchId: match.matchId, action, signature })
+    set({ yourTurn: null }) // optimistic; server's next matchState is authoritative
+  },
+
+  setDefault: (def) => {
+    const { match } = get()
+    set({ defaultAction: def })
+    if (gateway && match) gateway.send({ type: 'setDefault', matchId: match.matchId, default: def })
+  },
+
+  claim: async () => {
+    const { match } = get()
+    if (!adapters || !match) return null
+    const sig = await adapters.chain.claim(match.matchId)
+    void refreshBalance(set)
+    return sig
+  },
+
+  refund: async () => {
+    const { match } = get()
+    if (!adapters || !match) return null
+    const sig = await adapters.chain.refund(match.matchId)
+    void refreshBalance(set)
+    return sig
   },
 }))
 
-function handleRound(
-  round: Round,
-  set: (partial: Partial<GameState>) => void,
+type SetState = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void
+
+function handleServerMessage(
+  msg: Parameters<Parameters<Gateway['subscribe']>[0]>[0],
+  set: SetState,
   get: () => GameState,
 ) {
-  if (round.phase === 'SETTLED' && round.result) {
-    settleMyBets(round, set, get)
+  switch (msg.type) {
+    case 'authenticated':
+      set({ walletAddress: msg.wallet, status: 'live' })
+      break
+    case 'tableTerms':
+      set({ terms: msg.terms })
+      break
+    case 'matchState':
+      ingestMatchState(msg.state, set, get)
+      break
+    case 'yourTurn':
+      set({ yourTurn: { toCall: msg.toCall, minRaiseTo: msg.minRaiseTo, deadline: msg.deadline } })
+      break
+    case 'event':
+      set((s) => ({ feed: [...s.feed, msg.event].slice(-MAX_FEED) }))
+      break
+    case 'settled':
+      set({ settlement: msg.result, yourTurn: null })
+      break
+    case 'void':
+      set({ voided: { reason: msg.reason }, yourTurn: null })
+      break
+    case 'error':
+      console.error('gateway error:', msg.reason)
+      break
+    default:
+      break // discovery/profile/leaderboard handled by their own surfaces later
   }
-  set({ round })
 }
 
-function settleMyBets(
-  round: Round,
-  set: (partial: Partial<GameState>) => void,
-  get: () => GameState,
-) {
-  const { myBets, wallet } = get()
-  const total = round.pool.UP + round.pool.DOWN
-  const winningPool = round.result ? round.pool[round.result] : 0
-  let credited = 0
+function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameState) {
+  const terms = get().terms
+  // Convert the protocol's fixed-point feed price to a float for the chart.
+  const decimals = terms?.decimals ?? 2
+  const point: PricePoint = { price: state.feedPrice / 10 ** decimals, ts: Date.now() }
 
-  const updated = myBets.map((bet) => {
-    if (bet.roundId !== round.id || bet.payout !== null) return bet
-    const won = bet.direction === round.result
-    // pari-mutuel: winners split the whole pool pro-rata; fall back to stake refund
-    const payout = won ? (winningPool > 0 ? bet.amount * (total / winningPool) : bet.amount) : 0
-    credited += payout
-    return { ...bet, won, payout }
-  })
+  set((s) => ({
+    match: state,
+    priceHistory: [...s.priceHistory, point].slice(-MAX_HISTORY),
+  }))
 
-  set({
-    myBets: updated,
-    wallet: { ...wallet, balance: wallet.balance + credited },
-  })
+  // Demo nicety: debit the play-money buy-in once, when we're first seated.
+  if (IS_DEMO && depositedFor !== state.matchId && terms && adapters) {
+    depositedFor = state.matchId
+    void adapters.chain
+      .deposit(state.matchId, state.yourSeat ?? 0, terms.buyIn + terms.entryFee)
+      .then(() => refreshBalance(set))
+  }
+}
+
+async function refreshBalance(set: SetState) {
+  if (!adapters) return
+  try {
+    const balance = await adapters.chain.chipBalance()
+    set({ chipBalance: balance })
+  } catch {
+    /* live chain not wired yet — leave balance null */
+  }
 }
