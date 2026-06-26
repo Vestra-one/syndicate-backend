@@ -1,8 +1,10 @@
 import { create } from 'zustand'
 import type {
   BettingAction,
+  DashboardSortKey,
   DefaultAction,
   FixedPrice,
+  LiveGame,
   MatchStateView,
   PublicEvent,
   SettlementView,
@@ -13,6 +15,7 @@ import { DRAND } from '@/lib/protocol'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import { createAdapters, IS_DEMO, type Adapters } from '@/lib/adapters'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
+import { fetchActiveGames } from '@/lib/discovery'
 
 const MAX_HISTORY = 240 // ~2 min at 500ms snapshots — enough for the board chart
 const MAX_FEED = 40 // recent public events kept for the action feed
@@ -20,7 +23,14 @@ const MAX_FEED = 40 // recent public events kept for the action feed
 /** One-way latch for the prediction (§6, seal-once). */
 export type SealStatus = 'unsealed' | 'sealing' | 'sealed'
 
+/** Which top-level surface the app is showing. */
+export type AppView = 'discovery' | 'table'
+
 interface GameState {
+  view: AppView
+  activeGames: LiveGame[]
+  dashboardSort: DashboardSortKey
+
   status: ConnectionStatus
   walletAddress: string | null
   chipBalance: number | null
@@ -43,6 +53,10 @@ interface GameState {
   seated: boolean // deposit confirmed → seat taken (gates the lobby)
 
   // actions
+  loadDiscovery: () => Promise<void>
+  setDashboardSort: (key: DashboardSortKey) => void
+  enterTable: (matchId: string) => Promise<void>
+  leaveToDiscovery: () => void
   connect: () => Promise<void>
   disconnect: () => void
   joinTable: () => Promise<void>
@@ -61,6 +75,10 @@ let unsub: (() => void) | null = null
 let depositedFor: string | null = null
 
 export const useGameStore = create<GameState>((set, get) => ({
+  view: 'discovery',
+  activeGames: [],
+  dashboardSort: 'gameTime',
+
   status: 'offline',
   walletAddress: null,
   chipBalance: null,
@@ -80,6 +98,26 @@ export const useGameStore = create<GameState>((set, get) => ({
   voided: null,
   reviewing: false,
   seated: false,
+
+  loadDiscovery: async () => {
+    const games = await fetchActiveGames()
+    set({ activeGames: games })
+  },
+
+  setDashboardSort: (key) => set({ dashboardSort: key }),
+
+  /** Pick a table from the dashboard → connect to it and show the table view. */
+  enterTable: async (_matchId) => {
+    set({ view: 'table' })
+    await get().connect()
+  },
+
+  /** Leave the current table and return to the live-games dashboard. */
+  leaveToDiscovery: () => {
+    get().disconnect()
+    set({ view: 'discovery' })
+    void get().loadDiscovery()
+  },
 
   connect: async () => {
     if (gateway) return

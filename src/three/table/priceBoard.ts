@@ -245,10 +245,29 @@ export function createPriceBoard(): PriceBoardHandle {
     const tEnd = Math.max(raw[raw.length - 1].ts, clock)
     const tStart = Math.max(raw[0].ts, tEnd - WINDOW_MS)
     const SAMPLES = 96
-    const pts = resample(raw, tStart, tEnd, SAMPLES)
-    // pin the final sample to the (eased) live price so line, marker, and pill agree
-    pts[pts.length - 1] = { ts: tEnd, price }
-    const first = pts[0].price
+    const sampled = resample(raw, tStart, tEnd, SAMPLES)
+    const n = sampled.length
+    // Pin the last sample to the (eased) live price, then run several light
+    // smoothing passes with the endpoints held fixed. This both rounds single-
+    // tick spikes into a fluid trace AND diffuses the live value back along the
+    // tail, so the line glides up to the marker instead of hooking vertically.
+    let buf = sampled.map((p) => p.price)
+    buf[n - 1] = price
+    const PASSES = 3
+    for (let pass = 0; pass < PASSES; pass++) {
+      const out = buf.slice()
+      for (let i = 1; i < n - 1; i++) {
+        const a = buf[Math.max(0, i - 2)]
+        const b = buf[i - 1]
+        const c = buf[i]
+        const d = buf[i + 1]
+        const e = buf[Math.min(n - 1, i + 2)]
+        out[i] = (a + 2 * b + 3 * c + 2 * d + e) / 9
+      }
+      buf = out
+    }
+    const pts: PricePoint[] = sampled.map((p, i) => ({ ts: p.ts, price: buf[i] }))
+    const first = sampled[0].price
 
     const prices = pts.map((p) => p.price)
     const lo = Math.min(...prices, prediction ?? Infinity)
@@ -260,11 +279,12 @@ export function createPriceBoard(): PriceBoardHandle {
     const toY = (v: number) => gy1 - ((v - vmin) / (vmax - vmin)) * (gy1 - gy0)
 
     const change = first !== 0 ? ((price - first) / first) * 100 : 0
+    const flat = Math.abs(change) < 0.005 // rounds to 0.00% — show as neutral, not "−0.00"
     const up = change >= 0
     const ly = toY(price)
     const hasPred = prediction != null && Number.isFinite(prediction)
     const py = hasPred ? toY(prediction!) : null
-    const dirCol = up ? '#4fd18b' : '#f0716e'
+    const dirCol = flat ? '#9fb2c4' : up ? '#4fd18b' : '#f0716e'
 
     // ---- header: hero price (tabular) + change chip at a fixed anchor ----
     cx.fillStyle = ink
@@ -277,13 +297,20 @@ export function createPriceBoard(): PriceBoardHandle {
     const reserveW = cx.measureText('$').width + cell * 6 + cx.measureText(',').width
 
     cx.font = `600 22px ${SANS}`
-    const chTxt = `${up ? '▲' : '▼'} ${up ? '+' : ''}${change.toFixed(2)}%`
+    const arrow = flat ? '•' : up ? '▲' : '▼'
+    const chTxt = flat
+      ? `${arrow} 0.00%`
+      : `${arrow} ${up ? '+' : '−'}${Math.abs(change).toFixed(2)}%`
     const chW = cx.measureText(chTxt).width
     const chPadX = 13
     const chH = 32
     const chX = gx0 + 2 + reserveW + 22
     const chCenter = priceBaseline - 17
-    cx.fillStyle = up ? 'rgba(79,209,139,0.16)' : 'rgba(240,113,110,0.16)'
+    cx.fillStyle = flat
+      ? 'rgba(159,178,196,0.14)'
+      : up
+        ? 'rgba(79,209,139,0.16)'
+        : 'rgba(240,113,110,0.16)'
     rr(chX, chCenter - chH / 2, chW + chPadX * 2, chH, chH / 2)
     cx.fill()
     cx.fillStyle = dirCol
@@ -301,7 +328,7 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.moveTo(gx0, gy)
       cx.lineTo(gx1, gy)
       cx.stroke()
-      const collides = Math.abs(gy - ly) < 20 || (py != null && Math.abs(gy - py) < 20)
+      const collides = Math.abs(gy - ly) < 28 || (py != null && Math.abs(gy - py) < 28)
       if (collides) continue
       cx.fillStyle = dim
       cx.textAlign = 'left'
@@ -309,12 +336,15 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.fillText(fmtPrice(v), gx1 + 14, gy)
     }
 
-    // ---- vertical grid + bottom time axis (relative elapsed: −45s … now) ----
+    // ---- vertical grid + bottom time axis (relative elapsed, spans the data) ----
+    // Quarters of the actual window so the axis is always populated and every
+    // label is distinct — "−45s … now" once warm, sensible seconds while filling.
     cx.textBaseline = 'top'
     cx.fillStyle = dim
-    for (const back of [0, 15, 30, 45, 60]) {
-      const ts = tEnd - back * 1000
-      if (ts < tStart - 1) continue
+    const winSec = (tEnd - tStart) / 1000
+    let lastLabel = ''
+    for (let i = 0; i <= 4; i++) {
+      const ts = tStart + ((tEnd - tStart) * i) / 4
       const gx = toX(ts)
       cx.strokeStyle = faint
       cx.lineWidth = 1
@@ -322,8 +352,12 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.moveTo(gx, gy0)
       cx.lineTo(gx, gy1)
       cx.stroke()
-      cx.textAlign = back === 0 ? 'right' : ts <= tStart + 1 ? 'left' : 'center'
-      cx.fillText(back === 0 ? 'now' : `−${back}s`, gx, gy1 + 14)
+      const back = Math.round((winSec * (4 - i)) / 4)
+      const label = i === 4 || back === 0 ? 'now' : `−${back}s`
+      if (label === lastLabel) continue // don't repeat a label when the window is tiny
+      lastLabel = label
+      cx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center'
+      cx.fillText(label, gx, gy1 + 14)
     }
 
     // ---- area fill under the line ----

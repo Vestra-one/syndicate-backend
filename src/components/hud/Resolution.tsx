@@ -18,14 +18,18 @@ export function Resolution() {
   return voided ? <VoidCeremony reason={voided.reason} /> : <SettledCeremony />
 }
 
-/** Shared footer: leave to inspect the final table, or jump into a fresh match. */
+/** Shared footer: review the final table, leave to the lobby, or rematch. */
 function CeremonyActions() {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
+  const leave = useGameStore((s) => s.leaveToDiscovery)
   return (
     <div className="ceremony-actions">
       <button className="ghost-btn" onClick={() => setReviewing(true)}>
         Review table
+      </button>
+      <button className="ghost-btn" onClick={() => leave()}>
+        Live tables
       </button>
       <button className="ghost-btn ghost-btn--primary" onClick={() => playAgain()}>
         Play again
@@ -38,11 +42,15 @@ function CeremonyActions() {
 function ReviewBar() {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
+  const leave = useGameStore((s) => s.leaveToDiscovery)
   return (
     <div className="review-bar panel">
       <span className="eyebrow">match over</span>
       <button className="ghost-btn" onClick={() => setReviewing(false)}>
         Show results
+      </button>
+      <button className="ghost-btn" onClick={() => leave()}>
+        Live tables
       </button>
       <button className="ghost-btn ghost-btn--primary" onClick={() => playAgain()}>
         Play again

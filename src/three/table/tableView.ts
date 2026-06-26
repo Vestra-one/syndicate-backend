@@ -30,7 +30,10 @@ function seatWorld(seat: number): THREE.Vector3 {
   const a = ((SEAT_DEG[seat] ?? 0) * Math.PI) / 180
   return new THREE.Vector3(Math.sin(a) * R_SEAT, Y_SEAT, Math.cos(a) * R_SEAT)
 }
-const POT_WORLD = new THREE.Vector3(0, 0.2, 1.1)
+// The 3D coin pile sits at (0, felt, 1.1); the amount label rests on the felt
+// just in front of (and below) the coins, toward the camera, so the number
+// reads on the table rather than floating in the air above the pile.
+const POT_WORLD = new THREE.Vector3(0, 0.06, 2.05)
 
 export interface ScreenPoint {
   x: number

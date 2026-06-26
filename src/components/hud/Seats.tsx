@@ -106,15 +106,12 @@ function SeatMedallion({
 
 function Pot({ amount }: { amount: number }) {
   const ref = useAnchor(useCallback(() => projectPot(), []))
+  // Chips are now real 3D geometry in the Three.js scene; the HUD only carries
+  // the amount label, floated just above the pile.
   return (
     <div ref={ref} className="table-pot" style={{ opacity: 0 }}>
-      <div className="pot-chips">
-        <span className="pot-chip" />
-        <span className="pot-chip" />
-        <span className="pot-chip" />
-      </div>
-      <div className="pot-amount mono">{amount}</div>
       <div className="pot-eyebrow eyebrow">pot</div>
+      <div className="pot-amount mono">{amount}</div>
     </div>
   )
 }
