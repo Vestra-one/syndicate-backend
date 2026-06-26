@@ -78,14 +78,18 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (gateway) return
     set({ status: 'connecting' })
     adapters = createAdapters()
-    gateway = createGateway(adapters)
+    // Capture the instance locally — `gateway` (module-global) can be reassigned
+    // by a StrictMode unmount/remount across the awaits below; we must act on the
+    // instance we created, never whatever global points at after the await.
+    const gw = createGateway(adapters)
+    gateway = gw
 
-    unsub = gateway.subscribe((msg) => handleServerMessage(msg, set, get))
+    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
 
     try {
       await adapters.wallet.connect()
       set({ walletAddress: adapters.wallet.address() })
-      await gateway.connect() // resolves once authenticated
+      await gw.connect() // resolves once authenticated
       set({ status: 'live' })
       void refreshBalance(set)
     } catch (err) {
@@ -151,18 +155,30 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   claim: async () => {
-    const { match } = get()
+    const { match, settlement } = get()
     if (!adapters || !match) return null
     const sig = await adapters.chain.claim(match.matchId)
-    void refreshBalance(set)
+    if (IS_DEMO) {
+      // Demo accounting: the gateway is the chain authority, so credit the
+      // awarded pot to the wallet here. Live mode derives payout on-chain.
+      const award = settlement?.awards.find((a) => a.seat === match.yourSeat)?.amount ?? 0
+      set((s) => ({ chipBalance: (s.chipBalance ?? 0) + award }))
+    } else {
+      void refreshBalance(set)
+    }
     return sig
   },
 
   refund: async () => {
-    const { match } = get()
+    const { match, terms } = get()
     if (!adapters || !match) return null
     const sig = await adapters.chain.refund(match.matchId)
-    void refreshBalance(set)
+    if (IS_DEMO && terms) {
+      // VOID returns buy-in + entry fee in full (§9).
+      set((s) => ({ chipBalance: (s.chipBalance ?? 0) + terms.buyIn + terms.entryFee }))
+    } else {
+      void refreshBalance(set)
+    }
     return sig
   },
 }))

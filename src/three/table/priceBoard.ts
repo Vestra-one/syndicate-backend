@@ -140,7 +140,7 @@ export function createPriceBoard(): PriceBoardHandle {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
   }
 
-  function drawChart(history: PricePoint[], price: number | null) {
+  function drawChart(history: PricePoint[], price: number | null, prediction: number | null) {
     cx.clearRect(0, 0, SCW, SCH)
     const bg = cx.createLinearGradient(0, 0, 0, SCH)
     bg.addColorStop(0, '#0b1016')
@@ -174,8 +174,9 @@ export function createPriceBoard(): PriceBoardHandle {
     }
 
     const prices = pts.map((p) => p.price)
-    const lo = Math.min(...prices)
-    const hi = Math.max(...prices)
+    // include the sealed prediction in the visible range so the conviction line shows
+    const lo = Math.min(...prices, prediction ?? Infinity)
+    const hi = Math.max(...prices, prediction ?? -Infinity)
     const span = hi - lo || hi * 0.001 || 1
     const vmin = lo - span * 0.2
     const vmax = hi + span * 0.2
@@ -261,6 +262,40 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.stroke()
     cx.restore()
 
+    // sealed-prediction line — your "conviction" target (distance-to-conviction).
+    // The hero of the screen once sealed: where you've staked your read of the market.
+    if (prediction != null && Number.isFinite(prediction)) {
+      const py = toY(prediction)
+      const pred = '#7fd0ff'
+      // faint band between the live price and your call — the "gap to conviction"
+      cx.fillStyle = 'rgba(127,208,255,0.07)'
+      cx.fillRect(gx0, Math.min(py, toY(price)), gx1 - gx0, Math.abs(toY(price) - py))
+      // the call line
+      cx.strokeStyle = pred
+      cx.lineWidth = 2
+      cx.setLineDash([7, 6])
+      cx.beginPath()
+      cx.moveTo(gx0, py)
+      cx.lineTo(gx1, py)
+      cx.stroke()
+      cx.setLineDash([])
+      // left label
+      cx.fillStyle = pred
+      cx.textBaseline = 'bottom'
+      cx.textAlign = 'left'
+      cx.font = `700 16px ${sans}`
+      cx.fillText('YOUR CALL', gx0 + 6, py - 6)
+      // right-edge pill, mirroring the live-price pill
+      const pill = fmtPrice(prediction)
+      cx.font = `600 19px ${sans}`
+      const pillW = cx.measureText(pill).width + 16
+      cx.fillStyle = pred
+      cx.fillRect(gx1 + 6, py - 15, pillW, 30)
+      cx.fillStyle = '#06121c'
+      cx.textBaseline = 'middle'
+      cx.fillText(pill, gx1 + 14, py + 1)
+    }
+
     // latest point + guide + price pill
     const lx = toX(t1)
     const ly = toY(price)
@@ -300,7 +335,12 @@ export function createPriceBoard(): PriceBoardHandle {
   const refresh = () => {
     const s = useGameStore.getState()
     const price = s.priceHistory.at(-1)?.price ?? null
-    drawChart(s.priceHistory, price)
+    const decimals = s.terms?.decimals ?? 2
+    const prediction =
+      s.sealStatus === 'sealed' && s.yourPrediction != null
+        ? s.yourPrediction / 10 ** decimals
+        : null
+    drawChart(s.priceHistory, price, prediction)
   }
   refresh()
   const timer = setInterval(refresh, 250)

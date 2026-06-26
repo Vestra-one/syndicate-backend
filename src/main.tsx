@@ -6,7 +6,9 @@ import './styles/global.css'
 
 // Dev-only: expose the store for headless inspection / debugging.
 if (import.meta.env.DEV) {
-  ;(window as unknown as { __store: () => unknown }).__store = useGameStore.getState
+  const w = window as unknown as Record<string, unknown>
+  w.__store = useGameStore.getState
+  w.__setStore = useGameStore.setState
 }
 
 createRoot(document.getElementById('root')!).render(

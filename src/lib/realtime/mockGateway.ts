@@ -74,6 +74,8 @@ export function createMockGateway(adapters: Adapters): Gateway {
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let priceTimer: ReturnType<typeof setInterval> | null = null
   let live = false
+  let started = false // guard against a double connect() (StrictMode)
+  let disposed = false
 
   // ---- match state ----
   let phase: MatchStateView['phase'] = 'FILLING'
@@ -410,10 +412,13 @@ export function createMockGateway(adapters: Adapters): Gateway {
 
   return {
     async connect() {
+      if (started || disposed) return // idempotent; survives StrictMode double-invoke
+      started = true
       // Simulated §3 handshake: challenge -> client signs -> authenticated.
       const address = adapters.wallet.address() ?? (await adapters.wallet.connect())
       const nonce = `demo-nonce-${now()}`
       await adapters.wallet.signMessageBase64(nonce)
+      if (disposed) return
       live = true
       emit({ type: 'authenticated', wallet: address })
       emit({ type: 'tableTerms', terms: TERMS })
@@ -422,6 +427,7 @@ export function createMockGateway(adapters: Adapters): Gateway {
     },
     disconnect() {
       live = false
+      disposed = true
       if (priceTimer) clearInterval(priceTimer)
       priceTimer = null
       timers.forEach(clearTimeout)

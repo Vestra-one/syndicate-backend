@@ -19,6 +19,8 @@ export function YourPosition() {
   const predFloat = prediction != null ? prediction / 10 ** decimals : null
   const distance = predFloat != null && lastPrice != null ? lastPrice - predFloat : null
   const live = match?.phase === 'LIVE'
+  const money = (v: number) =>
+    v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
 
   return (
     <div className="position panel">
@@ -37,10 +39,9 @@ export function YourPosition() {
 
       {distance != null && (
         <div className="position-dist">
-          <span className="eyebrow">market vs. conviction</span>
+          <span className="eyebrow">market vs. your call</span>
           <span className={`mono ${distance >= 0 ? 'up' : 'down'}`}>
-            {distance >= 0 ? '+' : ''}
-            {formatPrice(distance)}
+            ${money(Math.abs(distance))} {distance >= 0 ? 'above' : 'below'}
           </span>
         </div>
       )}
