@@ -1,25 +1,21 @@
-import { useEffect } from 'react'
 import { TableCanvas } from '@/components/table/TableCanvas'
-import { Hud } from '@/components/hud/Hud'
-import { Dashboard } from '@/components/hud/Dashboard'
-import { useGameStore } from '@/store/gameStore'
+import { ComingSoon } from '@/components/coming-soon/ComingSoon'
 
+/**
+ * Coming-soon mode: the 3D table renders as the showpiece behind the launch
+ * overlay. The live game (Dashboard / Hud, store-driven) is preserved in the
+ * codebase — restore it here when the table opens.
+ *
+ * The room around the table (chandelier, chairs, panelling, ETH crest) is the
+ * reference photograph, painted as the 3D scene's background; the live table
+ * sits centred over the image's own table, hiding it. See tableScene.ts.
+ */
 export default function App() {
-  const view = useGameStore((s) => s.view)
-  const loadDiscovery = useGameStore((s) => s.loadDiscovery)
-  const disconnect = useGameStore((s) => s.disconnect)
-
-  // Start on the live-games dashboard; connect to a table only when one is picked.
-  useEffect(() => {
-    void loadDiscovery()
-    return () => disconnect()
-  }, [loadDiscovery, disconnect])
-
   return (
     <>
-      <TableCanvas />
+      <TableCanvas pot={2400} />
       <div className="scene-vignette" />
-      {view === 'discovery' ? <Dashboard /> : <Hud />}
+      <ComingSoon />
     </>
   )
 }

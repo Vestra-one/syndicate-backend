@@ -2,9 +2,24 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { createPriceBoard } from './priceBoard'
 import { createPotPile } from './pot'
 import { bindTableView, unbindTableView } from './tableView'
+import roomBgUrl from '@/assets/room-bg.png'
+
+// Decode the room backdrop once at module load. Doing it here (rather than per
+// mount) avoids racing React StrictMode's double-mount, and a single shared
+// HTMLImageElement is reused by every scene instance. Drawn onto a 2D canvas
+// (see drawBackdrop) so it survives software-GL — file-backed GPU textures
+// sample as black under swiftshader.
+let roomImg: HTMLImageElement | null = null
+const roomImgReady = new Promise<HTMLImageElement>((resolve) => {
+  const im = new Image()
+  im.onload = () => {
+    roomImg = im
+    resolve(im)
+  }
+  im.src = roomBgUrl
+})
 
 /**
  * The centerpiece: a candlelit, baroque price-betting table.
@@ -519,7 +534,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
       ctx.textBaseline = 'middle'
       ctx.font = font
     }
-    const phrase = 'FORTVNA·AVDACES·IVVAT· ALEA·IACTA·EST· NIL·SINE·NVMINE· '
+    const phrase =
+      "SATOSHI'S·TABLE· ◆ ·THE·TIMES·03·JAN·2009·CHANCELLOR·ON·BRINK·OF·SECOND·BAILOUT·FOR·BANKS· ◆ "
     const advance = fs * 0.62,
       count = Math.round(W / advance),
       y = H * 0.5
@@ -562,30 +578,13 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
       const x = p.getX(i),
         yy = p.getY(i),
         rr = Math.hypot(x, yy)
-      let u = Math.atan2(yy, x) / (Math.PI * 2)
+      let u = -Math.atan2(yy, x) / (Math.PI * 2)
       if (u < 0) u += 1
       uv.setXY(i, u, (rr - rIn) / (rOut - rIn))
     }
     uv.needsUpdate = true
     return g
   }
-
-  // soft radial glow sprite texture
-  const glowTex = (() => {
-    const c = document.createElement('canvas')
-    c.width = c.height = 128
-    const x = c.getContext('2d')!
-    const g = x.createRadialGradient(64, 64, 0, 64, 64, 64)
-    g.addColorStop(0, 'rgba(255,235,190,1)')
-    g.addColorStop(0.18, 'rgba(255,180,90,0.9)')
-    g.addColorStop(0.5, 'rgba(255,120,40,0.35)')
-    g.addColorStop(1, 'rgba(255,90,20,0)')
-    x.fillStyle = g
-    x.fillRect(0, 0, 128, 128)
-    const t = new THREE.CanvasTexture(c)
-    t.colorSpace = THREE.SRGBColorSpace
-    return t
-  })()
 
   // ---------- scene ----------
   const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -600,8 +599,46 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   renderer.domElement.style.display = 'block'
 
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x05030a)
-  scene.fog = new THREE.FogExp2(0x05030a, 0.03)
+
+  // ---- photographic room backdrop ----
+  // The room (chandelier, chairs, panelling, ETH crest) is the reference image,
+  // painted as the scene background with a "cover" fit so it never stretches.
+  // The 3D table sits centred over the image's own table, hiding it — what's
+  // left visible is exactly the room. Drawn onto a 2D canvas → CanvasTexture so
+  // it renders under software GL too.
+  const bgCanvas = document.createElement('canvas')
+  bgCanvas.width = bgCanvas.height = 2
+  const bgCtx = bgCanvas.getContext('2d')!
+  bgCtx.fillStyle = '#05030a' // seed: a blank CanvasTexture uploads black forever
+  bgCtx.fillRect(0, 0, 2, 2)
+  const bgTex = new THREE.CanvasTexture(bgCanvas)
+  bgTex.colorSpace = THREE.SRGBColorSpace
+  scene.background = bgTex
+  function drawBackdrop() {
+    const w = container.clientWidth,
+      h = container.clientHeight
+    if (!w || !h) return
+    bgCanvas.width = w
+    bgCanvas.height = h
+    bgCtx.fillStyle = '#05030a'
+    bgCtx.fillRect(0, 0, w, h)
+    if (roomImg) {
+      const ia = roomImg.width / roomImg.height,
+        sa = w / h
+      let dw: number, dh: number
+      if (sa > ia) {
+        dw = w
+        dh = w / ia
+      } else {
+        dh = h
+        dw = h * ia
+      }
+      bgCtx.drawImage(roomImg, (w - dw) / 2, (h - dh) / 2, dw, dh)
+    }
+    bgTex.needsUpdate = true
+  }
+  drawBackdrop()
+  roomImgReady.then(drawBackdrop)
 
   // procedural warm environment for metal reflections
   function buildEnvTexture() {
@@ -782,107 +819,26 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   ped.castShadow = true
   scene.add(ped)
 
-  // ---- price board (stands on the felt) ----
-  const priceBoard = createPriceBoard()
-  // a tabletop-scale cabinet; rest its base on the felt. Stand it nearly upright
-  // (only a hair of back-lean) so it foreshortens like a real object on the
-  // table rather than reading as a flat image aimed at the camera.
-  const PB_SCALE = 0.8 // kept large so the chart stays legible for analysis
-  const PB_BASE_DROP = 1.94 // local distance from face centre to base underside
-  priceBoard.group.scale.setScalar(PB_SCALE)
-  priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
-  priceBoard.group.rotation.x = -0.06
-  scene.add(priceBoard.group)
-
-  // ---- pot (3D coin heap, centre-front of the felt) ----
-  // centred on POT_WORLD's xz in tableView so the amount label pins above it
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1) })
+  // ---- pot (3D coin heap, dead centre of the felt) ----
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 0) })
   scene.add(potPile.group)
 
   // ---- floor ----
-  const floorTex = (() => {
-    const c = document.createElement('canvas')
-    c.width = c.height = 512
-    const x = c.getContext('2d')!
-    x.fillStyle = '#0a0604'
-    x.fillRect(0, 0, 512, 512)
-    for (let i = 0; i < 900; i++) {
-      x.fillStyle = `rgba(${rand(30, 70) | 0},${rand(16, 34) | 0},${rand(8, 16) | 0},0.08)`
-      x.fillRect(rand(0, 512), rand(0, 512), rand(40, 200), rand(2, 5))
-    }
-    const t = new THREE.CanvasTexture(c)
-    t.colorSpace = THREE.SRGBColorSpace
-    t.wrapS = t.wrapT = THREE.RepeatWrapping
-    t.repeat.set(4, 4)
-    return t
-  })()
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(80, 80),
-    new THREE.MeshStandardMaterial({ map: floorTex, color: 0x120a06, roughness: 0.42, metalness: 0.5 }),
-  )
-  floor.rotation.x = -Math.PI / 2
-  floor.position.y = -THICK / 2 - 3.0
-  floor.receiveShadow = true
-  scene.add(floor)
+  // No floor mesh — the room backdrop supplies the floor. We keep its world Y
+  // as an anchor for placing the candlesticks below the table.
+  const floorY = -THICK / 2 - 3.0
 
-  // ---- candlesticks (brass) ----
-  const brass = new THREE.MeshStandardMaterial({ color: 0x6e4a1e, metalness: 1.0, roughness: 0.34 })
+  // ---- candle lights ----
+  // The candlesticks themselves live in the room backdrop photo, so here we
+  // emit only their warm, flickering light to keep the 3D table lit in kind.
+  // No visible geometry: a 3D prop would slide against the fixed photo as the
+  // camera parallaxes (and double up the photo's own candles).
   function candlestick(x: number, z: number, s = 1) {
-    const g = new THREE.Group()
-    const pts = (
-      [
-        [0.0, 0],
-        [0.42, 0],
-        [0.4, 0.06],
-        [0.18, 0.1],
-        [0.16, 0.5],
-        [0.22, 0.62],
-        [0.13, 0.66],
-        [0.12, 1.5],
-        [0.2, 1.62],
-        [0.1, 1.68],
-      ] as [number, number][]
-    ).map((p) => new THREE.Vector2(p[0] * s, p[1] * s))
-    const stick = new THREE.Mesh(new THREE.LatheGeometry(pts, 40), brass)
-    g.add(stick)
-    const candle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09 * s, 0.1 * s, 0.5 * s, 16),
-      new THREE.MeshStandardMaterial({
-        color: 0xe8d8b0,
-        roughness: 0.7,
-        emissive: 0x140d04,
-        emissiveIntensity: 0.4,
-      }),
-    )
-    candle.position.y = 1.68 * s + 0.25 * s
-    g.add(candle)
-    const flame = new THREE.Mesh(
-      new THREE.SphereGeometry(0.045 * s, 10, 10),
-      new THREE.MeshBasicMaterial({ color: 0xffe6b0 }),
-    )
-    flame.scale.set(1, 1.8, 1)
-    flame.position.y = candle.position.y + 0.3 * s
-    g.add(flame)
     const base = 5.5
     const light = new THREE.PointLight(0xffb158, base, 24, 2.3)
-    light.position.copy(flame.position)
-    g.add(light)
-    const glow = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: glowTex,
-        color: 0xffbf6e,
-        transparent: true,
-        opacity: 0.4,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    )
-    glow.scale.set(0.62 * s, 0.9 * s, 1)
-    glow.position.copy(flame.position)
-    g.add(glow)
-    g.position.set(x, floor.position.y, z)
-    scene.add(g)
-    return { flame, light, base }
+    light.position.set(x, floorY + 2.23 * s, z)
+    scene.add(light)
+    return { light, base }
   }
   const candles = [
     candlestick(-7.0, -4.4, 1.6),
@@ -914,22 +870,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   const hemi = new THREE.HemisphereLight(0x2e2010, 0x05030a, 0.14)
   scene.add(hemi)
 
-  // background furniture silhouettes
-  for (let i = 0; i < 4; i++) {
-    const m = new THREE.Mesh(
-      new THREE.BoxGeometry(rand(1.5, 3.5), rand(3, 6), rand(1.5, 3)),
-      new THREE.MeshStandardMaterial({
-        color: 0x100a05,
-        metalness: 0.4,
-        roughness: 0.6,
-        envMapIntensity: 0.25,
-      }),
-    )
-    const a = rand(-0.6, 0.6) + (i < 2 ? Math.PI * 0.75 : Math.PI * 0.25),
-      d = rand(14, 19)
-    m.position.set(Math.cos(a) * d * (i % 2 ? 1 : -1), rand(-2, 0), -Math.abs(Math.sin(a) * d) - 4)
-    scene.add(m)
-  }
+  // (Background furniture silhouettes removed — the room backdrop provides the
+  // chairs, panelling and chandelier behind the table.)
 
   // ---------- post ----------
   const composer = new EffectComposer(renderer)
@@ -957,6 +899,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     camera.updateProjectionMatrix()
     renderer.setSize(w, h)
     composer.setSize(w, h)
+    drawBackdrop() // re-fit the room cover to the new aspect
   }
   const ro = new ResizeObserver(resize)
   ro.observe(container)
@@ -990,16 +933,12 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
       camera.lookAt(LOOK)
     }
     candles.forEach((c, i) => {
-      const f = flick(i * 7.3)
-      c.light.intensity = c.base * f
-      c.flame.scale.set(0.96 + 0.08 * f, 1.85 + 0.2 * f, 0.96 + 0.08 * f)
-      c.flame.position.x = Math.sin(t * 3.0 + i) * 0.006
+      c.light.intensity = c.base * flick(i * 7.3)
     })
     key.intensity = 54 * (0.93 + 0.07 * flick(2.0))
     pool.intensity = 60 * (0.94 + 0.06 * flick(5.0))
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
-    priceBoard.update(t)
     potPile.update(t)
     composer.render()
   }
@@ -1029,7 +968,6 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     running = false
     cancelAnimationFrame(raf)
     unbindTableView()
-    priceBoard.dispose()
     potPile.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()

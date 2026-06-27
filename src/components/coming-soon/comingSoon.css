@@ -1,0 +1,341 @@
+/* ============================================================================
+ * Coming-soon overlay — the 3D table is the hero; this layer frames it with the
+ * brand, a launch countdown, a waitlist and the community channels, all struck
+ * from the same engraved-brass / candlelit palette as the table itself.
+ * ==========================================================================*/
+
+.cs {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: clamp(20px, 3.4vw, 46px) clamp(18px, 4vw, 56px);
+  text-align: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Soft scrims top & bottom so type stays legible over the bright felt/candles,
+ * while the middle of the table breathes through untouched. */
+.cs-scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+.cs-scrim--top {
+  top: 0;
+  height: 46%;
+  background: linear-gradient(to bottom, rgba(5, 3, 10, 0.82), rgba(5, 3, 10, 0.32) 60%, transparent);
+}
+.cs-scrim--bottom {
+  bottom: 0;
+  height: 54%;
+  background: linear-gradient(to top, rgba(5, 3, 10, 0.92), rgba(5, 3, 10, 0.5) 46%, transparent);
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────── */
+.cs-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(10px, 1.6vw, 18px);
+  width: 100%;
+}
+
+.cs-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--gold-line);
+  margin: 0;
+  padding-left: 0.42em; /* optical: balance the trailing letter-spacing */
+}
+.cs-eyebrow-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold-bright);
+  box-shadow: 0 0 10px var(--gold-bright);
+  animation: cs-pulse 2.4s var(--ease) infinite;
+}
+@keyframes cs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.cs-wordmark {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(38px, 8.6vw, 104px);
+  line-height: 0.96;
+  letter-spacing: 0.05em;
+  background: linear-gradient(
+    180deg,
+    #fff6da 0%,
+    var(--gold-bright) 36%,
+    var(--gold) 64%,
+    var(--gold-deep) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.55));
+  animation: cs-flicker 7s ease-in-out infinite;
+}
+/* candlelit warmth pooling on the engraving — echoes the scene's flame flicker */
+@keyframes cs-flicker {
+  0%,
+  100% {
+    filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 26px rgba(255, 176, 88, 0.28));
+  }
+  45% {
+    filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 34px rgba(255, 196, 110, 0.42));
+  }
+  70% {
+    filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 22px rgba(255, 168, 80, 0.24));
+  }
+}
+
+/* ── Bottom block ──────────────────────────────────────────────────────── */
+.cs-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(18px, 2.4vw, 28px);
+  width: 100%;
+  max-width: 880px;
+}
+
+/* Baroque divider */
+.cs-rule {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(420px, 70%);
+}
+.cs-rule-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--hairline-strong), transparent);
+}
+.cs-rule-gem {
+  color: var(--gold);
+  font-size: 9px;
+  text-shadow: 0 0 10px rgba(202, 162, 63, 0.6);
+}
+
+/* ── Waitlist + socials ────────────────────────────────────────────────── */
+.cs-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(18px, 2.4vw, 28px);
+  width: 100%;
+}
+
+.cs-join {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.cs-join-lead {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(22px, 2.7vw, 31px);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.05;
+  color: var(--gold-bright);
+  text-shadow:
+    0 1px 8px rgba(0, 0, 0, 0.6),
+    0 0 24px rgba(255, 184, 96, 0.22);
+}
+.cs-join-sub {
+  margin: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Social tiles — equal-width, struck from the same brass as the seat coins.
+ * Coin sits above a centred label; the whole tile is a card that lifts on hover. */
+.cs-socials {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: clamp(12px, 2vw, 20px);
+}
+.cs-social {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: clamp(108px, 16vw, 136px);
+  padding: 18px 12px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--bg-panel);
+  box-shadow:
+    inset 0 1px 0 rgba(243, 217, 138, 0.08),
+    var(--shadow-panel);
+  backdrop-filter: blur(10px) saturate(1.1);
+  text-decoration: none;
+  transition:
+    transform 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+.cs-social:hover {
+  transform: translateY(-3px);
+  border-color: var(--hairline-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(243, 217, 138, 0.12),
+    var(--glow-warm),
+    var(--shadow-panel);
+}
+.cs-social-coin {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255, 244, 208, 0.55), rgba(255, 244, 208, 0) 50%),
+    radial-gradient(circle at 50% 118%, rgba(20, 11, 3, 0.6), rgba(20, 11, 3, 0) 58%),
+    conic-gradient(from 212deg, #b8923a, #f3d98a 24%, #8a6a22 52%, #e6c163 76%, #b8923a);
+  border: 1px solid rgba(38, 24, 9, 0.85);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 214, 0.65),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 4px 11px rgba(0, 0, 0, 0.6);
+  transition: box-shadow 0.18s var(--ease);
+}
+/* recessed inner field the glyph is stamped into */
+.cs-social-coin::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 36%, #3a2410, #150c04 82%);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.85),
+    inset 0 -1px 1px rgba(243, 217, 138, 0.16);
+}
+.cs-social-coin svg {
+  position: relative;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  color: var(--gold-bright);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.85)) drop-shadow(0 -0.5px 0 rgba(255, 244, 208, 0.4));
+}
+.cs-social:hover .cs-social-coin {
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 214, 0.65),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 0 0 1px var(--gold),
+    0 0 20px rgba(243, 217, 138, 0.45),
+    0 4px 11px rgba(0, 0, 0, 0.6);
+}
+.cs-social-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+.cs-social-label {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+.cs-social-handle {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.cs-social:hover .cs-social-label {
+  color: var(--gold-bright);
+}
+
+/* Footer micro-print */
+.cs-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.cs-foot-sep {
+  opacity: 0.5;
+}
+
+/* ── Entrance choreography ─────────────────────────────────────────────── */
+.cs-rise {
+  opacity: 0;
+  animation: cs-rise 0.9s var(--ease) forwards;
+}
+@keyframes cs-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .cs {
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .cs-socials {
+    gap: 10px;
+  }
+  .cs-social {
+    width: clamp(96px, 30vw, 116px);
+    padding: 14px 8px 13px;
+    gap: 10px;
+  }
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .cs-rise,
+  .cs-wordmark,
+  .cs-eyebrow-dot {
+    animation: none;
+  }
+  .cs-rise {
+    opacity: 1;
+    transform: none;
+  }
+}
