@@ -35,8 +35,8 @@ const COIN_R = 0.21 // coin radius (world units)
 const COIN_H = 0.06 // coin thickness — chunky enough to show its reeded edge
 const GAP = 0.001 // hairline between stacked coins so edges separate
 const MAX_CHIPS = 115 // total coin budget in the heap
-const FLAT_MAX = 14 // loose coins spilled flat around the base
-const HEAP_R = 0.62 // radius of the poured mound on the felt
+const HEAP_R = 0.74 // radius of the mound footprint on the felt
+const DOME = 5 // height bias: how much taller the centre piles than the rim
 const DROP = 1.5 // how far above home a new coin starts
 const DROP_DUR = 0.4 // seconds for a coin to settle
 const LEAVE_DUR = 0.3 // seconds for a swept coin to vanish
@@ -560,60 +560,59 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
     return [face, face, edge] as THREE.Material[]
   })
 
-  // Precompute every coin's fixed home slot. A handful of loose coins lie flat
-  // around the base (sprinkled in early so a small pot looks scattered), the
-  // rest stack into bias-weighted columns. The order is monotonic: slot i never
-  // changes, so growing the pot only reveals later slots — placed coins hold.
+  // Precompute every coin's fixed home slot as a physically sound mound. Coins
+  // stack into a hexagonal lattice of columns whose centres are more than one
+  // coin-diameter apart, so coins in neighbouring columns can never overlap —
+  // nothing intertwines. Each new coin drops into the column that keeps the heap
+  // a rounded dome (centre piles tallest, the rim gets a coin or two for a
+  // natural scattered base). The order is monotonic — slot i never changes, so
+  // growing the pot only reveals later slots and placed coins hold still.
   const slots: Slot[] = []
   {
-    const counts = new Array(NSTACKS).fill(0)
-    let flatUsed = 0
-    for (let i = 0; i < MAX_CHIPS; i++) {
-      const wantFlat = flatUsed < FLAT_MAX && i % 4 === 1
-      if (wantFlat) {
-        const k = flatUsed++
-        const a = hash(k, 7) * Math.PI * 2
-        const rad = 0.62 + hash(k, 8) * 0.46
-        const tilt = hash(k, 9) < 0.22 // a few rest tipped against a stack
-        const lean = tilt ? 0.16 + hash(k, 11) * 0.1 : (hash(k, 12) - 0.5) * 0.05
-        slots.push({
-          x: Math.cos(a) * rad,
-          z: Math.sin(a) * rad * 0.82,
-          // lift the coin's centre by its own tilt so the low edge never sinks
-          // through the felt
-          homeY: COIN_H / 2 + Math.sin(lean) * COIN_R + 0.002,
-          rotY: hash(k, 10) * Math.PI * 2,
-          lean,
-          leanAxis: hash(k, 13) * Math.PI * 2,
-          matIdx: k % matSets.length,
-        })
-      } else {
-        let best = 0,
-          bestV = Infinity
-        for (let s = 0; s < NSTACKS; s++) {
-          const c = counts[s]
-          if (c >= MAX_H) continue
-          const v = c + STACK_BIAS[s]
-          if (v < bestV) {
-            bestV = v
-            best = s
-          }
-        }
-        const h = counts[best]
-        counts[best]++
-        const [sx, sz] = STACK_POS[best]
-        const jx = (hash(i, 1) - 0.5) * 0.035
-        const jz = (hash(i, 2) - 0.5) * 0.035
-        slots.push({
-          x: sx + jx,
-          z: sz + jz,
-          homeY: COIN_H / 2 + h * (COIN_H + GAP),
-          rotY: hash(i, 3) * Math.PI * 2,
-          lean: (hash(best, h) - 0.5) * 0.05,
-          leanAxis: hash(i, 5) * Math.PI * 2,
-          matIdx: (best + h) % matSets.length,
-        })
+    // hex lattice of column centres, spaced just over a diameter apart
+    const S = 2 * COIN_R * 1.06
+    const ROW = S * 0.8660254
+    const cols: { x: number; z: number; r: number; h: number; bias: number }[] = []
+    const jmax = Math.ceil(HEAP_R / ROW) + 1
+    const kmax = Math.ceil(HEAP_R / S) + 1
+    for (let j = -jmax; j <= jmax; j++) {
+      const cz = j * ROW
+      const xoff = j & 1 ? S / 2 : 0
+      for (let k = -kmax; k <= kmax; k++) {
+        const cx = k * S + xoff
+        const r = Math.hypot(cx, cz)
+        // a fixed per-column reluctance breaks the even fill into an organic,
+        // hand-stacked profile — some columns end up taller than their neighbours
+        if (r <= HEAP_R) cols.push({ x: cx, z: cz, r, h: 0, bias: hash(k * 13 + 1, j * 7 + 3) * 1.6 })
       }
+    }
+    for (let i = 0; i < MAX_CHIPS; i++) {
+      // pick the column that best keeps a domed profile (low + central wins),
+      // nudged by each column's reluctance so heights stagger naturally
+      let best = cols[0],
+        bestCost = Infinity
+      for (const c of cols) {
+        const cost = c.h + DOME * (c.r / HEAP_R) ** 2 + c.bias
+        if (cost < bestCost) {
+          bestCost = cost
+          best = c
+        }
+      }
+      const h = best.h++
+      // tiny in-cell jitter (kept well under the lattice margin so columns stay
+      // more than a diameter apart) and a touch more lean for lone base coins
+      const jx = (hash(i, 1) - 0.5) * 0.008
+      const jz = (hash(i, 2) - 0.5) * 0.008
+      const lean = (hash(i, 4) - 0.5) * (h === 0 ? 0.07 : 0.03)
+      slots.push({
+        x: best.x + jx,
+        z: best.z + jz,
+        homeY: COIN_H / 2 + h * (COIN_H + GAP) + COIN_R * Math.sin(Math.abs(lean)),
+        rotY: hash(i, 3) * Math.PI * 2,
+        lean,
+        leanAxis: hash(i, 5) * Math.PI * 2,
+        matIdx: i % matSets.length,
+      })
     }
   }
 

@@ -602,9 +602,11 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   // ---- photographic room backdrop ----
   // The room (chandelier, chairs, panelling, ETH crest) is the reference image,
-  // painted as the scene background with a "cover" fit so it never stretches.
-  // The 3D table sits centred over the image's own table, hiding it — what's
-  // left visible is exactly the room. Drawn onto a 2D canvas → CanvasTexture so
+  // painted as the scene background. The whole reference photo is always shown
+  // ("contain" fit) so the chandelier, ETH crest and chairs are never cropped
+  // on wide screens; the side margins are filled with a blurred, zoomed copy of
+  // the same photo so there are no empty bars. The 3D table sits centred over
+  // the image's own table, hiding it. Drawn onto a 2D canvas → CanvasTexture so
   // it renders under software GL too.
   const bgCanvas = document.createElement('canvas')
   bgCanvas.width = bgCanvas.height = 2
@@ -625,13 +627,28 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     if (roomImg) {
       const ia = roomImg.width / roomImg.height,
         sa = w / h
+      // filler layer: cover the whole canvas with a blurred, zoomed copy
+      let cdw: number, cdh: number
+      if (sa > ia) {
+        cdw = w
+        cdh = w / ia
+      } else {
+        cdh = h
+        cdw = h * ia
+      }
+      bgCtx.save()
+      bgCtx.filter = 'blur(28px)'
+      bgCtx.globalAlpha = 0.85
+      bgCtx.drawImage(roomImg, (w - cdw) / 2 - 30, (h - cdh) / 2 - 30, cdw + 60, cdh + 60)
+      bgCtx.restore()
+      // foreground layer: the complete photo, crisp, centred ("contain")
       let dw: number, dh: number
       if (sa > ia) {
-        dw = w
-        dh = w / ia
-      } else {
         dh = h
         dw = h * ia
+      } else {
+        dw = w
+        dh = w / ia
       }
       bgCtx.drawImage(roomImg, (w - dw) / 2, (h - dh) / 2, dw, dh)
     }
@@ -925,11 +942,13 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     } else {
       mouse.x += (mouse.tx - mouse.x) * 0.04
       mouse.y += (mouse.ty - mouse.y) * 0.04
-      const dx = Math.sin(t * 0.13) * 0.3,
-        dy = Math.cos(t * 0.17) * 0.16
-      camera.position.x = camBase.x + dx + mouse.x * 1.6
-      camera.position.y = camBase.y + dy - mouse.y * 1.1
-      camera.position.z = camBase.z + Math.cos(t * 0.1) * 0.2
+      // Gentle parallax only — the room is a fixed backdrop, so a large camera
+      // sway would make the table visibly slide against it.
+      const dx = Math.sin(t * 0.13) * 0.12,
+        dy = Math.cos(t * 0.17) * 0.07
+      camera.position.x = camBase.x + dx + mouse.x * 0.35
+      camera.position.y = camBase.y + dy - mouse.y * 0.25
+      camera.position.z = camBase.z + Math.cos(t * 0.1) * 0.1
       camera.lookAt(LOOK)
     }
     candles.forEach((c, i) => {
