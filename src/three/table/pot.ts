@@ -569,10 +569,12 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
   // growing the pot only reveals later slots and placed coins hold still.
   const slots: Slot[] = []
   {
-    // hex lattice of column centres, spaced just over a diameter apart
-    const S = 2 * COIN_R * 1.06
+    // hex lattice of column centres, spaced enough over a diameter that each
+    // coin can be jostled off-centre without its neighbours ever touching
+    const S = 2 * COIN_R * 1.16
     const ROW = S * 0.8660254
-    const cols: { x: number; z: number; r: number; h: number; bias: number }[] = []
+    const JIT = 0.022 // max in-cell offset — keeps min centre gap above 2·COIN_R
+    const cols: { x: number; z: number; r: number; h: number; top: number; bias: number }[] = []
     const jmax = Math.ceil(HEAP_R / ROW) + 1
     const kmax = Math.ceil(HEAP_R / S) + 1
     for (let j = -jmax; j <= jmax; j++) {
@@ -583,10 +585,49 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
         const r = Math.hypot(cx, cz)
         // a fixed per-column reluctance breaks the even fill into an organic,
         // hand-stacked profile — some columns end up taller than their neighbours
-        if (r <= HEAP_R) cols.push({ x: cx, z: cz, r, h: 0, bias: hash(k * 13 + 1, j * 7 + 3) * 1.6 })
+        if (r <= HEAP_R) cols.push({ x: cx, z: cz, r, h: 0, top: 0, bias: hash(k * 13 + 1, j * 7 + 3) * 2.2 })
       }
     }
+    // a few coins are propped up on edge against a stack — caught mid-slide,
+    // clearly tilted and taking the column's support rather than lying flat
+    const leaners = new Set([33, 46, 57, 66, 72])
+    const usedSupports = new Set<typeof cols[number]>()
     for (let i = 0; i < MAX_CHIPS; i++) {
+      if (leaners.has(i)) {
+        // find a tall mid-ring column with open felt on its outward side
+        let sup: (typeof cols)[number] | null = null,
+          supScore = -Infinity
+        for (const c of cols) {
+          if (c.h < 3 || usedSupports.has(c)) continue
+          const score = c.h - 7 * Math.abs(c.r - 0.42)
+          if (score > supScore) {
+            supScore = score
+            sup = c
+          }
+        }
+        if (sup) {
+          usedSupports.add(sup)
+          const ang = Math.atan2(sup.z, sup.x) || hash(i, 31) * Math.PI * 2 // outward
+          const phi = 0.92 + hash(i, 30) * 0.3 // ~53–70° off the felt
+          // a disc of radius COIN_R tilted by phi reaches inward by COIN_R·cos(phi)
+          // from its centre, so the centre must sit this far out for the whole
+          // coin to stay outside the stack (radius COIN_R, plus jitter slack) and
+          // only graze it at the top edge — never sink into the column
+          const off = COIN_R * (1 + Math.cos(phi)) + 0.03
+          slots.push({
+            x: sup.x + Math.cos(ang) * off,
+            z: sup.z + Math.sin(ang) * off,
+            // low edge rests on the felt; centre lifted by the steep tilt
+            homeY: COIN_R * Math.sin(phi) + (COIN_H / 2) * Math.cos(phi) + 0.004,
+            rotY: hash(i, 3) * Math.PI * 2,
+            lean: phi,
+            leanAxis: ang, // tip along the radial so it leans onto the stack
+            matIdx: i % matSets.length,
+          })
+          continue
+        }
+        // no suitable stack yet — fall through to a normal coin
+      }
       // pick the column that best keeps a domed profile (low + central wins),
       // nudged by each column's reluctance so heights stagger naturally
       let best = cols[0],
@@ -599,15 +640,19 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
         }
       }
       const h = best.h++
-      // tiny in-cell jitter (kept well under the lattice margin so columns stay
-      // more than a diameter apart) and a touch more lean for lone base coins
-      const jx = (hash(i, 1) - 0.5) * 0.008
-      const jz = (hash(i, 2) - 0.5) * 0.008
-      const lean = (hash(i, 4) - 0.5) * (h === 0 ? 0.07 : 0.03)
+      // each coin slips off-centre and tilts a little, so stacks look tossed
+      // rather than machine-stacked; the column's running top accounts for the
+      // tilt so a leaning coin never sinks into the one below it
+      const jx = (hash(i, 1) - 0.5) * 2 * JIT
+      const jz = (hash(i, 2) - 0.5) * 2 * JIT
+      const lean = (hash(i, 4) - 0.5) * 0.12
+      const lift = COIN_R * Math.sin(Math.abs(lean))
+      const homeY = best.top + COIN_H / 2 + lift + (h > 0 ? GAP : 0)
+      best.top = homeY + COIN_H / 2 + lift
       slots.push({
         x: best.x + jx,
         z: best.z + jz,
-        homeY: COIN_H / 2 + h * (COIN_H + GAP) + COIN_R * Math.sin(Math.abs(lean)),
+        homeY,
         rotY: hash(i, 3) * Math.PI * 2,
         lean,
         leanAxis: hash(i, 5) * Math.PI * 2,
