@@ -50,7 +50,7 @@ export function Dashboard() {
       <div className="dash-panel panel">
         <header className="dash-head">
           <div>
-            <div className="brand-mark">SYNDICATE</div>
+            <div className="brand-mark">SATOSHI'S TABLE</div>
             <div className="eyebrow">live tables · a contest of conviction</div>
           </div>
           <div className="dash-sorts">

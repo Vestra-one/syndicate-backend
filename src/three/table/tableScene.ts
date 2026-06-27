@@ -3,7 +3,6 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createPriceBoard } from './priceBoard'
-import { createPotPile } from './pot'
 import { bindTableView, unbindTableView } from './tableView'
 
 /**
@@ -21,8 +20,6 @@ export interface TableSceneHandle {
   tableRadius: number
   /** World-space Y of the felt playing surface. */
   feltY: number
-  /** Drive the 3D chip pile at the centre of the felt from the live pot value. */
-  setPot: (amount: number) => void
   dispose: () => void
 }
 
@@ -787,17 +784,12 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   // a tabletop-scale cabinet; rest its base on the felt. Stand it nearly upright
   // (only a hair of back-lean) so it foreshortens like a real object on the
   // table rather than reading as a flat image aimed at the camera.
-  const PB_SCALE = 0.8
+  const PB_SCALE = 0.8 // kept large so the chart stays legible for analysis
   const PB_BASE_DROP = 1.94 // local distance from face centre to base underside
   priceBoard.group.scale.setScalar(PB_SCALE)
   priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
   priceBoard.group.rotation.x = -0.06
   scene.add(priceBoard.group)
-
-  // ---- pot (3D chip pile, centre-front of the felt) ----
-  // matches POT_WORLD xz in tableView so the amount label pins above the pile
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1) })
-  scene.add(potPile.group)
 
   // ---- floor ----
   const floorTex = (() => {
@@ -972,7 +964,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   let raf = 0
   let running = true
-  function frame() {
+  function animate() {
+    if (!running) return
+    raf = requestAnimationFrame(animate)
     t += 0.016
     mouse.x += (mouse.tx - mouse.x) * 0.04
     mouse.y += (mouse.ty - mouse.y) * 0.04
@@ -993,21 +987,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
     priceBoard.update(t)
-    potPile.update(t)
     composer.render()
   }
-  function animate() {
-    if (!running) return
-    raf = requestAnimationFrame(animate)
-    frame()
-  }
   animate()
-  // dev-only: pump frames manually (headless throttles RAF, so screenshots need this)
-  if (import.meta.env.DEV) {
-    ;(window as unknown as { __tableStep?: (n: number) => void }).__tableStep = (n = 1) => {
-      for (let i = 0; i < n; i++) frame()
-    }
-  }
 
   // ---------- disposal ----------
   function dispose() {
@@ -1015,7 +997,6 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     cancelAnimationFrame(raf)
     unbindTableView()
     priceBoard.dispose()
-    potPile.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
     composer.dispose()
@@ -1034,12 +1015,5 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     }
   }
 
-  return {
-    scene,
-    camera,
-    tableRadius: R_OUTER,
-    feltY: yFelt,
-    setPot: (amount: number) => potPile.setAmount(amount),
-    dispose,
-  }
+  return { scene, camera, tableRadius: R_OUTER, feltY: yFelt, dispose }
 }

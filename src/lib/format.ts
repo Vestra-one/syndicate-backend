@@ -9,7 +9,7 @@ export function formatPrice(value: number | null, currency = 'USD'): string {
   }).format(value)
 }
 
-export function formatAmount(value: number, currency = 'FIBO'): string {
+export function formatAmount(value: number, currency = 'SATS'): string {
   return `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)} ${currency}`
 }
 

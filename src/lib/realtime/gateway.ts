@@ -8,7 +8,7 @@
  *
  * Two implementations, chosen by env (see `createGateway`):
  *   - mockGateway: a full play-money match emulator (no backend needed)
- *   - wsGateway:   a real WebSocket to the Syndicate gateway
+ *   - wsGateway:   a real WebSocket to the Satoshi's Table gateway
  */
 import type { ClientMessage, ServerMessage } from '@/lib/protocol'
 import type { Adapters } from '@/lib/adapters'

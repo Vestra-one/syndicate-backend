@@ -1,5 +1,5 @@
 /**
- * Syndicate — frontend ↔ backend protocol & shared types.
+ * Satoshi's Table — frontend ↔ backend protocol & shared types.
  *
  * The single source of wire types for the client. Mirrors the backend gateway
  * messages, the action-feed public events, the match-engine action set, and the

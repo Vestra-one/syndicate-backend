@@ -1,4 +1,4 @@
-# FIBO — bet at the table
+# Satoshi's Table — bet at the table
 
 A realtime price-betting game. The centerpiece is a candlelit 3D table; everything
 in the game happens there. Players bet **UP / DOWN** on where a market price moves

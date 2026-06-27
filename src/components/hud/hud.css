@@ -7,8 +7,9 @@
 }
 .brand-mark {
   font-family: var(--font-display);
-  font-size: 22px;
-  letter-spacing: 0.28em;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  white-space: nowrap;
   color: var(--gold-bright);
   text-shadow: var(--glow-warm);
 }
@@ -480,49 +481,95 @@
   gap: 6px;
   transition: opacity 0.2s linear;
 }
-/* the seated medallion — a gold-rimmed token catching the candlelight */
+/* the seated medallion — an engraved brass coin struck from the same metal
+ * as the table's rings: a brushed conic rim around a recessed dark field that
+ * the persona's sigil is stamped into. Layered insets give it real relief so
+ * it sits ON the rail rather than reading as a flat sticker. */
 .seat-medallion {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   background:
-    radial-gradient(circle at 38% 32%, rgba(243, 217, 138, 0.35), rgba(40, 24, 10, 0.9) 70%),
-    var(--bg-panel-strong);
-  border: 1.5px solid var(--hairline-strong);
+    radial-gradient(circle at 50% 30%, rgba(255, 244, 208, 0.55), rgba(255, 244, 208, 0) 50%),
+    radial-gradient(circle at 50% 118%, rgba(20, 11, 3, 0.6), rgba(20, 11, 3, 0) 58%),
+    conic-gradient(
+      from 212deg,
+      #b8923a,
+      #f3d98a 24%,
+      #8a6a22 52%,
+      #e6c163 76%,
+      #b8923a
+    );
+  border: 1px solid rgba(38, 24, 9, 0.85);
   box-shadow:
-    inset 0 2px 6px rgba(0, 0, 0, 0.6),
-    0 6px 16px rgba(0, 0, 0, 0.55);
+    inset 0 1px 1px rgba(255, 246, 214, 0.65),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 4px 11px rgba(0, 0, 0, 0.6),
+    0 1px 0 rgba(255, 240, 200, 0.12);
+}
+/* the recessed inner field the sigil is stamped onto */
+.seat-medallion::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 36%, #3a2410, #150c04 82%);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.85),
+    inset 0 -1px 1px rgba(243, 217, 138, 0.16),
+    0 1px 0 rgba(243, 217, 138, 0.22);
+}
+/* the persona sigil — embossed gold line-emblem (light top edge, dark below) */
+.seat-sigil {
+  position: relative;
+  z-index: 1;
+  width: 27px;
+  height: 27px;
+  color: var(--gold-bright);
+  filter:
+    drop-shadow(0 1px 0 rgba(0, 0, 0, 0.85))
+    drop-shadow(0 -0.5px 0 rgba(255, 244, 208, 0.45));
 }
 .seat-monogram {
+  position: relative;
+  z-index: 1;
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 600;
   color: var(--gold-bright);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.85),
+    0 -0.5px 0 rgba(255, 244, 208, 0.4);
 }
+/* the nameplate — a small engraved brass plaque, not a glass UI pill */
 .seat-label {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
-  padding: 3px 10px;
-  border-radius: 9px;
-  background: rgba(10, 6, 3, 0.66);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--hairline);
+  gap: 0;
+  padding: 4px 12px 5px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(46, 28, 12, 0.96), rgba(20, 11, 4, 0.96));
+  border: 1px solid var(--hairline-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(243, 217, 138, 0.28),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 3px 8px rgba(0, 0, 0, 0.55);
 }
 .seat-alias {
   font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant: small-caps;
+  letter-spacing: 0.07em;
+  color: var(--gold-line);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
 }
 .seat-stack {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text);
 }
@@ -558,13 +605,9 @@
     0 2px 7px rgba(0, 0, 0, 0.7),
     0 0 0 2px rgba(255, 255, 255, 0.12);
 }
-/* acting — a pulsing gold ring draws the eye to whose turn it is */
+/* acting — candlelight pools on the coin to mark whose turn it is */
 .table-seat--acting .seat-medallion {
   border-color: var(--gold-bright);
-  box-shadow:
-    inset 0 2px 6px rgba(0, 0, 0, 0.5),
-    0 0 0 2px var(--gold),
-    0 0 26px rgba(243, 217, 138, 0.55);
   animation: seat-pulse 1.5s var(--ease) infinite;
 }
 .table-seat--acting .seat-alias {
@@ -574,15 +617,19 @@
   0%,
   100% {
     box-shadow:
-      inset 0 2px 6px rgba(0, 0, 0, 0.5),
+      inset 0 1px 1px rgba(255, 246, 214, 0.65),
+      inset 0 -3px 6px rgba(28, 15, 4, 0.7),
       0 0 0 2px var(--gold),
-      0 0 18px rgba(243, 217, 138, 0.4);
+      0 0 18px rgba(243, 217, 138, 0.42),
+      0 4px 11px rgba(0, 0, 0, 0.6);
   }
   50% {
     box-shadow:
-      inset 0 2px 6px rgba(0, 0, 0, 0.5),
+      inset 0 1px 1px rgba(255, 246, 214, 0.65),
+      inset 0 -3px 6px rgba(28, 15, 4, 0.7),
       0 0 0 3px var(--gold-bright),
-      0 0 32px rgba(243, 217, 138, 0.7);
+      0 0 32px rgba(243, 217, 138, 0.72),
+      0 4px 11px rgba(0, 0, 0, 0.6);
   }
 }
 .table-seat--folded {
@@ -591,6 +638,12 @@
 }
 .table-seat--allin .seat-medallion {
   border-color: var(--down);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 214, 0.6),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 0 0 2px var(--down),
+    0 0 18px var(--down-glow),
+    0 4px 11px rgba(0, 0, 0, 0.6);
 }
 .table-seat--allin .seat-stack {
   color: var(--down);
@@ -699,8 +752,8 @@
   margin-bottom: 16px;
 }
 .dash-head .brand-mark {
-  font-size: 24px;
-  letter-spacing: 0.3em;
+  font-size: 20px;
+  letter-spacing: 0.2em;
 }
 .dash-sorts {
   display: flex;

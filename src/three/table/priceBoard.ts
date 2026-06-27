@@ -41,16 +41,105 @@ export function createPriceBoard(): PriceBoardHandle {
   const hw = W / 2
   const hh = H / 2
   const DEPTH = 0.4
-  const BEZEL = 0.26
+  const BEZEL = 0.17 // slimmer wooden frame — a tight gilt-edged surround
   const shw = hw - BEZEL // screen half-width
   const shh = hh - BEZEL // screen half-height
 
+  // ---- mahogany-burl wood for the frame, echoing the table's burl rail. A
+  //      colour map plus a matching bump so the grain catches the candlelight. ----
+  const rnd = (a: number, b: number) => a + Math.random() * (b - a)
+  function buildWoodTexture() {
+    const S = 512
+    const col = document.createElement('canvas')
+    col.width = col.height = S
+    const bmp = document.createElement('canvas')
+    bmp.width = bmp.height = S
+    const cx2 = col.getContext('2d')!
+    const bx = bmp.getContext('2d')!
+    cx2.fillStyle = '#946238' // warm honey-oak base
+    cx2.fillRect(0, 0, S, S)
+    bx.fillStyle = '#808080'
+    bx.fillRect(0, 0, S, S)
+    // burl mottling
+    for (let i = 0; i < 2600; i++) {
+      const px = rnd(0, S),
+        py = rnd(0, S),
+        s = rnd(2, 9),
+        a = rnd(0, Math.PI),
+        t = Math.random()
+      cx2.fillStyle =
+        t < 0.5
+          ? `rgba(${(170 + rnd(-30, 40)) | 0},${(116 + rnd(-16, 22)) | 0},${(70 + rnd(-12, 18)) | 0},0.15)`
+          : t < 0.85
+            ? 'rgba(70,40,20,0.20)'
+            : `rgba(${(208 + rnd(0, 40)) | 0},150,92,0.10)`
+      cx2.beginPath()
+      cx2.ellipse(px, py, s, s * rnd(0.4, 1), a, 0, Math.PI * 2)
+      cx2.fill()
+      bx.fillStyle = `rgba(${t < 0.5 ? 210 : 70},${t < 0.5 ? 210 : 70},${t < 0.5 ? 210 : 70},0.10)`
+      bx.beginPath()
+      bx.ellipse(px, py, s, s * rnd(0.4, 1), a, 0, Math.PI * 2)
+      bx.fill()
+    }
+    // soft burl knots
+    for (let i = 0; i < 54; i++) {
+      const px = rnd(0, S),
+        py = rnd(0, S),
+        s = rnd(14, 46)
+      const g = cx2.createRadialGradient(px, py, 0, px, py, s)
+      g.addColorStop(0, 'rgba(196,140,84,0.13)')
+      g.addColorStop(0.6, 'rgba(96,58,30,0.08)')
+      g.addColorStop(1, 'rgba(0,0,0,0)')
+      cx2.fillStyle = g
+      cx2.beginPath()
+      cx2.ellipse(px, py, s, s * rnd(0.5, 1), rnd(0, Math.PI), 0, Math.PI * 2)
+      cx2.fill()
+    }
+    // wandering grain lines
+    cx2.lineCap = bx.lineCap = 'round'
+    for (let i = 0; i < 240; i++) {
+      let a = rnd(0, Math.PI * 2),
+        px = rnd(0, S),
+        py = rnd(0, S)
+      const lw = rnd(0.6, 1.8)
+      cx2.strokeStyle = `rgba(${rnd(80, 130) | 0},${rnd(46, 78) | 0},${rnd(24, 44) | 0},${rnd(0.06, 0.16)})`
+      cx2.lineWidth = lw
+      bx.strokeStyle = `rgba(40,40,40,${rnd(0.05, 0.12)})`
+      bx.lineWidth = lw
+      cx2.beginPath()
+      cx2.moveTo(px, py)
+      bx.beginPath()
+      bx.moveTo(px, py)
+      for (let s = 0; s < 6; s++) {
+        a += rnd(-0.4, 0.4)
+        px += Math.cos(a) * rnd(8, 22)
+        py += Math.sin(a) * rnd(8, 22)
+        cx2.lineTo(px, py)
+        bx.lineTo(px, py)
+      }
+      cx2.stroke()
+      bx.stroke()
+    }
+    const mk = (cv: HTMLCanvasElement, srgb: boolean) => {
+      const t = new THREE.CanvasTexture(cv)
+      if (srgb) t.colorSpace = THREE.SRGBColorSpace
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(0.5, 0.5)
+      t.anisotropy = 8
+      return t
+    }
+    return { map: mk(col, true), bumpMap: mk(bmp, false) }
+  }
+  const woodTex = buildWoodTexture()
+
   // ---- materials ----
   const shellMat = new THREE.MeshStandardMaterial({
-    color: 0x1b130c,
-    metalness: 0.45,
-    roughness: 0.5,
-    envMapIntensity: 0.7,
+    ...woodTex,
+    color: 0xb07b46, // deeper burl, tuned to the rail so it catches (not throws) candlelight
+    metalness: 0.12,
+    roughness: 0.56,
+    bumpScale: 0.014,
+    envMapIntensity: 0.75,
   })
   const goldMat = new THREE.MeshStandardMaterial({
     color: 0xb89149,
@@ -106,32 +195,53 @@ export function createPriceBoard(): PriceBoardHandle {
   group.add(screen)
 
   // ---- slim gold rim around the screen opening ----
+  // One continuous mitred moulding (outline + concentric hole) rather than four
+  // overlapping bars: the old bars doubled up at the corners, leaving two gold
+  // faces fighting for the same depth — that's the flicker seen when the camera
+  // pans left/right. A single extruded frame has no overlaps and clean corners.
   const rimT = 0.05
-  const rimZ = 0.02
-  const mkBar = (w: number, h: number, x: number, y: number) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, rimT * 1.4), goldMat)
-    m.position.set(x, y, rimZ)
-    m.castShadow = true
-    group.add(m)
-  }
-  mkBar(shw * 2 + rimT * 2, rimT, 0, shh + rimT / 2)
-  mkBar(shw * 2 + rimT * 2, rimT, 0, -shh - rimT / 2)
-  mkBar(rimT, shh * 2 + rimT * 2, -shw - rimT / 2, 0)
-  mkBar(rimT, shh * 2 + rimT * 2, shw + rimT / 2, 0)
+  const rimShape = new THREE.Shape()
+  roundRect(rimShape, shw + rimT, shh + rimT, 0.09)
+  const rimHole = new THREE.Path()
+  roundRect(rimHole, shw, shh, 0.06)
+  rimShape.holes.push(rimHole)
+  const rim = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(rimShape, {
+      depth: 0.05,
+      bevelEnabled: true,
+      bevelThickness: 0.02,
+      bevelSize: 0.022,
+      bevelSegments: 2,
+    }),
+    goldMat,
+  )
+  rim.position.z = 0.005 // sits on the bezel face, standing proud as a gold frame
+  rim.castShadow = true
+  group.add(rim)
 
   // ---- base plinth so it sits believably on the felt ----
-  const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.08, 0.34, DEPTH + 0.45), shellMat)
-  base.position.set(0, -hh - 0.17, -DEPTH / 2)
+  // Front face sits flush with the cabinet front (z = 0): no protruding shelf, so
+  // the lower boundary reads as one continuous face down to the felt.
+  const BASE_H = 0.34
+  const baseDepth = DEPTH + 0.2
+  const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.08, BASE_H, baseDepth), shellMat)
+  base.position.set(0, -hh - BASE_H / 2, -baseDepth / 2) // front flush with cabinet front (z=0)
   base.castShadow = true
   base.receiveShadow = true
   group.add(base)
-  const baseBand = new THREE.Mesh(new THREE.BoxGeometry(W * 1.08, 0.04, DEPTH + 0.46), goldMat)
-  baseBand.position.set(0, -hh - 0.01, -DEPTH / 2)
+  // a single gold skirting moulding standing proud over the frame/base seam —
+  // hides the junction and avoids the coplanar z-fighting the old band caused.
+  const baseBand = new THREE.Mesh(new THREE.BoxGeometry(W * 1.06, 0.08, 0.1), goldMat)
+  baseBand.position.set(0, -hh, 0.02)
+  baseBand.castShadow = true
   group.add(baseBand)
 
   // ================= minimal live chart =================
   const PAD = { l: 26, r: 104, t: 104, b: 50 }
   const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+  // a serif display face for the engraved-looking labels (symbol, your-call),
+  // so they read as part of the table's gilt lettering rather than a dashboard.
+  const SERIF = "'Cinzel', 'Trajan Pro', Georgia, 'Times New Roman', serif"
   const fmtPrice = (v: number) =>
     v >= 1000
       ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -209,9 +319,11 @@ export function createPriceBoard(): PriceBoardHandle {
     clock: number,
   ) {
     cx.clearRect(0, 0, SCW, SCH)
+    // warm near-black, like dark glass over candlelit wood — not the cold blue
+    // of a trading terminal.
     const bg = cx.createLinearGradient(0, 0, 0, SCH)
-    bg.addColorStop(0, '#0c1219')
-    bg.addColorStop(1, '#05080c')
+    bg.addColorStop(0, '#0d0a07')
+    bg.addColorStop(1, '#050402')
     cx.fillStyle = bg
     cx.fillRect(0, 0, SCW, SCH)
 
@@ -219,22 +331,22 @@ export function createPriceBoard(): PriceBoardHandle {
     const gx1 = SCW - PAD.r
     const gy0 = PAD.t
     const gy1 = SCH - PAD.b
-    const accent = '#e9a23b'
-    const ink = '#f4f7fa'
-    const dim = 'rgba(160,178,196,0.66)'
-    const faint = 'rgba(150,170,190,0.085)'
+    const accent = '#e9a23b' // candle-gold, ties to the gilt runes on the rail
+    const ink = '#f5ecd8' // warm parchment, not cold white
+    const dim = 'rgba(208,184,138,0.62)' // dim gilt
+    const faint = 'rgba(210,180,120,0.09)'
 
     // ---- header: symbol (always shown, even before the feed warms up) ----
     cx.textBaseline = 'alphabetic'
     cx.textAlign = 'left'
     cx.fillStyle = dim
-    cx.font = `600 19px ${SANS}`
-    tracked('BTC / USD', gx0 + 2, 40, '7px')
+    cx.font = `600 20px ${SERIF}`
+    tracked('BTC / USD', gx0 + 2, 40, '6px')
 
     const raw = history.filter((h) => Number.isFinite(h.price))
     if (raw.length < 2 || price == null) {
-      cx.fillStyle = 'rgba(180,196,212,0.5)'
-      cx.font = `500 26px ${SANS}`
+      cx.fillStyle = 'rgba(208,184,138,0.55)'
+      cx.font = `500 26px ${SERIF}`
       cx.textAlign = 'center'
       cx.fillText('awaiting price feed…', SCW / 2, SCH / 2)
       screenTex.needsUpdate = true
@@ -284,7 +396,8 @@ export function createPriceBoard(): PriceBoardHandle {
     const ly = toY(price)
     const hasPred = prediction != null && Number.isFinite(prediction)
     const py = hasPred ? toY(prediction!) : null
-    const dirCol = flat ? '#9fb2c4' : up ? '#4fd18b' : '#f0716e'
+    // warm semantics: luminous gold for a rise, ember for a fall, dim gilt flat
+    const dirCol = flat ? '#b8a888' : up ? '#e9c46a' : '#d4644a'
 
     // ---- header: hero price (tabular) + change chip at a fixed anchor ----
     cx.fillStyle = ink
@@ -307,10 +420,10 @@ export function createPriceBoard(): PriceBoardHandle {
     const chX = gx0 + 2 + reserveW + 22
     const chCenter = priceBaseline - 17
     cx.fillStyle = flat
-      ? 'rgba(159,178,196,0.14)'
+      ? 'rgba(184,168,136,0.14)'
       : up
-        ? 'rgba(79,209,139,0.16)'
-        : 'rgba(240,113,110,0.16)'
+        ? 'rgba(233,196,106,0.16)'
+        : 'rgba(212,100,74,0.16)'
     rr(chX, chCenter - chH / 2, chW + chPadX * 2, chH, chH / 2)
     cx.fill()
     cx.fillStyle = dirCol
@@ -404,9 +517,9 @@ export function createPriceBoard(): PriceBoardHandle {
     // ---- sealed-prediction line — your "conviction" target ----
     // The hero of the screen once sealed: where you've staked your read of the market.
     if (hasPred && py != null) {
-      const pred = '#7fd0ff'
+      const pred = '#e8d6a0' // pale candle-gold, the conviction line
       // faint band between the live price and your call — the "gap to conviction"
-      cx.fillStyle = 'rgba(127,208,255,0.07)'
+      cx.fillStyle = 'rgba(232,214,160,0.07)'
       cx.fillRect(gx0, Math.min(py, ly), gx1 - gx0, Math.abs(ly - py))
       cx.strokeStyle = pred
       cx.lineWidth = 2
@@ -419,9 +532,9 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.fillStyle = pred
       cx.textBaseline = 'bottom'
       cx.textAlign = 'left'
-      cx.font = `700 15px ${SANS}`
-      tracked('YOUR CALL', gx0 + 6, py - 7, '2px')
-      edgePill(fmtPrice(prediction!), py, pred, '#06121c')
+      cx.font = `700 15px ${SERIF}`
+      tracked('YOUR CALL', gx0 + 6, py - 7, '3px')
+      edgePill(fmtPrice(prediction!), py, pred, '#241803')
     }
 
     // ---- latest point: dashed guide, pulsing live marker, live-price pill ----
@@ -513,6 +626,8 @@ export function createPriceBoard(): PriceBoardHandle {
       else if (mat) mat.dispose()
     })
     screenTex.dispose()
+    woodTex.map.dispose()
+    woodTex.bumpMap.dispose()
   }
 
   return { group, update, dispose }
