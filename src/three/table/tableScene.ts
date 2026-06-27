@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createPriceBoard } from './priceBoard'
+import { createPotPile } from './pot'
 import { bindTableView, unbindTableView } from './tableView'
 
 /**
@@ -20,6 +21,8 @@ export interface TableSceneHandle {
   tableRadius: number
   /** World-space Y of the felt playing surface. */
   feltY: number
+  /** Drive the 3D coin pile at the centre of the felt from the live pot value. */
+  setPot: (amount: number) => void
   dispose: () => void
 }
 
@@ -791,6 +794,11 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   priceBoard.group.rotation.x = -0.06
   scene.add(priceBoard.group)
 
+  // ---- pot (3D coin heap, centre-front of the felt) ----
+  // centred on POT_WORLD's xz in tableView so the amount label pins above it
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1) })
+  scene.add(potPile.group)
+
   // ---- floor ----
   const floorTex = (() => {
     const c = document.createElement('canvas')
@@ -964,18 +972,23 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   let raf = 0
   let running = true
-  function animate() {
-    if (!running) return
-    raf = requestAnimationFrame(animate)
+  // DEV: a fixed camera override so the pot/coins can be inspected up close
+  let inspect: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null
+  function frame() {
     t += 0.016
-    mouse.x += (mouse.tx - mouse.x) * 0.04
-    mouse.y += (mouse.ty - mouse.y) * 0.04
-    const dx = Math.sin(t * 0.13) * 0.3,
-      dy = Math.cos(t * 0.17) * 0.16
-    camera.position.x = camBase.x + dx + mouse.x * 1.6
-    camera.position.y = camBase.y + dy - mouse.y * 1.1
-    camera.position.z = camBase.z + Math.cos(t * 0.1) * 0.2
-    camera.lookAt(LOOK)
+    if (inspect) {
+      camera.position.copy(inspect.pos)
+      camera.lookAt(inspect.look)
+    } else {
+      mouse.x += (mouse.tx - mouse.x) * 0.04
+      mouse.y += (mouse.ty - mouse.y) * 0.04
+      const dx = Math.sin(t * 0.13) * 0.3,
+        dy = Math.cos(t * 0.17) * 0.16
+      camera.position.x = camBase.x + dx + mouse.x * 1.6
+      camera.position.y = camBase.y + dy - mouse.y * 1.1
+      camera.position.z = camBase.z + Math.cos(t * 0.1) * 0.2
+      camera.lookAt(LOOK)
+    }
     candles.forEach((c, i) => {
       const f = flick(i * 7.3)
       c.light.intensity = c.base * f
@@ -987,9 +1000,29 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
     priceBoard.update(t)
+    potPile.update(t)
     composer.render()
   }
+  function animate() {
+    if (!running) return
+    raf = requestAnimationFrame(animate)
+    frame()
+  }
   animate()
+  // dev-only: headless throttles RAF, so screenshots need manual frame pumps,
+  // plus a camera override to study the coin pile up close.
+  if (import.meta.env.DEV) {
+    const w = window as unknown as {
+      __tableStep?: (n: number) => void
+      __inspect?: (x: number, y: number, z: number, lx?: number, ly?: number, lz?: number) => void
+    }
+    w.__tableStep = (n = 1) => {
+      for (let i = 0; i < n; i++) frame()
+    }
+    w.__inspect = (x, y, z, lx = 0, ly = 0.12, lz = 1.1) => {
+      inspect = { pos: new THREE.Vector3(x, y, z), look: new THREE.Vector3(lx, ly, lz) }
+    }
+  }
 
   // ---------- disposal ----------
   function dispose() {
@@ -997,6 +1030,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     cancelAnimationFrame(raf)
     unbindTableView()
     priceBoard.dispose()
+    potPile.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
     composer.dispose()
@@ -1015,5 +1049,12 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     }
   }
 
-  return { scene, camera, tableRadius: R_OUTER, feltY: yFelt, dispose }
+  return {
+    scene,
+    camera,
+    tableRadius: R_OUTER,
+    feltY: yFelt,
+    setPot: (amount: number) => potPile.setAmount(amount),
+    dispose,
+  }
 }

@@ -15,23 +15,26 @@ const Y_SEAT = 0.62 // medallion centre floats just above the rim
 
 /**
  * Seat angles are measured in degrees from the front (toward the camera, +z),
- * positive = toward the right (+x). You sit dead front (0°, drawn as panels)
- * and the wide price board fills the back (~180°), so opponents are seated only
- * on the two camera-facing flanks, within this band — clear of both you and the
- * board. LOW hugs the front edge, HIGH sits up near the board's shoulders.
+ * positive = toward the right (+x). The price cabinet is the hero piece across
+ * the BACK of the felt; the playable table is everything in front of its base
+ * line. You sit dead front (0°, drawn as panels) and opponents fan across the
+ * FRONT arc, in front of the cabinet, facing it — never up its sides. The cap
+ * stays under 90° so every seat sits camera-side of the cabinet's front line
+ * (z > 0); LOW hugs the front near you, HIGH is the widest before a seat would
+ * begin to ride up alongside the cabinet.
  */
-const FLANK_LOW = 58
-const FLANK_HIGH = 120
-const FLANK_MID = 90
+const FLANK_LOW = 42
+const FLANK_HIGH = 78
+const FLANK_MID = 64
 
 /**
- * Lay out `n` opponents symmetrically around the table, balanced left↔right and
- * spread across each flank so the arrangement looks composed for any table size
- * (2–5 players ⇒ 1–4 opponents). Returns angles in degrees, ordered left flank
- * (negative) → right flank (positive) for a stable seat→slot mapping.
+ * Lay out `n` opponents across the front arc, balanced left↔right and spread so
+ * the arrangement looks composed for any table size (2–5 players ⇒ 1–4
+ * opponents). Returns angles in degrees, ordered left (negative) → right
+ * (positive) for a stable seat→slot mapping.
  *
- *   1 → [mid-right]            2 → [±mid]
- *   3 → [left-mid, right pair] 4 → [both flanks, paired]
+ *   1 → [front-right]          2 → [±front]
+ *   3 → [left, right pair]     4 → [both sides, paired]
  */
 export function seatAngles(n: number): number[] {
   if (n <= 0) return []
@@ -53,7 +56,10 @@ function seatWorld(angleDeg: number): THREE.Vector3 {
   const a = (angleDeg * Math.PI) / 180
   return new THREE.Vector3(Math.sin(a) * R_SEAT, Y_SEAT, Math.cos(a) * R_SEAT)
 }
-const POT_WORLD = new THREE.Vector3(0, 0.2, 1.1)
+// The 3D coin heap is centred on (0, felt, 1.1); the amount label floats just
+// above the top of the pile and a touch toward the camera so the number reads
+// over the coins rather than buried in them.
+const POT_WORLD = new THREE.Vector3(0, 0.85, 1.25)
 
 export interface ScreenPoint {
   x: number
