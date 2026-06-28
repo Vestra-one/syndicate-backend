@@ -85,7 +85,7 @@ async fn settlement_outbox_claim_publish_cycle() {
     let claimed = client
         .query(
             CLAIM_SETTLEMENT_OUTBOX_SQL,
-            &[&chrono::Utc::now(), &1i32, &60_000i64],
+            &[&chrono::Utc::now(), &1i64, &60_000i64],
         )
         .await
         .expect("claim");
@@ -155,7 +155,7 @@ async fn due_attempt_poller_selects_retry_scheduled_rows() {
     let due = client
         .query(
             LIST_DUE_SETTLEMENT_ATTEMPTS_SQL,
-            &[&chrono::Utc::now(), &60_000i64, &10i32],
+            &[&chrono::Utc::now(), &60_000i64, &10i64],
         )
         .await
         .expect("list due");

@@ -144,10 +144,11 @@ pub async fn list_due_attempts(
 ) -> Result<Vec<DueAttempt>, String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let now: DateTime<Utc> = Utc::now();
+    let batch_size = i64::from(config.batch_size);
     let rows = client
         .query(
             LIST_DUE_SETTLEMENT_ATTEMPTS_SQL,
-            &[&now, &config.confirm_timeout_ms, &config.batch_size],
+            &[&now, &config.confirm_timeout_ms, &batch_size],
         )
         .await
         .map_err(|e| e.to_string())?;

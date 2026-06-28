@@ -113,10 +113,11 @@ pub async fn relay_once(
 async fn claim_rows(pool: &Pool, config: &RelayConfig) -> Result<Vec<ClaimedOutboxRow>, String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let now: DateTime<Utc> = Utc::now();
+    let batch_size = i64::from(config.batch_size);
     let rows = client
         .query(
             CLAIM_SETTLEMENT_OUTBOX_SQL,
-            &[&now, &config.batch_size, &config.visibility_timeout_ms],
+            &[&now, &batch_size, &config.visibility_timeout_ms],
         )
         .await
         .map_err(|e| e.to_string())?;
