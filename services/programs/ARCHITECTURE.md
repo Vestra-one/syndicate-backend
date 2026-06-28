@@ -13,7 +13,7 @@
 - **Refunds / VOID:** full pro-rata refund path (incl. entry-fee refund) for not-filled / leave-before-LIVE / fault.
 - **Settlement verification:** consume a Pyth Receiver `PriceUpdateV2` account, require full verification/account ownership, validate the authenticated feed/timestamp/confidence/exponent metadata, recompute pots from recorded inputs using `shared`, and validate the submitted settlement before releasing funds; reject/halt on mismatch.
 - **VRF:** consume verifiable randomness for button assignment; record seed + proof.
-- **Fees:** entry fee at deposit; pot rake at settlement (to the fee/treasury account). (`04 §14`.)
+- **Fees:** entry fee at deposit; pot rake at settlement (to the fee/treasury account). Operator withdraws accumulated rake via `withdraw_fees` after `Settled`. (`04 §14`.)
 - **Idempotent claim/distribution** per `(match, player)`, with seat accounts closed after claim/refund.
 - **Seat-index uniqueness:** one PDA per `(match, seat_index)` prevents two wallets occupying the same seat number; seat PDA per `(match, player)` prevents one wallet taking multiple seats in the same match.
 
@@ -36,7 +36,7 @@ programs/
 ```
 
 ## Key instructions (state transitions)
-`initialize_protocol` · `set_pauses` · `create_match` · `deposit` (buy_in + entry_fee → seat-eligible) · `lock` (→ LIVE; deposits frozen) · `settle` (verify via `shared`, assert conservation `Σpayouts+Σreturns+fees == Σdeposits`, write exact seat payouts) · `claim` (idempotent, closes seat records) · `void`/`refund` (capital-safe exit, closes seat records).
+`initialize_protocol` · `set_pauses` · `create_match` · `deposit` (buy_in + entry_fee → seat-eligible) · `lock` (Filling → **Sealing**; deposits frozen) · `set_button_seed` (record VRF seed + proof; derive button once per match) · `begin_live` (Sealing → **Live**) · `init_action_log` · gameplay append/finalize · `submit_settlement` (verify via `shared`, binds recorded `vrf_seed`) · `claim` (idempotent) · `withdraw_fees` (treasury rake after Settled) · `void`/`refund` (capital-safe exit).
 
 ## Invariants (must assert on-chain)
 - Conservation holds **net of fees** before any release (`04 §0`).

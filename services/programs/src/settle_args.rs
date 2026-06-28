@@ -46,6 +46,7 @@ pub struct ClaimedResult {
 /// Settlement args — player states come from the on-chain action-log replay, not from trust.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct SettleArgs {
+    pub vrf_seed: [u8; 32],
     pub oracle_price: OraclePriceDto,
     pub claimed: ClaimedResult,
     pub revealed: Vec<RevealedPrediction>,

@@ -65,7 +65,15 @@ pub struct MatchAccount {
     pub settled_payout: u64,  // sum of per-seat payouts written at settlement
     pub vault_bump: u8,
     pub bump: u8,
-    pub reserved: [u8; 64],
+    /// VRF output recorded at SEALING (audit/replay anchor).
+    pub vrf_seed: [u8; 32],
+    /// Hash of the VRF proof bytes (provider-specific; recorded for audit).
+    pub vrf_proof_hash: [u8; 32],
+    /// Dealer button seat index, derived deterministically from `vrf_seed`.
+    pub button: u8,
+    pub button_set: bool,
+    pub fees_withdrawn: bool,
+    pub reserved: [u8; 32],
 }
 
 impl MatchAccount {
@@ -91,7 +99,12 @@ impl MatchAccount {
         + 8
         + 1
         + 1
-        + 64;
+        + 32
+        + 32
+        + 1
+        + 1
+        + 1
+        + 32;
 }
 
 /// One player's seat in a match. `payout` is written during verified settlement; the

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use syndicate_shared::intent::{action_intent_message, default_policy_message};
 use types::{
     ActionLogAccount, AppendPlayerActionArgs, AppendTimeoutActionArgs, CreateParams,
-    InitActionLogParams, ProtocolRoles, RegisterDefaultPolicyArgs, SeatMeta,
+    InitActionLogParams, ProtocolRoles, RegisterDefaultPolicyArgs, SeatMeta, SetButtonSeedArgs,
 };
 
 pub use types::DEFAULT_TAG_CHECK_FOLD;
@@ -312,7 +312,7 @@ impl MatchHarness {
 
     fn lock_match(&mut self) {
         let (protocol, _) = protocol_pda();
-        let ix = Instruction {
+        let lock_ix = Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
                 AccountMeta::new_readonly(self.admin.pubkey(), true),
@@ -321,7 +321,34 @@ impl MatchHarness {
             ],
             data: anchor_discriminator("lock").to_vec(),
         };
-        send(&mut self.svm, &self.admin, vec![ix], &[]).expect("lock");
+        send(&mut self.svm, &self.admin, vec![lock_ix], &[]).expect("lock");
+
+        let vrf_seed = [0u8; 32];
+        let args = SetButtonSeedArgs {
+            vrf_seed,
+            vrf_proof_hash: [8u8; 32],
+        };
+        let seed_ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new_readonly(self.admin.pubkey(), true),
+                AccountMeta::new_readonly(protocol, false),
+                AccountMeta::new(self.match_key, false),
+            ],
+            data: ix_data("set_button_seed", &args),
+        };
+        send(&mut self.svm, &self.admin, vec![seed_ix], &[]).expect("set_button_seed");
+
+        let live_ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new_readonly(self.admin.pubkey(), true),
+                AccountMeta::new_readonly(protocol, false),
+                AccountMeta::new(self.match_key, false),
+            ],
+            data: anchor_discriminator("begin_live").to_vec(),
+        };
+        send(&mut self.svm, &self.admin, vec![live_ix], &[]).expect("begin_live");
     }
 
     pub fn inject_action_log(&mut self) {

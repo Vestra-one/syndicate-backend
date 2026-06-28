@@ -46,4 +46,10 @@ pub enum SyndicateError {
     PredictionCommitmentMismatch,
     #[msg("Settlement deadline passed; use void/refund path.")]
     SettlementDeadlinePassed,
+    #[msg("Match fees were already withdrawn.")]
+    FeesAlreadyWithdrawn,
+    #[msg("VRF button seed has not been recorded.")]
+    ButtonNotSet,
+    #[msg("VRF seed does not match the recorded match seed.")]
+    VrfSeedMismatch,
 }

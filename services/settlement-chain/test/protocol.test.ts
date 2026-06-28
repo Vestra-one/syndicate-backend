@@ -82,9 +82,9 @@ test('Pyth Receiver package imports under the supported Node runtime', async (t)
 });
 
 test('settlement bundle encodes Anchor SettleArgs deterministically', () => {
-  const encoded = encodeSettleArgsFromBundle(bundle());
+  const encoded = encodeSettleArgsFromBundle(bundle({ vrf_seed_hex: '00'.repeat(32) }));
   assert.ok(encoded.length > 64);
-  assert.equal(encoded.readBigInt64LE(32), 1000n);
+  assert.equal(encoded.readBigInt64LE(64), 1000n);
 });
 
 test('ed25519 verify instruction packs signature and message', () => {

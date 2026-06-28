@@ -76,6 +76,12 @@ Match lifecycle transitions; per-turn timer/timeout/auto-action counts; Pyth upd
 **Act:** inspect `settlement_dead_letters.payload` and `settlement_attempts.last_error`. Common causes: bundle self-verify failure, void tx failure after retry budget, or Hermes/Pyth post errors. For operator-recoverable cases, fix root cause (RPC, feed config, timelock key) and re-drive via due-poller after correcting data. **Never** manually mark `confirmed` without an on-chain tx signature. For capital-safe cases, submit emergency `void` then player `refund` txs per RB-1.
 **Resume:** dead-letter row triaged with documented root cause; affected match reaches `confirmed` or `voided` terminal state.
 
+### RB-10 — Fee/rake withdrawal (`withdraw_fees`)
+**When:** after a match reaches on-chain `Settled` and all player `claim`s are complete (or timed out).
+**Act:** operator calls settlement-chain `POST /internal/solana/withdraw-fees` with `{ onchainMatchId, treasuryToken }` (treasury ATA for the match mint). Instruction is idempotent (`fees_withdrawn` flag).
+**Verify:** vault balance drops by `match.total_fees`; treasury ATA increases; second call returns `FeesAlreadyWithdrawn`.
+**Do not** call on VOID matches — fees remain player-refundable via `refund`.
+
 ---
 
 ## 3. Kill switches (must be tested in staging before mainnet)

@@ -80,5 +80,5 @@ test('create match preview helper returns pdas', () => {
 
 test('hashMatchId matches orchestrator stub helper', () => {
   const id = '550e8400-e29b-41d4-a716-446655440000';
-  assert.equal(hashMatchId(id), syntheticOnchainId(id));
+  assert.equal(hashMatchId(id).toString(), syntheticOnchainId(id));
 });

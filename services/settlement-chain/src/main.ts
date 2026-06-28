@@ -35,6 +35,9 @@ import {
   settlementStatus,
   submitCreateMatch,
   submitLockMatch,
+  submitBeginLive,
+  submitSetButtonSeed,
+  submitWithdrawFees,
   type CustodyConfig,
   type CreateMatchInput,
   hashMatchId,
@@ -134,6 +137,29 @@ export function createServer(config: Config) {
           return sendJson(res, 200, await submitLockMatch(custodyConfig(config), body));
         }
         return sendJson(res, 200, buildLockMatchPreview(String(body.onchainMatchId ?? body.matchId)));
+      }
+      if (req.url === '/internal/solana/set-button-seed') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        return sendJson(res, 200, await submitSetButtonSeed(
+          custodyConfig(config),
+          BigInt(String(onchain)),
+          String(body.vrfSeedHex ?? body.vrf_seed_hex ?? '00'.repeat(32)),
+          String(body.vrfProofHashHex ?? body.vrf_proof_hash_hex ?? '00'.repeat(32)),
+        ));
+      }
+      if (req.url === '/internal/solana/begin-live') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        return sendJson(res, 200, await submitBeginLive(custodyConfig(config), BigInt(String(onchain))));
+      }
+      if (req.url === '/internal/solana/withdraw-fees') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        const treasury = String(body.treasuryToken ?? body.treasury_token ?? process.env.TREASURY_TOKEN_ACCOUNT ?? '');
+        if (!treasury) throw new HttpError(400, 'treasuryToken is required');
+        return sendJson(res, 200, await submitWithdrawFees(
+          custodyConfig(config),
+          BigInt(String(onchain)),
+          treasury,
+        ));
       }
       if (req.url === '/internal/solana/submit-settlement') return sendJson(res, 200, await submitSettlement(config, body));
       if (req.url === '/internal/solana/sync-action-log') return sendJson(res, 200, await syncActionLog(config, body));
@@ -556,7 +582,11 @@ export function encodeSettleArgsFromBundle(bundle: any): Buffer {
   const oracle = requireObject(bundle.oraclePrice ?? bundle.oracle_price, 'bundle.oracle_price');
   const result = requireObject(bundle.result, 'bundle.result');
   const revealed = requireArray(bundle.revealed ?? bundle.revealed_predictions, 'bundle.revealed');
+  const vrfSeedHex = field(bundle, 'vrfSeedHex', 'vrf_seed_hex') ?? field(bundle, 'vrfSeed', 'vrf_seed') ?? '00'.repeat(32);
+  const vrfSeed = Buffer.from(String(vrfSeedHex).replace(/^0x/, ''), 'hex');
+  if (vrfSeed.length !== 32) throw new HttpError(400, 'vrf_seed must be 32 bytes');
   return Buffer.concat([
+    vrfSeed,
     feedIdBytes(field(oracle, 'feedId', 'feed_id')),
     i64(parseI64(field(oracle, 'price'), 'oracle.price')),
     u64(parseU64(field(oracle, 'publishTime', 'publish_time'), 'oracle.publishTime')),

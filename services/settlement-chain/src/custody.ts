@@ -192,6 +192,123 @@ export function buildLockInstruction(
   });
 }
 
+export function buildBeginLiveInstruction(
+  programId: PublicKey,
+  authority: PublicKey,
+  protocol: PublicKey,
+  match: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: protocol, isSigner: false, isWritable: false },
+      { pubkey: match, isSigner: false, isWritable: true },
+    ],
+    data: anchorDiscriminator('global:begin_live'),
+  });
+}
+
+export function buildSetButtonSeedInstruction(
+  programId: PublicKey,
+  authority: PublicKey,
+  protocol: PublicKey,
+  match: PublicKey,
+  vrfSeed: Buffer,
+  vrfProofHash: Buffer,
+): TransactionInstruction {
+  const params = Buffer.concat([vrfSeed, vrfProofHash]);
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: protocol, isSigner: false, isWritable: false },
+      { pubkey: match, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.concat([anchorDiscriminator('global:set_button_seed'), params]),
+  });
+}
+
+export function buildWithdrawFeesInstruction(
+  programId: PublicKey,
+  authority: PublicKey,
+  protocol: PublicKey,
+  match: PublicKey,
+  vault: PublicKey,
+  treasuryToken: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: protocol, isSigner: false, isWritable: false },
+      { pubkey: match, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: treasuryToken, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator('global:withdraw_fees'),
+  });
+}
+
+export async function submitSetButtonSeed(
+  cfg: CustodyConfig,
+  onchainMatchId: bigint,
+  vrfSeedHex: string,
+  vrfProofHashHex: string,
+) {
+  const connection = await connectionFor(cfg);
+  const programId = new PublicKey(cfg.programId);
+  const signer = operatorSigner(cfg);
+  const pdas = deriveMatchPdas(programId, onchainMatchId);
+  const vrfSeed = Buffer.from(vrfSeedHex.replace(/^0x/, ''), 'hex');
+  const vrfProofHash = Buffer.from(vrfProofHashHex.replace(/^0x/, ''), 'hex');
+  if (vrfSeed.length !== 32 || vrfProofHash.length !== 32) {
+    throw new CustodyError(400, 'vrf seed and proof hash must be 32 bytes');
+  }
+  const tx = new Transaction().add(
+    buildSetButtonSeedInstruction(programId, signer.publicKey, pdas.protocol, pdas.match, vrfSeed, vrfProofHash),
+  );
+  const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
+  return { ok: true as const, txSig, button: Number(vrfSeed.readBigUInt64LE(0) % BigInt(3)) };
+}
+
+export async function submitBeginLive(cfg: CustodyConfig, onchainMatchId: bigint) {
+  const connection = await connectionFor(cfg);
+  const programId = new PublicKey(cfg.programId);
+  const signer = operatorSigner(cfg);
+  const pdas = deriveMatchPdas(programId, onchainMatchId);
+  const tx = new Transaction().add(
+    buildBeginLiveInstruction(programId, signer.publicKey, pdas.protocol, pdas.match),
+  );
+  const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
+  return { ok: true as const, txSig };
+}
+
+export async function submitWithdrawFees(
+  cfg: CustodyConfig,
+  onchainMatchId: bigint,
+  treasuryToken: string,
+) {
+  const connection = await connectionFor(cfg);
+  const programId = new PublicKey(cfg.programId);
+  const signer = operatorSigner(cfg);
+  const pdas = deriveMatchPdas(programId, onchainMatchId);
+  const treasury = new PublicKey(treasuryToken);
+  const tx = new Transaction().add(
+    buildWithdrawFeesInstruction(
+      programId,
+      signer.publicKey,
+      pdas.protocol,
+      pdas.match,
+      pdas.vault,
+      treasury,
+    ),
+  );
+  const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
+  return { ok: true as const, txSig };
+}
+
 export function buildClaimOrRefundInstruction(
   programId: PublicKey,
   name: 'claim' | 'refund',

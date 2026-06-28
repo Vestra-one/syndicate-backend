@@ -66,6 +66,11 @@ pub fn init_action_log_handler(
 ) -> Result<()> {
     let m = &ctx.accounts.match_account;
     require!(m.status == MatchStatus::Live, SyndicateError::BadStatus);
+    require!(m.button_set, SyndicateError::ButtonNotSet);
+    require!(
+        params.button == m.button,
+        SyndicateError::InvalidActionInput
+    );
 
     let log = &mut ctx.accounts.action_log;
     log.match_key = m.key();
@@ -90,19 +95,23 @@ pub fn init_action_log_handler(
     log.set_engine(&engine)?;
 
     let mut seats = [SeatMeta::default(); MAX_SEATS];
-    let seat_infos: Vec<_> = ctx
-        .remaining_accounts
-        .iter()
-        .take(m.player_count as usize)
-        .cloned()
-        .collect();
-    for (i, seat_acc) in seat_infos.iter().enumerate() {
+    let seat_infos: Vec<_> = ctx.remaining_accounts.iter().cloned().collect();
+    require!(
+        seat_infos.len() == m.player_count as usize,
+        SyndicateError::SeatSetMismatch
+    );
+    let mut seen = [false; MAX_SEATS];
+    for seat_acc in seat_infos.iter() {
         let data = seat_acc.try_borrow_data()?;
         let seat = SeatAccount::try_deserialize(&mut &data[..])?;
         require_keys_eq!(seat.match_key, m.key(), SyndicateError::Unauthorized);
-        seats[i] = SeatMeta {
+        let idx = seat.seat_index as usize;
+        require!(idx < m.player_count as usize, SyndicateError::InvalidSeat);
+        require!(!seen[idx], SyndicateError::SeatSetMismatch);
+        seen[idx] = true;
+        seats[idx] = SeatMeta {
             player: seat.player,
-            seal_seq: params.seal_seq[i],
+            seal_seq: params.seal_seq[idx],
             occupied: true,
             ..SeatMeta::default()
         };

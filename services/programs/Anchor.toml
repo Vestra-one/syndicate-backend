@@ -12,6 +12,9 @@ syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
 [programs.devnet]
 syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
 
+[programs.mainnet]
+syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
+
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"

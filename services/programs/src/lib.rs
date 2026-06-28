@@ -98,6 +98,15 @@ pub mod syndicate_program {
             SyndicateError::Unauthorized
         );
         require!(!p.pause_new_matches, SyndicateError::Paused);
+        require!(params.min_players >= 2, SyndicateError::InvalidActionInput);
+        require!(params.max_players <= 5, SyndicateError::InvalidActionInput);
+        require!(
+            params.min_players <= params.max_players,
+            SyndicateError::InvalidActionInput
+        );
+        require!(params.buy_in > 0, SyndicateError::InvalidActionInput);
+        require!(params.rake_bps <= 10_000, SyndicateError::InvalidActionInput);
+        require!(params.rake_cap <= params.buy_in, SyndicateError::InvalidActionInput);
 
         let m = &mut ctx.accounts.match_account;
         m.authority = ctx.accounts.authority.key();
@@ -123,7 +132,12 @@ pub mod syndicate_program {
         m.settled_payout = 0;
         m.vault_bump = ctx.bumps.vault;
         m.bump = ctx.bumps.match_account;
-        m.reserved = [0u8; 64];
+        m.vrf_seed = [0u8; 32];
+        m.vrf_proof_hash = [0u8; 32];
+        m.button = 0;
+        m.button_set = false;
+        m.fees_withdrawn = false;
+        m.reserved = [0u8; 32];
         Ok(())
     }
 
@@ -187,8 +201,7 @@ pub mod syndicate_program {
         Ok(())
     }
 
-    /// Lock the match: enough players present → deposits frozen, status → Live.
-    /// (The SEALING sub-phase — time-lock encryption — is coordinated off-chain.)
+    /// Lock the match: enough players present → seats frozen, status → Sealing.
     pub fn lock(ctx: Context<AdminMatch>) -> Result<()> {
         let p = &ctx.accounts.protocol_state;
         require!(
@@ -202,6 +215,41 @@ pub mod syndicate_program {
             m.player_count >= m.min_players,
             SyndicateError::NotEnoughPlayers
         );
+        m.status = MatchStatus::Sealing;
+        Ok(())
+    }
+
+    /// Record VRF output and derive the dealer button (once per match, at SEALING).
+    pub fn set_button_seed(ctx: Context<SetButtonSeed>, args: SetButtonSeedArgs) -> Result<()> {
+        let p = &ctx.accounts.protocol_state;
+        require!(
+            ctx.accounts.authority.key() == p.settlement_admin
+                || ctx.accounts.authority.key() == p.config_admin,
+            SyndicateError::Unauthorized
+        );
+        let m = &mut ctx.accounts.match_account;
+        require!(m.status == MatchStatus::Sealing, SyndicateError::BadStatus);
+        require!(!m.button_set, SyndicateError::InvalidActionInput);
+        require!(m.player_count > 0, SyndicateError::NotEnoughPlayers);
+        m.vrf_seed = args.vrf_seed;
+        m.vrf_proof_hash = args.vrf_proof_hash;
+        let seed_u64 = u64::from_le_bytes(args.vrf_seed[0..8].try_into().unwrap());
+        m.button = (seed_u64 % m.player_count as u64) as u8;
+        m.button_set = true;
+        Ok(())
+    }
+
+    /// Advance Sealing → Live after button + off-chain seals are ready.
+    pub fn begin_live(ctx: Context<AdminMatch>) -> Result<()> {
+        let p = &ctx.accounts.protocol_state;
+        require!(
+            ctx.accounts.authority.key() == p.settlement_admin
+                || ctx.accounts.authority.key() == p.config_admin,
+            SyndicateError::Unauthorized
+        );
+        let m = &mut ctx.accounts.match_account;
+        require!(m.status == MatchStatus::Sealing, SyndicateError::BadStatus);
+        require!(m.button_set, SyndicateError::ButtonNotSet);
         m.status = MatchStatus::Live;
         Ok(())
     }
@@ -285,6 +333,8 @@ pub mod syndicate_program {
 
         let m = &mut ctx.accounts.match_account;
         require!(m.status == MatchStatus::Live, SyndicateError::BadStatus);
+        require!(m.button_set, SyndicateError::ButtonNotSet);
+        require!(args.vrf_seed == m.vrf_seed, SyndicateError::VrfSeedMismatch);
 
         let log = &ctx.accounts.action_log;
         require!(log.finalized, SyndicateError::ActionLogNotFinalized);
@@ -458,6 +508,31 @@ pub mod syndicate_program {
         )?;
         Ok(())
     }
+
+    /// Withdraw accumulated entry fees + rake to the protocol treasury (post-settlement).
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>) -> Result<()> {
+        let p = &ctx.accounts.protocol_state;
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            p.treasury_admin,
+            SyndicateError::Unauthorized
+        );
+        let m = &mut ctx.accounts.match_account;
+        require!(m.status == MatchStatus::Settled, SyndicateError::BadStatus);
+        require!(!m.fees_withdrawn, SyndicateError::FeesAlreadyWithdrawn);
+        let amount = m.total_fees;
+        m.fees_withdrawn = true;
+        if amount > 0 {
+            transfer_from_vault(
+                amount,
+                &ctx.accounts.vault,
+                &ctx.accounts.treasury_token,
+                &ctx.accounts.match_account,
+                &ctx.accounts.token_program,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Transfer `amount` from the match vault to `dest`, signed by the match PDA.
@@ -544,6 +619,12 @@ pub struct CreateParams {
     pub oracle_exponent: i32,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct SetButtonSeedArgs {
+    pub vrf_seed: [u8; 32],
+    pub vrf_proof_hash: [u8; 32],
+}
+
 #[derive(Accounts)]
 #[instruction(params: CreateParams)]
 pub struct CreateMatch<'info> {
@@ -602,6 +683,29 @@ pub struct AdminMatch<'info> {
     pub protocol_state: Account<'info, ProtocolState>,
     #[account(mut, seeds = [b"match", match_account.match_id.to_le_bytes().as_ref()], bump = match_account.bump)]
     pub match_account: Account<'info, MatchAccount>,
+}
+
+#[derive(Accounts)]
+pub struct SetButtonSeed<'info> {
+    pub authority: Signer<'info>,
+    #[account(seeds = [b"protocol"], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+    #[account(mut, seeds = [b"match", match_account.match_id.to_le_bytes().as_ref()], bump = match_account.bump)]
+    pub match_account: Account<'info, MatchAccount>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    pub authority: Signer<'info>,
+    #[account(seeds = [b"protocol"], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
+    #[account(mut, seeds = [b"match", match_account.match_id.to_le_bytes().as_ref()], bump = match_account.bump)]
+    pub match_account: Account<'info, MatchAccount>,
+    #[account(mut, address = match_account.vault)]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(mut, constraint = treasury_token.mint == match_account.mint)]
+    pub treasury_token: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]

@@ -35,6 +35,12 @@ pub struct CreateParams {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
+pub struct SetButtonSeedArgs {
+    pub vrf_seed: [u8; 32],
+    pub vrf_proof_hash: [u8; 32],
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone)]
 pub struct InitActionLogParams {
     pub button: u8,
     pub small_blind: u64,
