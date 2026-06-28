@@ -25,7 +25,8 @@
 | Decide a pot on a bad/manipulated price | Pyth-authenticated bounded exact-after update + confidence/exponent/feed/timestamp guards → VOID; buy-in caps << market impact | `shared::oracle` guard/no-update tests; `settlement::ops` Pyth tests; `04 §11`, `08 OQ2` |
 | Steal via tiny bet vs big all-in | Side-pot eligibility caps winnings to matched chips | `shared` golden/property tests; `04 §9` |
 | Grief settlement by not revealing | Auto-decrypt at match end (no manual reveal); missing key → VOID | `timelock` missing-key test; `04 §12` |
-| Collude / chip-dump / bot / Sybil | Muck-on-fold, VRF seating, deposit gate, T&S telemetry; residual priced | `trust-safety` detectors; `07 S3/S4` |
+| Collude / chip-dump / bot / Sybil | Muck-on-fold, server CSPRNG button (v1), deposit gate, T&S telemetry; residual priced | `trust-safety` detectors; `07 S3/S4` |
+| Predictable dealer button (v1 residual) | Server CSPRNG via settlement-chain; not match-id-derived; not trustless VRF | `settlement-chain/buttonRandomness.ts`; on-chain seed audit log |
 | Win a pot you folded | Folded players excluded from eligibility | `shared` property test ("no folded player paid") |
 | Latency exploit | Server-authoritative clock/timers | engine timers; `06 §7` |
 | Leak secrets to spectators | `action-feed` allow-list redaction | `action-feed` "no secret leak" tests |

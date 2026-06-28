@@ -2866,7 +2866,6 @@ dependencies = [
 name = "syndicate-orchestrator"
 version = "0.1.0"
 dependencies = [
- "hex",
  "reqwest",
  "serde",
  "serde_json",

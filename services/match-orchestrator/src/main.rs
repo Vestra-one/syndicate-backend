@@ -250,28 +250,51 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 return resp;
             }
-            let (vrf_seed_hex, vrf_proof_hex) = vrf_material(&input.match_id);
             let seed_body = serde_json::json!({
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id.to_string(),
-                "vrfSeedHex": vrf_seed_hex,
-                "vrfProofHashHex": vrf_proof_hex,
             });
-            if let Err(resp) = require_downstream(
-                cfg,
-                post_json(
-                    &cfg.settlement_chain,
-                    "/internal/solana/set-button-seed",
-                    &cfg.auth,
-                    seed_body,
-                )
-                .await,
-                "set-button-seed",
+            let seed_resp = match post_json(
+                &cfg.settlement_chain,
+                "/internal/solana/set-button-seed",
+                &cfg.auth,
+                seed_body,
             )
             .await
             {
-                return resp;
+                Ok(resp) => resp,
+                Err(err) if cfg.stub_mode => {
+                    eprintln!("orchestrator stub: set-button-seed transport error: {err}");
+                    PostResult {
+                        status: 200,
+                        body: String::new(),
+                    }
+                }
+                Err(err) => {
+                    return (
+                        "503 Service Unavailable",
+                        format!(r#"{{"error":"set-button-seed unavailable","detail":"{err}"}}"#),
+                    );
+                }
+            };
+            if !(200..300).contains(&seed_resp.status) {
+                if cfg.stub_mode {
+                    eprintln!(
+                        "orchestrator stub: set-button-seed returned HTTP {}",
+                        seed_resp.status
+                    );
+                } else {
+                    return (
+                        "502 Bad Gateway",
+                        format!(
+                            r#"{{"error":"set-button-seed failed with HTTP {}","detail":{}}}"#,
+                            seed_resp.status,
+                            serde_json::to_string(&seed_resp.body).unwrap_or_else(|_| "\"\"".into())
+                        ),
+                    );
+                }
             }
+            let button = parse_button_from_seed_response(&seed_resp.body, input.button);
             let live_body = serde_json::json!({
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id.to_string(),
@@ -291,15 +314,6 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 return resp;
             }
-            let button = input.button.unwrap_or_else(|| {
-                let seed = hex::decode(&vrf_seed_hex).unwrap_or_default();
-                let seed_u64 = seed
-                    .get(0..8)
-                    .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0u8; 8])))
-                    .unwrap_or(onchain_match_id);
-                let n = input.players.len().max(1) as u64;
-                (seed_u64 % n) as u8
-            });
             let start_body = serde_json::json!({
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id,
@@ -366,22 +380,16 @@ pub fn hash_match_id(match_id: &str) -> u64 {
     hash
 }
 
-fn vrf_material(match_id: &str) -> (String, String) {
-    let mut seed = [0u8; 32];
-    for (i, b) in match_id.as_bytes().iter().enumerate() {
-        seed[i % 32] ^= b;
-        seed[(i + 7) % 32] = seed[(i + 7) % 32].wrapping_add(*b);
+fn parse_button_from_seed_response(body: &str, fallback: Option<u8>) -> u8 {
+    if body.is_empty() {
+        return fallback.unwrap_or(0);
     }
-    let id = hash_match_id(match_id);
-    seed[0..8].copy_from_slice(&id.to_le_bytes());
-    let proof = {
-        let mut p = [0u8; 32];
-        for (i, b) in seed.iter().enumerate() {
-            p[i] ^= b.wrapping_mul(31);
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(b) = v.get("button").and_then(|x| x.as_u64()) {
+            return b as u8;
         }
-        p
-    };
-    (hex::encode(seed), hex::encode(proof))
+    }
+    fallback.unwrap_or(0)
 }
 
 struct PostResult {
@@ -450,5 +458,12 @@ mod tests {
     fn onchain_id_deterministic() {
         assert_eq!(hash_match_id("abc"), hash_match_id("abc"));
         assert_ne!(hash_match_id("abc"), hash_match_id("def"));
+    }
+
+    #[test]
+    fn parse_button_from_set_button_seed_response() {
+        let body = r#"{"ok":true,"button":2,"vrfSeedHex":"ab"}"#;
+        assert_eq!(parse_button_from_seed_response(body, None), 2);
+        assert_eq!(parse_button_from_seed_response("", Some(1)), 1);
     }
 }

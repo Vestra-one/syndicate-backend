@@ -12,7 +12,7 @@
 - **Deposits / seat eligibility:** accept buy-in + `entry_fee`; finality is what `matchmaking` waits on to seat a player.
 - **Refunds / VOID:** full pro-rata refund path (incl. entry-fee refund) for not-filled / leave-before-LIVE / fault.
 - **Settlement verification:** consume a Pyth Receiver `PriceUpdateV2` account, require full verification/account ownership, validate the authenticated feed/timestamp/confidence/exponent metadata, recompute pots from recorded inputs using `shared`, and validate the submitted settlement before releasing funds; reject/halt on mismatch.
-- **VRF:** consume verifiable randomness for button assignment; record seed + proof.
+- **Button randomness (v1):** settlement-chain generates a CSPRNG seed and posts it via `set_button_seed`; the program records `vrf_seed` + `vrf_proof_hash` and derives the button. **Server-attested** — not on-chain VRF-verified. Settlement/money path is independently verified via Pyth + `shared`.
 - **Fees:** entry fee at deposit; pot rake at settlement (to the fee/treasury account). Operator withdraws accumulated rake via `withdraw_fees` after `Settled`. (`04 §14`.)
 - **Idempotent claim/distribution** per `(match, player)`, with seat accounts closed after claim/refund.
 - **Seat-index uniqueness:** one PDA per `(match, seat_index)` prevents two wallets occupying the same seat number; seat PDA per `(match, player)` prevents one wallet taking multiple seats in the same match.

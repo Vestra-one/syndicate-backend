@@ -69,9 +69,10 @@
 
 ## 6. Blinds, button, and VRF
 
-- **Smart contract / chain:** VRF (verifiable randomness) seeds the button per match; seed + proof recorded so seating is provably unmanipulated and replayable.
-- **Backend:** engine derives positions from the VRF seed; posts blinds/antes once at Round I.
-- **Ops:** VRF source availability is a start-blocking dependency; fallback/queue if the randomness source is slow.
+- **Smart contract / chain:** records the button seed posted at SEALING via `set_button_seed`; seed + audit hash stored for replay (`submit_settlement` binds `vrf_seed`).
+- **Backend (v1):** `settlement-chain` generates CSPRNG randomness server-side and submits `set_button_seed` — **server-attested**, not on-chain oracle VRF. Engine derives blind positions from the recorded seed.
+- **Future:** decentralized VRF (Switchboard/ORAO with on-chain verification) if button fairness must be trustless.
+- **Ops:** no external VRF oracle liveness dependency in v1; button assignment is synchronous with settlement-chain custody txs.
 
 ## 7. Action timers, timeouts, disconnect/reconnect
 

@@ -17,7 +17,16 @@ import {
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
+import { logButtonSeedAssigned } from './auditLog.ts';
 import { anchorDiscriminator } from './actionLog.ts';
+import {
+  deriveButton,
+  generateButtonSeed,
+  isZeroSeed,
+  parseOptionalProofHex,
+  parseOptionalSeedHex,
+} from './buttonRandomness.ts';
+import { readMatchPlayerCount } from './matchAccount.ts';
 import { normalizeFeedIdHex } from './pyth.ts';
 
 export const DEFAULT_PRICE_FEEDS = Object.freeze({
@@ -251,26 +260,54 @@ export function buildWithdrawFeesInstruction(
   });
 }
 
-export async function submitSetButtonSeed(
-  cfg: CustodyConfig,
-  onchainMatchId: bigint,
-  vrfSeedHex: string,
-  vrfProofHashHex: string,
-) {
+export interface SetButtonSeedInput {
+  onchainMatchId: bigint;
+  matchId?: string;
+  vrfSeedHex?: string;
+  vrfProofHashHex?: string;
+}
+
+export async function submitSetButtonSeed(cfg: CustodyConfig, input: SetButtonSeedInput) {
   const connection = await connectionFor(cfg);
   const programId = new PublicKey(cfg.programId);
   const signer = operatorSigner(cfg);
-  const pdas = deriveMatchPdas(programId, onchainMatchId);
-  const vrfSeed = Buffer.from(vrfSeedHex.replace(/^0x/, ''), 'hex');
-  const vrfProofHash = Buffer.from(vrfProofHashHex.replace(/^0x/, ''), 'hex');
-  if (vrfSeed.length !== 32 || vrfProofHash.length !== 32) {
-    throw new CustodyError(400, 'vrf seed and proof hash must be 32 bytes');
+  const pdas = deriveMatchPdas(programId, input.onchainMatchId);
+
+  const matchInfo = await connection.getAccountInfo(pdas.match);
+  if (!matchInfo?.data) {
+    throw new CustodyError(404, 'match account not found');
   }
+  const playerCount = readMatchPlayerCount(matchInfo.data);
+
+  let vrfSeed = parseOptionalSeedHex(input.vrfSeedHex);
+  let vrfProofHash = parseOptionalProofHex(input.vrfProofHashHex);
+  if (vrfSeed === undefined || vrfProofHash === undefined) {
+    if (vrfSeed !== undefined || vrfProofHash !== undefined) {
+      throw new CustodyError(400, 'vrfSeedHex and vrfProofHashHex must both be provided or both omitted');
+    }
+    ({ vrfSeed, vrfProofHash } = generateButtonSeed(input.onchainMatchId, pdas.match.toBase58()));
+  }
+  if (isZeroSeed(vrfSeed)) {
+    throw new CustodyError(400, 'vrf seed must not be all zeros');
+  }
+
+  const button = deriveButton(vrfSeed, playerCount);
   const tx = new Transaction().add(
     buildSetButtonSeedInstruction(programId, signer.publicKey, pdas.protocol, pdas.match, vrfSeed, vrfProofHash),
   );
   const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
-  return { ok: true as const, txSig, button: Number(vrfSeed.readBigUInt64LE(0) % BigInt(3)) };
+  const vrfSeedHex = vrfSeed.toString('hex');
+  const vrfProofHashHex = vrfProofHash.toString('hex');
+  logButtonSeedAssigned({
+    matchId: input.matchId,
+    onchainMatchId: input.onchainMatchId.toString(),
+    matchPda: pdas.match.toBase58(),
+    button,
+    vrfSeedHex,
+    vrfProofHashHex,
+    txSig,
+  });
+  return { ok: true as const, txSig, button, vrfSeedHex, vrfProofHashHex, playerCount };
 }
 
 export async function submitBeginLive(cfg: CustodyConfig, onchainMatchId: bigint) {

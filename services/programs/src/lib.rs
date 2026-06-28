@@ -231,6 +231,7 @@ pub mod syndicate_program {
         require!(m.status == MatchStatus::Sealing, SyndicateError::BadStatus);
         require!(!m.button_set, SyndicateError::InvalidActionInput);
         require!(m.player_count > 0, SyndicateError::NotEnoughPlayers);
+        require!(args.vrf_seed != [0u8; 32], SyndicateError::InvalidActionInput);
         m.vrf_seed = args.vrf_seed;
         m.vrf_proof_hash = args.vrf_proof_hash;
         let seed_u64 = u64::from_le_bytes(args.vrf_seed[0..8].try_into().unwrap());

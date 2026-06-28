@@ -140,12 +140,14 @@ export function createServer(config: Config) {
       }
       if (req.url === '/internal/solana/set-button-seed') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
-        return sendJson(res, 200, await submitSetButtonSeed(
-          custodyConfig(config),
-          BigInt(String(onchain)),
-          String(body.vrfSeedHex ?? body.vrf_seed_hex ?? '00'.repeat(32)),
-          String(body.vrfProofHashHex ?? body.vrf_proof_hash_hex ?? '00'.repeat(32)),
-        ));
+        const vrfSeedHex = body.vrfSeedHex ?? body.vrf_seed_hex;
+        const vrfProofHashHex = body.vrfProofHashHex ?? body.vrf_proof_hash_hex;
+        return sendJson(res, 200, await submitSetButtonSeed(custodyConfig(config), {
+          onchainMatchId: BigInt(String(onchain)),
+          matchId: body.matchId ?? body.match_id,
+          vrfSeedHex: vrfSeedHex === undefined ? undefined : String(vrfSeedHex),
+          vrfProofHashHex: vrfProofHashHex === undefined ? undefined : String(vrfProofHashHex),
+        }));
       }
       if (req.url === '/internal/solana/begin-live') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
