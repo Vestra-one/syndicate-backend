@@ -5,9 +5,9 @@ cd "$(dirname "$0")/.."
 
 export APP_ENV="${APP_ENV:-localnet}"
 export SOLANA_CLUSTER="${SOLANA_CLUSTER:-localnet}"
-export DATABASE_URL="${DATABASE_URL:-postgres://syndicate:syndicate@localhost:5432/syndicate_local}"
-export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
-export NATS_URL="${NATS_URL:-nats://localhost:4222}"
+export DATABASE_URL="${DATABASE_URL:-postgres://syndicate:syndicate@localhost:5433/syndicate_local}"
+export REDIS_URL="${REDIS_URL:-redis://localhost:6380/0}"
+export NATS_URL="${NATS_URL:-nats://localhost:4223}"
 export ACTION_FEED_OBJECT_STORE_DIR="${ACTION_FEED_OBJECT_STORE_DIR:-/tmp/syndicate-localnet/replays}"
 
 echo "Syndicate localnet deployment"
