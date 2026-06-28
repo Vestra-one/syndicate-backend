@@ -35,7 +35,18 @@ struct FormationBootstrap {
 #[serde(rename_all = "camelCase")]
 struct BootstrapResponse {
     match_id: String,
-    onchain_match_id: u64,
+    onchain_match_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    match_pda: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartSeat {
+    seat_index: u16,
+    stack: u64,
+    seal_seq: u64,
+    wallet: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +54,20 @@ struct BootstrapResponse {
 struct StartPolicyRequest {
     match_id: String,
     result: StartPolicyBody,
+    #[serde(default)]
+    onchain_match_id: Option<String>,
+    #[serde(default)]
+    players: Vec<StartSeat>,
+    #[serde(default)]
+    button: Option<u8>,
+    #[serde(default)]
+    small_blind: Option<u64>,
+    #[serde(default)]
+    big_blind: Option<u64>,
+    #[serde(default)]
+    round_count: Option<u8>,
+    #[serde(default)]
+    action_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,10 +157,11 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
         };
         let onchain_match_id = hash_match_id(&input.match_id);
+        let mut match_pda: Option<String> = None;
         if !input.practice_mode {
             let create_body = serde_json::json!({
                 "matchId": input.match_id,
-                "onchainMatchId": onchain_match_id,
+                "onchainMatchId": onchain_match_id.to_string(),
                 "maxPlayers": input.max_players,
                 "minPlayers": input.min_players,
                 "tierId": input.tier_id,
@@ -146,19 +172,51 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                 "rakeCap": input.rake_cap,
                 "configHashHex": input.config_hash_hex,
             });
-            if let Err(resp) = require_downstream(
-                cfg,
-                post_json(&cfg.settlement_chain, "/internal/solana/create-match", &cfg.auth, create_body).await,
-                "create-match",
+            match post_json(
+                &cfg.settlement_chain,
+                "/internal/solana/create-match",
+                &cfg.auth,
+                create_body,
             )
             .await
             {
-                return resp;
+                Ok(resp) if (200..300).contains(&resp.status) => {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+                        match_pda = json
+                            .get("matchPda")
+                            .or_else(|| json.get("match_pda"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                    }
+                }
+                Ok(resp) if cfg.stub_mode => {
+                    eprintln!("orchestrator stub: create-match returned HTTP {}", resp.status);
+                }
+                Ok(resp) => {
+                    return (
+                        "502 Bad Gateway",
+                        format!(
+                            r#"{{"error":"create-match failed with HTTP {}","detail":{}}}"#,
+                            resp.status,
+                            serde_json::to_string(&resp.body).unwrap_or_else(|_| "\"\"".into())
+                        ),
+                    );
+                }
+                Err(err) if cfg.stub_mode => {
+                    eprintln!("orchestrator stub: create-match transport error: {err}");
+                }
+                Err(err) => {
+                    return (
+                        "503 Service Unavailable",
+                        format!(r#"{{"error":"create-match unavailable","detail":"{err}"}}"#),
+                    );
+                }
             }
         }
         let resp = BootstrapResponse {
             match_id: input.match_id,
-            onchain_match_id,
+            onchain_match_id: onchain_match_id.to_string(),
+            match_pda,
         };
         return ("200 OK", serde_json::to_string(&resp).unwrap_or_default());
     }
@@ -168,11 +226,15 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             Ok(v) => v,
             Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
         };
-        let onchain_match_id = hash_match_id(&input.match_id);
+        let onchain_match_id = input
+            .onchain_match_id
+            .as_deref()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(|| hash_match_id(&input.match_id));
         if input.result.action == "start" {
             let lock_body = serde_json::json!({
                 "matchId": input.match_id,
-                "onchainMatchId": onchain_match_id,
+                "onchainMatchId": onchain_match_id.to_string(),
             });
             if let Err(resp) = require_downstream(
                 cfg,
@@ -183,7 +245,59 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 return resp;
             }
-            let start_body = serde_json::json!({ "matchId": input.match_id });
+            let (vrf_seed_hex, vrf_proof_hex) = vrf_material(&input.match_id);
+            let seed_body = serde_json::json!({
+                "matchId": input.match_id,
+                "onchainMatchId": onchain_match_id.to_string(),
+                "vrfSeedHex": vrf_seed_hex,
+                "vrfProofHashHex": vrf_proof_hex,
+            });
+            if let Err(resp) = require_downstream(
+                cfg,
+                post_json(&cfg.settlement_chain, "/internal/solana/set-button-seed", &cfg.auth, seed_body).await,
+                "set-button-seed",
+            )
+            .await
+            {
+                return resp;
+            }
+            let live_body = serde_json::json!({
+                "matchId": input.match_id,
+                "onchainMatchId": onchain_match_id.to_string(),
+            });
+            if let Err(resp) = require_downstream(
+                cfg,
+                post_json(&cfg.settlement_chain, "/internal/solana/begin-live", &cfg.auth, live_body).await,
+                "begin-live",
+            )
+            .await
+            {
+                return resp;
+            }
+            let button = input.button.unwrap_or_else(|| {
+                let seed = hex::decode(&vrf_seed_hex).unwrap_or_default();
+                let seed_u64 = seed
+                    .get(0..8)
+                    .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0u8; 8])))
+                    .unwrap_or(onchain_match_id);
+                let n = input.players.len().max(1) as u64;
+                (seed_u64 % n) as u8
+            });
+            let start_body = serde_json::json!({
+                "matchId": input.match_id,
+                "onchainMatchId": onchain_match_id,
+                "button": button,
+                "smallBlind": input.small_blind.unwrap_or(1),
+                "bigBlind": input.big_blind.unwrap_or(2),
+                "roundCount": input.round_count.unwrap_or(3),
+                "actionTimeoutMs": input.action_timeout_ms.unwrap_or(25_000),
+                "players": input.players.iter().map(|p| serde_json::json!({
+                    "seatIndex": p.seat_index,
+                    "stack": p.stack,
+                    "sealSeq": p.seal_seq,
+                    "wallet": p.wallet,
+                })).collect::<Vec<_>>(),
+            });
             if let Err(resp) = require_downstream(
                 cfg,
                 post_json(&cfg.match_engine, "/internal/matches/start", &cfg.auth, start_body).await,
@@ -221,6 +335,24 @@ pub fn hash_match_id(match_id: &str) -> u64 {
         hash = hash.wrapping_mul(31).wrapping_add(u64::from(b));
     }
     hash
+}
+
+fn vrf_material(match_id: &str) -> (String, String) {
+    let mut seed = [0u8; 32];
+    for (i, b) in match_id.as_bytes().iter().enumerate() {
+        seed[i % 32] ^= b;
+        seed[(i + 7) % 32] = seed[(i + 7) % 32].wrapping_add(*b);
+    }
+    let id = hash_match_id(match_id);
+    seed[0..8].copy_from_slice(&id.to_le_bytes());
+    let proof = {
+        let mut p = [0u8; 32];
+        for (i, b) in seed.iter().enumerate() {
+            p[i] ^= b.wrapping_mul(31);
+        }
+        p
+    };
+    (hex::encode(seed), hex::encode(proof))
 }
 
 struct PostResult {

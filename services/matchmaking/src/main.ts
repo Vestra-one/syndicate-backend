@@ -111,6 +111,13 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
         return json(res, result.ok ? 200 : 409, result);
       }
 
+      const termsMatch = url.pathname.match(/^\/matches\/([^/]+)\/terms$/);
+      if (req.method === 'GET' && termsMatch) {
+        const terms = await runtime.matchTerms(decodeURIComponent(termsMatch[1]));
+        if (!terms) return json(res, 404, { error: 'terms not found' });
+        return json(res, 200, { terms });
+      }
+
       res.writeHead(404);
       res.end();
     } catch (err) {

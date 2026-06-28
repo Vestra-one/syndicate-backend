@@ -7,6 +7,18 @@ export interface OrchestratorClientOptions {
   stub?: boolean;
 }
 
+export interface StartContext {
+  onchainMatchId: string;
+  matchPda?: string;
+  tierId: string;
+  feedId: string;
+  players: Array<{ seatIndex: number; stack: number; sealSeq: number; wallet: string }>;
+  smallBlind: number;
+  bigBlind: number;
+  roundCount: number;
+  actionTimeoutMs: number;
+}
+
 function stubEnabled(explicit?: boolean): boolean {
   if (explicit !== undefined) return explicit;
   return process.env.SYNDICATE_ORCHESTRATOR_STUB === '1';
@@ -51,22 +63,40 @@ export function createOrchestratorClient(
       if (!res.ok) {
         if (stub) {
           const id = hashMatchId(input.matchId);
-          return { matchId: input.matchId, onchainMatchId: Number(id <= BigInt(Number.MAX_SAFE_INTEGER) ? id : id & ((1n << 53n) - 1n)) };
+          return { matchId: input.matchId, onchainMatchId: id.toString() };
         }
         const detail = await res.text();
         throw new Error(`orchestrator bootstrap failed (${res.status}): ${detail}`);
       }
-      const out = await res.json() as { matchId?: string; match_id?: string; onchainMatchId?: number; onchain_match_id?: number };
+      const out = await res.json() as {
+        matchId?: string;
+        match_id?: string;
+        onchainMatchId?: string | number;
+        onchain_match_id?: string | number;
+        matchPda?: string;
+        match_pda?: string;
+      };
+      const onchainRaw = out.onchainMatchId ?? out.onchain_match_id ?? hashMatchId(input.matchId).toString();
       return {
         matchId: out.matchId ?? out.match_id ?? input.matchId,
-        onchainMatchId: Number(out.onchainMatchId ?? out.onchain_match_id ?? hashMatchId(input.matchId)),
+        onchainMatchId: String(onchainRaw),
+        matchPda: out.matchPda ?? out.match_pda,
       };
     },
-    async triggerStartPolicy(matchId: string, result: StartPolicyResult) {
+    async triggerStartPolicy(matchId: string, result: StartPolicyResult, ctx: StartContext) {
       const res = await fetch(`${baseUrl}/internal/start-policy`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ matchId, result }),
+        body: JSON.stringify({
+          matchId,
+          result,
+          onchainMatchId: ctx.onchainMatchId,
+          players: ctx.players,
+          smallBlind: ctx.smallBlind,
+          bigBlind: ctx.bigBlind,
+          roundCount: ctx.roundCount,
+          actionTimeoutMs: ctx.actionTimeoutMs,
+        }),
       });
       if (!res.ok) {
         if (stub) return;
@@ -86,6 +116,6 @@ export function hashMatchId(matchId: string): bigint {
   return hash;
 }
 
-export function syntheticOnchainId(matchId: string): bigint {
-  return hashMatchId(matchId);
+export function syntheticOnchainId(matchId: string): string {
+  return hashMatchId(matchId).toString();
 }

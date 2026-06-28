@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { RedisClient } from '../../gateway/src/redis.ts';
 import { getTierForFeed } from '../../config/src/index.ts';
+import { tableTermsForTier } from '../../config/src/table-terms.ts';
 import { bucketFor, Table, type MatchmakingStore, type TableSnapshot } from './index.ts';
 import {
   deadlineKey,
@@ -29,11 +30,17 @@ export interface FormationRecord {
   mode: 'public_formation' | 'private_host';
   roomCode?: string;
   host?: string;
+  onchainMatchId?: string;
+  matchPda?: string;
 }
 
 export interface OrchestratorClient {
-  bootstrapFormation(input: FormationRecord): Promise<{ matchId: string; onchainMatchId: number }>;
-  triggerStartPolicy(matchId: string, result: ReturnType<typeof evaluateStartPolicy>): Promise<void>;
+  bootstrapFormation(input: FormationRecord): Promise<{ matchId: string; onchainMatchId: string; matchPda?: string }>;
+  triggerStartPolicy(
+    matchId: string,
+    result: ReturnType<typeof evaluateStartPolicy>,
+    ctx: import('./orchestrator-client.ts').StartContext,
+  ): Promise<void>;
 }
 
 export class MatchmakingRuntime {
@@ -86,7 +93,10 @@ export class MatchmakingRuntime {
       roomCode,
       host: input.host,
     };
-    await this.orchestrator.bootstrapFormation(record);
+    await this.orchestrator.bootstrapFormation(record).then((boot) => {
+      record.onchainMatchId = boot.onchainMatchId;
+      record.matchPda = boot.matchPda;
+    });
     const snapshot: TableSnapshot = {
       tableId: matchId,
       minPlayers: tier.config.minPlayers,
@@ -110,8 +120,13 @@ export class MatchmakingRuntime {
     return {
       roomCode,
       matchId,
+      onchainMatchId: record.onchainMatchId,
+      matchPda: record.matchPda,
       fillDeadline: fillDeadlineMs,
-      tableTerms: tier.config,
+      tableTerms: tableTermsForTier(matchId, input.tierId, input.feedId, {
+        onchainMatchId: record.onchainMatchId,
+        matchPda: record.matchPda,
+      }) ?? tier.config,
     };
   }
 
@@ -140,6 +155,8 @@ export class MatchmakingRuntime {
     return {
       roomCode: code,
       matchId: rec.matchId,
+      onchainMatchId: rec.onchainMatchId,
+      matchPda: rec.matchPda,
       seated,
       minPlayers: rec.minPlayers,
       maxPlayers: rec.maxPlayers,
@@ -164,8 +181,36 @@ export class MatchmakingRuntime {
       hostStartRequested: true,
     });
     if (policy.action !== 'start') return { ok: false, reason: policy.reason ?? 'cannot start' };
-    await this.orchestrator.triggerStartPolicy(rec.matchId, policy);
+    if (!table) return { ok: false, reason: 'table not found' };
+    await this.triggerStart(rec, table, policy);
     return { ok: true };
+  }
+
+  private async triggerStart(
+    rec: FormationRecord,
+    table: NonNullable<Awaited<ReturnType<MatchmakingStore['loadTable']>>>,
+    policy: ReturnType<typeof evaluateStartPolicy>,
+  ) {
+    const tier = getTierForFeed(rec.tierId, rec.feedId);
+    if (!tier) throw new Error('unknown tier');
+    const stack = tier.config.buyIn * tier.config.chipsPerUnit;
+    const ctx: import('./orchestrator-client.ts').StartContext = {
+      onchainMatchId: rec.onchainMatchId ?? String(rec.matchId),
+      matchPda: rec.matchPda,
+      tierId: rec.tierId,
+      feedId: rec.feedId,
+      players: table.seats.map((s, seatIndex) => ({
+        seatIndex,
+        stack,
+        sealSeq: seatIndex,
+        wallet: s.wallet,
+      })),
+      smallBlind: tier.config.smallBlind,
+      bigBlind: tier.config.bigBlind,
+      roundCount: tier.config.roundCount,
+      actionTimeoutMs: tier.config.actionTimerSec * 1000,
+    };
+    await this.orchestrator.triggerStartPolicy(rec.matchId, policy, ctx);
   }
 
   async joinQueue(input: {
@@ -216,7 +261,10 @@ export class MatchmakingRuntime {
           minPlayers: tier.config.minPlayers,
           mode: 'public_formation',
         };
-        await this.orchestrator.bootstrapFormation(record);
+        await this.orchestrator.bootstrapFormation(record).then((boot) => {
+      record.onchainMatchId = boot.onchainMatchId;
+      record.matchPda = boot.matchPda;
+    });
         const snapshot: TableSnapshot = {
           tableId: matchId,
           minPlayers: tier.config.minPlayers,
@@ -244,6 +292,8 @@ export class MatchmakingRuntime {
     const table = await this.store.loadTable(record.matchId);
     return {
       matchId: record.matchId,
+      onchainMatchId: record.onchainMatchId,
+      matchPda: record.matchPda,
       fillDeadline: record.fillDeadlineMs,
       playersWaiting: table?.seats.length ?? 0,
       status: 'forming',
@@ -270,6 +320,8 @@ export class MatchmakingRuntime {
       maxPlayers: rec.maxPlayers,
       fillDeadline: rec.fillDeadlineMs,
       matchId: rec.matchId,
+      onchainMatchId: rec.onchainMatchId,
+      matchPda: rec.matchPda,
     };
   }
 
@@ -340,10 +392,28 @@ export class MatchmakingRuntime {
         fillDeadlineReached: false,
       });
       if (policy.action === 'start') {
-        await this.orchestrator.triggerStartPolicy(input.matchId, policy);
+        const loaded = await this.loadRoom(record.matchId);
+        const recForStart = loaded ?? record;
+        await this.triggerStart(recForStart, next, policy);
         if (this.redis) await this.redis.zrem(deadlineKey(), input.matchId);
       }
     }
-    return { ...result, seat: seatResult.seatIndex };
+    const rec = [...this.rooms.values()].find((r) => r.matchId === input.matchId);
+    return {
+      ...result,
+      seat: seatResult.seatIndex,
+      onchainMatchId: rec?.onchainMatchId,
+      matchPda: rec?.matchPda,
+    };
+  }
+
+  async matchTerms(matchId: string): Promise<unknown> {
+    const table = await this.store.loadTable(matchId);
+    if (!table?.tierId || !table.feedId) return undefined;
+    const rec = [...this.rooms.values()].find((r) => r.matchId === matchId);
+    return tableTermsForTier(matchId, table.tierId, table.feedId, {
+      onchainMatchId: rec?.onchainMatchId,
+      matchPda: rec?.matchPda,
+    });
   }
 }

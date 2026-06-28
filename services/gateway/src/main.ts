@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { GatewayServer } from './server.ts';
 import { Ed25519Verifier } from './verifier.ts';
 import { RedisClient } from './redis.ts';
+import { MatchSubscriber } from './matchSubscriber.ts';
 import { createRelayHandler } from './relay.ts';
 import {
   MemoryRateLimiter,
@@ -29,7 +30,9 @@ export async function startGatewayFromEnv(): Promise<GatewayServer> {
     matchEngineUrl: process.env.MATCH_ENGINE_URL ?? 'http://127.0.0.1:8083',
     matchmakingUrl: process.env.MATCHMAKING_URL ?? 'http://127.0.0.1:8082',
     actionFeedUrl: process.env.ACTION_FEED_URL ?? 'http://127.0.0.1:8080',
+    configUrl: process.env.CONFIG_URL ?? 'http://127.0.0.1:8084',
     authToken: process.env.ORCHESTRATOR_AUTH_TOKEN,
+    subscriber: process.env.REDIS_URL ? new MatchSubscriber(process.env.REDIS_URL) : undefined,
   };
 
   let server!: GatewayServer;

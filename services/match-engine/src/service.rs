@@ -502,6 +502,10 @@ impl FencedMatchRuntime {
         self.head
     }
 
+    pub fn registered_defaults(&self) -> &HashMap<usize, SignedDefaultPolicy> {
+        &self.registered_defaults
+    }
+
     fn validate_intent(&self, intent: &SignedActionIntent) -> Result<(), MatchServiceError> {
         if intent.seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));

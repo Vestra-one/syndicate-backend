@@ -1,8 +1,10 @@
 import type { RedisClient } from '../../gateway/src/redis.ts';
+import { getTierForFeed } from '../../config/src/index.ts';
 import type { MatchmakingStore } from './index.ts';
 import { deadlineKey, formationKey } from './redis-keys.ts';
 import { evaluateStartPolicy } from './start-policy.ts';
 import type { FormationRecord, OrchestratorClient } from './formation.ts';
+import { hashMatchId } from './orchestrator-client.ts';
 
 export class DeadlineWorker {
   private timer?: ReturnType<typeof setInterval>;
@@ -38,7 +40,7 @@ export class DeadlineWorker {
     }
   }
 
-  private async handleDeadline(matchId: string, now: number): Promise<void> {
+  private async handleDeadline(matchId: string, _now: number): Promise<void> {
     const table = await this.store.loadTable(matchId);
     if (!table || table.status !== 'open') {
       await this.redis.zrem(deadlineKey(), matchId);
@@ -55,7 +57,38 @@ export class DeadlineWorker {
       hostStartRequested: false,
     });
     if (policy.action === 'wait') return;
-    await this.orchestrator.triggerStartPolicy(matchId, policy);
+    if (policy.action === 'start' && table.tierId && table.feedId) {
+      const tier = getTierForFeed(table.tierId, table.feedId);
+      if (tier) {
+        const stack = tier.config.buyIn * tier.config.chipsPerUnit;
+        await this.orchestrator.triggerStartPolicy(matchId, policy, {
+          onchainMatchId: hashMatchId(matchId).toString(),
+          tierId: table.tierId,
+          feedId: table.feedId,
+          players: table.seats.map((s, seatIndex) => ({
+            seatIndex,
+            stack,
+            sealSeq: seatIndex,
+            wallet: s.wallet,
+          })),
+          smallBlind: tier.config.smallBlind,
+          bigBlind: tier.config.bigBlind,
+          roundCount: tier.config.roundCount,
+          actionTimeoutMs: tier.config.actionTimerSec * 1000,
+        });
+      }
+    } else {
+      await this.orchestrator.triggerStartPolicy(matchId, policy, {
+        onchainMatchId: hashMatchId(matchId).toString(),
+        tierId: table.tierId ?? 'tier-low',
+        feedId: table.feedId ?? 'BTC/USD',
+        players: [],
+        smallBlind: 1,
+        bigBlind: 2,
+        roundCount: 3,
+        actionTimeoutMs: 25_000,
+      });
+    }
     await this.redis.zrem(deadlineKey(), matchId);
     if (policy.action === 'void' && table.mode === 'public_formation' && table.tierId && table.feedId && table.token && table.bucket) {
       await this.redis.del(formationKey(table.tierId, table.feedId, table.token, table.bucket));

@@ -10,6 +10,7 @@ pub use syndicate_engine_core::{
 pub mod coordinator;
 pub mod lease;
 pub mod persistence;
+pub mod redis_pub;
 pub mod server;
 pub mod service;
 pub mod verify;
