@@ -114,7 +114,9 @@ export class ActionFeedReadServer {
     const historyMatch = url.pathname.match(/^\/matches\/([^/]+)\/history$/);
     if (historyMatch) {
       const history: MatchHistory | undefined = this.state.matchHistory.get(decodeURIComponent(historyMatch[1]));
-      return history ? json(res, 200, { match: history }) : json(res, 404, { error: 'match not found' });
+      return history
+        ? json(res, 200, { match: history, oracleProof: history.oracleProof ?? null })
+        : json(res, 404, { error: 'match not found' });
     }
 
     const actionsMatch = url.pathname.match(/^\/matches\/([^/]+)\/actions$/);
@@ -132,7 +134,7 @@ export class ActionFeedReadServer {
       const bundle = replayBundle(matchId, events);
       const object = await this.objectStore.putJson(`replays/${matchId}/${bundle.contentHash}.json`, bundle);
       this.metrics.replayUploadsTotal += 1;
-      return json(res, 200, { bundle: { ...bundle, objectUri: object.uri } });
+      return json(res, 200, { bundle: { ...bundle, objectUri: object.uri }, oracleProof: bundle.oracleProof ?? null });
     }
 
     const profileMatch = url.pathname.match(/^\/profiles\/([^/]+)$/);

@@ -117,6 +117,7 @@ export interface MatchHistory {
   startedAt: number;
   lastEventTs: number;
   settlementPrice?: number;
+  oracleProof?: unknown;
   replayEventCount: number;
   replayBundleUri?: string;
   summary: {
@@ -133,6 +134,7 @@ export interface ReplayBundle {
   toSeq: number;
   events: PublicEvent[];
   contentHash: string;
+  oracleProof?: unknown;
 }
 
 export type HistoryStatusFilter = MatchHistory['status'] | 'all';
@@ -172,7 +174,7 @@ export interface ProfileEvent {
 
 export interface LeaderboardEntry {
   userId: string;
-  publicHandle: string;
+  handle: string;
   matchesPlayed: number;
   roi: number;
   totalPayout: number;
@@ -247,12 +249,12 @@ export function applyProfileEvent(state: ProjectionState, event: ProfileEvent): 
 export function leaderboard(stats: Iterable<ProfileStats>): LeaderboardEntry[] {
   return [...stats].map((s) => ({
     userId: s.userId,
-    publicHandle: s.publicHandle,
+    handle: s.publicHandle,
     matchesPlayed: s.matchesPlayed,
     roi: s.totalBuyIn === 0 ? 0 : (s.totalPayout - s.totalBuyIn) / s.totalBuyIn,
     totalPayout: s.totalPayout,
     achievements: s.achievementCount,
-  })).sort((a, b) => b.roi - a.roi || b.totalPayout - a.totalPayout || a.publicHandle.localeCompare(b.publicHandle));
+  })).sort((a, b) => b.roi - a.roi || b.totalPayout - a.totalPayout || a.handle.localeCompare(b.handle));
 }
 
 export function replayBundle(matchId: string, events: PublicEvent[]): ReplayBundle {

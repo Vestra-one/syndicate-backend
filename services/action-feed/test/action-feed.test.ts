@@ -135,7 +135,7 @@ test('profile stats and leaderboard stay pseudonymous', () => {
     ts: 10,
   });
   const board = leaderboard(state.profileStats.values());
-  assert.deepEqual(board.map((e) => e.publicHandle), ['alpha', 'beta']);
+  assert.deepEqual(board.map((e) => e.handle), ['alpha', 'beta']);
   assert.equal(JSON.stringify(board).includes('wallet'), false);
   assert.equal(state.profileStats.get('u1')?.matchesWon, 1);
   assert.equal(state.profileStats.get('u2')?.foldCount, 1);

@@ -1,0 +1,13 @@
+{
+  "address": "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS",
+  "metadata": {
+    "name": "syndicate_program",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Placeholder IDL — run scripts/emit-anchor-idl.sh on the Solana build host to refresh."
+  },
+  "instructions": [],
+  "accounts": [],
+  "errors": [],
+  "types": []
+}

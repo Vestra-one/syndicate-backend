@@ -109,7 +109,7 @@ test('HTTP read API serves active/history/replay/profile/leaderboard with replay
   assert.equal(profile.profile.publicHandle, 'alpha');
 
   const board = await (await fetch(`${base}/leaderboard`)).json();
-  assert.equal(board.entries[0].publicHandle, 'alpha');
+  assert.equal(board.entries[0].handle, 'alpha');
 
   const metrics = await (await fetch(`${base}/metrics`)).text();
   assert.match(metrics, /syndicate_action_feed_http_requests_total/);

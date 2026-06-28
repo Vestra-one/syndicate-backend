@@ -92,6 +92,8 @@ export interface TableTerms {
   practiceMode?: boolean;
   /** drand round the prediction must be sealed toward (match end). */
   timelockTargetRound: number;
+  onchainMatchId?: string;
+  matchPda?: string;
 }
 
 /** Public matchmaking queue snapshot (matchmaking REST + gateway WS). */
@@ -103,12 +105,16 @@ export interface QueueStatus {
   maxPlayers: number;
   fillDeadline: number | null;
   matchId?: string;
+  onchainMatchId?: string;
+  matchPda?: string;
 }
 
 /** Private room lobby snapshot. */
 export interface RoomLobby {
   roomCode: string;
   matchId: string;
+  onchainMatchId?: string;
+  matchPda?: string;
   seated: number;
   minPlayers: number;
   maxPlayers: number;
@@ -322,10 +328,29 @@ export interface RefundArgs { matchId: string; }  // reclaim deposit + entry fee
 
 /** PDA seeds (for deriving accounts client-side; the IDL also encodes these). */
 export const PDA_SEEDS = {
-  match: (matchId: string) => ['match', matchId],
-  vault: (matchPda: string) => ['vault', matchPda],
-  seat: (matchPda: string, player: Wallet) => ['seat', matchPda, player],
+  /** `match` seed = u64 LE bytes of on-chain match id (string u64, not UUID). */
+  match: (onchainMatchId: string) => ['match', u64LeBytes(onchainMatchId)] as const,
+  vault: (matchPda: string) => ['vault', matchPda] as const,
+  seat: (matchPda: string, player: Wallet) => ['seat', matchPda, player] as const,
+  seatIndex: (matchPda: string, seatIndex: number) => ['seat-index', matchPda, u16LeBytes(seatIndex)] as const,
 } as const;
+
+function u64LeBytes(id: string): Uint8Array {
+  let v = BigInt(id);
+  const out = new Uint8Array(8);
+  for (let i = 0; i < 8; i += 1) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+
+function u16LeBytes(n: number): Uint8Array {
+  const out = new Uint8Array(2);
+  out[0] = n & 0xff;
+  out[1] = (n >> 8) & 0xff;
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Signed action intents (wallet ed25519)  🟢
@@ -336,7 +361,7 @@ export const PDA_SEEDS = {
 /** Sign with the wallet key: `signMessage(bytes)` → base64 signature. */
 export interface SignedActionIntentWire {
   matchId: string;
-  onchainMatchId: number;
+  onchainMatchId: string;
   seatIndex: SeatIndex;
   wallet: Wallet;
   nonce: number;
@@ -349,7 +374,7 @@ export interface SignedActionIntentWire {
 
 export interface SignedDefaultPolicyWire {
   matchId: string;
-  onchainMatchId: number;
+  onchainMatchId: string;
   seatIndex: SeatIndex;
   wallet: Wallet;
   defaultAction: DefaultAction;
@@ -358,7 +383,7 @@ export interface SignedDefaultPolicyWire {
 
 export interface SignedPredictionCommitmentWire {
   matchId: string;
-  onchainMatchId: number;
+  onchainMatchId: string;
   seatIndex: SeatIndex;
   wallet: Wallet;
   sealSeq: number;

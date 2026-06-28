@@ -12,7 +12,7 @@ This guide + `protocol.ts` (copy-paste types) + `example-client.ts` (reference f
 
 The client talks to three surfaces:
 
-1. **Gateway (WebSocket)** — the realtime channel for gameplay: auth, lobby, turn prompts, betting actions, and the public event feed. One socket per session. 🟢 (auth handshake + broadcast) / 🟡 (game messages)
+1. **Gateway (WebSocket)** — the realtime channel for gameplay: auth, lobby, turn prompts, betting actions, and the public event feed. One socket per session. 🟢
 2. **Solana (on-chain, via the user's wallet)** — custody: the client builds & the wallet signs **deposit**, **claim**, **refund** transactions against the Syndicate Anchor program. 🟡 (program is deployed on Devnet; IDL ships from `anchor build`)
 3. **Discovery/History (read)** — live-games dashboard, historical-game archive, per-match public action timeline, profile, and leaderboard REST endpoints. 🟢
 
@@ -31,8 +31,9 @@ The client needs these per environment (devnet/mainnet):
 | Key | Example | Notes |
 |-----|---------|-------|
 | `GATEWAY_WS_URL` | `wss://gw.syndicate.example` | the realtime socket |
+| `CONFIG_URL` | `https://config.syndicate.example` | table terms + tier catalog (`GET /config/table?matchId=…`) |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | for building/sending tx |
-| `PROGRAM_ID` | `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS` on Devnet | Syndicate program; IDL from `anchor build` |
+| `PROGRAM_ID` | `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS` on Devnet | Syndicate program; committed IDL at `docs/frontend/idl/syndicate_program.json` (refresh via `scripts/emit-anchor-idl.sh` on build host) |
 | `CHIPS_TOKEN_MINT` | USDC mint | the betting token (default USDC) |
 | `DRAND_API` | `https://api.drand.sh` | time-lock beacon |
 | `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` | **quicknet** (the tlock chain) |
@@ -69,9 +70,9 @@ The signature is over the **raw nonce string** (UTF-8), encoded base64. (Backend
 | Discover games | REST read 🟢 | render the live-games dashboard (ranked by popularity; sortable by time/pot/buy-in/feed) |
 | Connect wallet | Gateway 🟢 | the §3 handshake |
 | Choose table & **deposit** | Solana 🟡🔵 | build + sign `deposit` tx (buy-in + entry fee) → seat is granted on **finality** |
-| Enter lobby | Gateway 🟡 | show table terms (feed, token, buy-in, blinds, rake, capacity, timers, match length) |
-| **Seal prediction** | Client + Gateway 🔵🟡 | tlock-encrypt the price (§6), send `sealPrediction` with the ciphertext **before LIVE** |
-| Betting (3 rounds) | Gateway 🟡 | on `yourTurn`, show legal actions + exposure; send a **signed** `act`; optionally `setDefault` (check/fold) |
+| Enter lobby | Gateway 🟢 | `subscribe` → `tableTerms` + live `matchState` via Redis fan-out |
+| **Seal prediction** | Client + Gateway 🟢 | tlock-encrypt the price (§6), send `sealPrediction` with the ciphertext **before LIVE** |
+| Betting (3 rounds) | Gateway 🟢 | on `yourTurn`, show legal actions + exposure; send a **signed** `act`; optionally `setDefault` (check/fold) |
 | Watch the market | Gateway 🟡 | render the live chart + your distance-to-conviction from the `event` feed |
 | Resolution | Gateway 🟡 | uncontested win, or the sequential reveal ceremony; **all numbers open post-match** |
 | **Claim / refund** | Solana 🟡🔵 | after SETTLED build+sign `claim`; after VOID build+sign `refund` |
@@ -209,6 +210,7 @@ From `03_BUILDER_VISION_CANONICAL.md` / `05 §15` — these are requirements, no
 - [ ] Wire `@solana/web3.js` + the Anchor IDL for `deposit` / `claim` / `refund` (§7).
 - [ ] Build the table/lobby + betting UI against `protocol.ts` types; render the `event` feed + chart.
 - [ ] Handle every error/VOID path (§9) and the UX invariants (§10).
+- [ ] Use `onchainMatchId` as a **string** (u64) everywhere — never `Number()` it; derive PDAs with `PDA_SEEDS.match(onchainMatchId)` in `protocol.ts`.
 - [ ] Use `example-client.ts` as the reference for the end-to-end flow.
 
-**Coordinate with backend on:** the final `matchState`/`yourTurn`/`lobby` payload fields, the IDL/`PROGRAM_ID`, and the per-environment config in §2. Those are the 🟡 items being finalized.
+**On-chain IDs:** matchmaking/orchestrator return `{ matchId, onchainMatchId, matchPda }` on bootstrap, queue, lobby, and deposit responses. The gateway includes them in `tableTerms` when available.
