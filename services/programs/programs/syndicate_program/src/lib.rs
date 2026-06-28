@@ -39,7 +39,7 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use settle_args::{player_states_from_engine, SettleArgs};
 use state::{MatchAccount, MatchStatus, ProtocolState, SeatAccount, SeatIndexAccount};
 
-declare_id!("FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS");
+declare_id!("GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo");
 
 #[program]
 pub mod syndicate_program {

@@ -244,7 +244,7 @@ echo "firewall:";  sudo ufw status | head -n 5
 
 If every line prints a value (no “command not found”), the VPS is ready.
 
-Proceed to `03_BACKEND_DEPLOYMENT.md`.
+Proceed to [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md). See [README.md](./README.md) for cluster-specific notes.
 
 ---
 

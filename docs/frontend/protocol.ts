@@ -181,6 +181,8 @@ export interface SettlementView {
 export interface PythOracleProofView {
   adapter: 'pyth';
   mode: 'pull-receiver-full-verification';
+  /** `atomic` when Pyth post + settlement fit one tx; `two_step` when posting and submit_settlement are split. */
+  settlementMode?: 'atomic' | 'two_step';
   feedIdHex: string;
   price: FixedPrice;
   publishTime: number;
@@ -188,9 +190,12 @@ export interface PythOracleProofView {
   exponent: number;
   priceUpdateAccount: string;
   atomicSettlementTxSignature: string;
+  /** All tx signatures when settlementMode is two_step (Pyth posts + submit_settlement). */
+  settlementTxSignatures?: string[];
   receiverProgramId: string;
   wormholeProgramId: string;
   pushOracleProgramId: string;
+  hermesUrl?: string;
   hermesResponseHash: string; // sha256 hex
   binaryUpdateHash: string;   // sha256 hex over selected binary update data
 }

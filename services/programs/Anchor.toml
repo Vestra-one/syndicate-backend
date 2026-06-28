@@ -1,22 +1,25 @@
-# Anchor workspace config for the Syndicate on-chain program.
-# Build/test in a Solana CI:  anchor build  &&  anchor test
-# (The Solana platform toolchain is not available in the doc-authoring sandbox, so
-#  this crate is source-complete but compiled/verified in the Solana pipeline.)
-
 [toolchain]
 anchor_version = "0.32.1"
+solana_version = "3.1.5"
 
-[programs.localnet]
-syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
+[features]
+resolution = true
+skip-lint = false
 
 [programs.devnet]
-syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
+syndicate_program = "GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo"
+
+[programs.localnet]
+syndicate_program = "GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo"
 
 [programs.mainnet]
-syndicate_program = "FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS"
+syndicate_program = "GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo"
+
+[registry]
+url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

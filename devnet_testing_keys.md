@@ -16,3 +16,41 @@ pubkey: DrEiVS98WHbrNYVBEqhza23xhMLcqNMVGE3cD6ZnSd1W
 
 pubkey: 2iTk53HETCyyuMe69uLT9Dj4XsV4KgV6qN6uV4RjBaDD
 [88,14,143,34,3,46,172,29,22,101,43,1,145,127,214,117,237,170,3,12,14,104,219,134,75,80,203,94,71,126,29,89,25,122,188,239,138,95,203,168,25,252,48,246,64,17,218,67,99,170,129,94,241,88,112,97,254,213,209,25,97,13,152,88]
+
+
+
+
+program id 
+Wrote new keypair to target/deploy/syndicate_program-keypair.json
+==========================================================================
+pubkey: 9NzsPpNaKbmiuBLuGyH6iF8NPZnoxMEYT4pRRG7ASntQ
+==========================================================================
+Save this seed phrase to recover your new keypair:
+insect anger chuckle desk mule comic idea chat faculty false stuff peasant
+====
+
+
+Deployer
+Wrote new keypair to /Users/adarshkumar/.config/solana/id.json
+==============================================================================
+pubkey: 2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt
+==============================================================================
+Save this seed phrase to recover your new keypair:
+wasp salt patrol appear beyond photo sunset mandate arrest isolate dumb series
+
+
+
+
+-----------------devnet-------------
+Program Id: GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo
+Owner: BPFLoaderUpgradeab1e11111111111111111111111
+ProgramData Address: ADwfQzSnEMyU7PTEmk2NJUNHxz1YhycdKMCXMhTuiamN
+Authority: 2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt
+Last Deployed In Slot: 472623533
+Data Length: 662760 (0xa1ce8) bytes
+Balance: 4.61401368 SOL
+
+export DEPLOYER_KEYPAIR=$HOME/.config/solana/id.json
+node init-protocol.mjs
+PROTOCOL_STATE_PDA=6WGM9hepP99uzvRmcdkpYFm3fRx2Lp1KPHbxnfUigzM2
+initialize_protocol tx: pXRLJDR4piJbL3o9Sjw9aFqmpxtWLVsHSH4zjqEchthVmKSJDMTMaocqrxdUWUwseisUFdeDUtjWmjhuc7XVXY8

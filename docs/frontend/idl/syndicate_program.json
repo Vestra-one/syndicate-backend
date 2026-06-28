@@ -4,10 +4,2716 @@
     "name": "syndicate_program",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "Placeholder IDL — run scripts/emit-anchor-idl.sh on the Solana build host to refresh."
+    "description": "Syndicate Solana/Anchor on-chain program: vault custody, deposits/claims/refunds, fees, and settlement RE-VERIFICATION via the shared deterministic core."
   },
-  "instructions": [],
-  "accounts": [],
-  "errors": [],
-  "types": []
+  "instructions": [
+    {
+      "name": "append_player_action",
+      "discriminator": [
+        219,
+        9,
+        154,
+        229,
+        224,
+        124,
+        3,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "AppendPlayerActionArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "append_timeout_action",
+      "discriminator": [
+        0,
+        206,
+        30,
+        222,
+        219,
+        51,
+        153,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "AppendTimeoutActionArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "begin_live",
+      "docs": [
+        "Advance Sealing → Live after button + off-chain seals are ready."
+      ],
+      "discriminator": [
+        62,
+        129,
+        92,
+        247,
+        194,
+        206,
+        244,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim",
+      "docs": [
+        "Pull-based, idempotent claim of a settled seat's payout."
+      ],
+      "discriminator": [
+        62,
+        198,
+        214,
+        193,
+        213,
+        159,
+        108,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "seat"
+          ]
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "seat.seat_index",
+                "account": "SeatAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_match",
+      "docs": [
+        "Create a match: bind fee config + the MatchConfig hash, open the vault, status → Filling."
+      ],
+      "discriminator": [
+        107,
+        2,
+        184,
+        145,
+        70,
+        142,
+        17,
+        165
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.match_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "CreateParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "deposit",
+      "docs": [
+        "Deposit buy-in + entry fee → seat eligibility (the anti-spam gate, `05 §4`)."
+      ],
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "arg",
+                "path": "seat_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "seat_index",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "finalize_action_log",
+      "discriminator": [
+        211,
+        164,
+        150,
+        42,
+        94,
+        124,
+        101,
+        241
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account"
+        }
+      ],
+      "args": [
+        {
+          "name": "event_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "init_action_log",
+      "docs": [
+        "Initialize the on-chain action log for replay after lock."
+      ],
+      "discriminator": [
+        233,
+        96,
+        112,
+        209,
+        20,
+        152,
+        26,
+        133
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "InitActionLogParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_protocol",
+      "docs": [
+        "Initialize the global protocol role registry and pause flags."
+      ],
+      "discriminator": [
+        188,
+        233,
+        252,
+        106,
+        134,
+        146,
+        202,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roles",
+          "type": {
+            "defined": {
+              "name": "ProtocolRoles"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "docs": [
+        "Lock the match: enough players present → seats frozen, status → Sealing."
+      ],
+      "discriminator": [
+        21,
+        19,
+        208,
+        43,
+        237,
+        62,
+        255,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "refund",
+      "docs": [
+        "Full refund of deposit **and entry fee** on VOID (no game, no fee — `04 §14`)."
+      ],
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "seat"
+          ]
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "seat.seat_index",
+                "account": "SeatAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register_default_policy",
+      "discriminator": [
+        238,
+        235,
+        197,
+        48,
+        205,
+        244,
+        143,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RegisterDefaultPolicyArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_prediction_commitment",
+      "discriminator": [
+        107,
+        200,
+        111,
+        18,
+        196,
+        192,
+        155,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "action_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RegisterPredictionCommitmentArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_button_seed",
+      "docs": [
+        "Record VRF output and derive the dealer button (once per match, at SEALING)."
+      ],
+      "discriminator": [
+        83,
+        8,
+        197,
+        145,
+        250,
+        13,
+        248,
+        208
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "SetButtonSeedArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_pauses",
+      "docs": [
+        "Pause/unpause new exposure or settlement submission. Claims/refunds remain live."
+      ],
+      "discriminator": [
+        48,
+        80,
+        200,
+        227,
+        66,
+        244,
+        226,
+        122
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "pause_new_matches",
+          "type": "bool"
+        },
+        {
+          "name": "pause_settlement",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "submit_settlement",
+      "docs": [
+        "Submit the final settlement. Replays the action log on-chain and re-verifies.",
+        "Pass the seats as `remaining_accounts`."
+      ],
+      "discriminator": [
+        255,
+        231,
+        47,
+        245,
+        40,
+        161,
+        95,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_update"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "SettleArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "void",
+      "docs": [
+        "Abort a match (insufficient players, oracle/timelock fault). Status → Void."
+      ],
+      "discriminator": [
+        55,
+        130,
+        74,
+        24,
+        235,
+        14,
+        16,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "void_after_deadline",
+      "docs": [
+        "Permissionless void after settle deadline (anti-censorship liveness)."
+      ],
+      "discriminator": [
+        193,
+        216,
+        161,
+        42,
+        22,
+        228,
+        160,
+        254
+      ],
+      "accounts": [
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "action_log",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_fees",
+      "docs": [
+        "Withdraw accumulated entry fees + rake to the protocol treasury (post-settlement)."
+      ],
+      "discriminator": [
+        198,
+        212,
+        171,
+        109,
+        144,
+        215,
+        174,
+        89
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ActionLog",
+      "discriminator": [
+        21,
+        124,
+        15,
+        134,
+        245,
+        104,
+        185,
+        20
+      ]
+    },
+    {
+      "name": "MatchAccount",
+      "discriminator": [
+        235,
+        36,
+        243,
+        39,
+        81,
+        16,
+        144,
+        87
+      ]
+    },
+    {
+      "name": "ProtocolState",
+      "discriminator": [
+        33,
+        51,
+        173,
+        134,
+        35,
+        140,
+        195,
+        248
+      ]
+    },
+    {
+      "name": "SeatAccount",
+      "discriminator": [
+        251,
+        85,
+        162,
+        147,
+        128,
+        212,
+        122,
+        178
+      ]
+    },
+    {
+      "name": "SeatIndexAccount",
+      "discriminator": [
+        34,
+        229,
+        251,
+        206,
+        174,
+        117,
+        219,
+        201
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "BadStatus",
+      "msg": "Action not allowed in the current match status."
+    },
+    {
+      "code": 6001,
+      "name": "MatchFull",
+      "msg": "Match is full."
+    },
+    {
+      "code": 6002,
+      "name": "NotEnoughPlayers",
+      "msg": "Not enough players to start."
+    },
+    {
+      "code": 6003,
+      "name": "SettlementMismatch",
+      "msg": "Settlement re-verification failed; funds will NOT be released (04 §18)."
+    },
+    {
+      "code": 6004,
+      "name": "ConservationViolation",
+      "msg": "Conservation check failed: payouts + fees != deposits."
+    },
+    {
+      "code": 6005,
+      "name": "InvalidSettlementInput",
+      "msg": "Oracle/settlement inputs invalid or insufficient."
+    },
+    {
+      "code": 6006,
+      "name": "InvalidOracleProof",
+      "msg": "Pyth Receiver price update account/proof is missing, unauthenticated, or does not match the bound feed."
+    },
+    {
+      "code": 6007,
+      "name": "AlreadyClaimed",
+      "msg": "Seat already claimed."
+    },
+    {
+      "code": 6008,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow."
+    },
+    {
+      "code": 6009,
+      "name": "Unauthorized",
+      "msg": "Unauthorized."
+    },
+    {
+      "code": 6010,
+      "name": "Paused",
+      "msg": "Protocol action is paused."
+    },
+    {
+      "code": 6011,
+      "name": "InvalidSeat",
+      "msg": "Seat index is invalid or duplicated."
+    },
+    {
+      "code": 6012,
+      "name": "SeatSetMismatch",
+      "msg": "Settlement did not include exactly the occupied seats."
+    },
+    {
+      "code": 6013,
+      "name": "InvalidActionInput",
+      "msg": "Invalid signed action input."
+    },
+    {
+      "code": 6014,
+      "name": "InvalidActionLog",
+      "msg": "Action log is invalid or not initialized."
+    },
+    {
+      "code": 6015,
+      "name": "InvalidSignature",
+      "msg": "Ed25519 signature verification failed."
+    },
+    {
+      "code": 6016,
+      "name": "NotYourTurn",
+      "msg": "Not this player's turn."
+    },
+    {
+      "code": 6017,
+      "name": "ActionLogNotFinalized",
+      "msg": "Action log is not finalized."
+    },
+    {
+      "code": 6018,
+      "name": "EngineNotComplete",
+      "msg": "Engine replay is not complete."
+    },
+    {
+      "code": 6019,
+      "name": "PredictionCommitmentMismatch",
+      "msg": "Prediction reveal does not match signed commitment."
+    },
+    {
+      "code": 6020,
+      "name": "SettlementDeadlinePassed",
+      "msg": "Settlement deadline passed; use void/refund path."
+    },
+    {
+      "code": 6021,
+      "name": "FeesAlreadyWithdrawn",
+      "msg": "Match fees were already withdrawn."
+    },
+    {
+      "code": 6022,
+      "name": "ButtonNotSet",
+      "msg": "VRF button seed has not been recorded."
+    },
+    {
+      "code": 6023,
+      "name": "VrfSeedMismatch",
+      "msg": "VRF seed does not match the recorded match seed."
+    }
+  ],
+  "types": [
+    {
+      "name": "ActionLog",
+      "docs": [
+        "Serialized engine + per-seat metadata for on-chain replay."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "event_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "finalized",
+            "type": "bool"
+          },
+          {
+            "name": "action_count",
+            "type": "u32"
+          },
+          {
+            "name": "player_count",
+            "type": "u8"
+          },
+          {
+            "name": "scheduled_end_ts",
+            "type": "u64"
+          },
+          {
+            "name": "settle_deadline_ts",
+            "type": "u64"
+          },
+          {
+            "name": "engine_bytes",
+            "type": "bytes"
+          },
+          {
+            "name": "seats",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "SeatMeta"
+                  }
+                },
+                5
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AppendPlayerActionArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "action_tag",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "ed25519_ix_index",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AppendTimeoutActionArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AwardDto",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClaimedResult",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "settlement_price",
+            "type": "i64"
+          },
+          {
+            "name": "oracle_publish_time",
+            "type": "u64"
+          },
+          {
+            "name": "pot_awards",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "AwardDto"
+                }
+              }
+            }
+          },
+          {
+            "name": "uncalled_returns",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "ReturnDto"
+                }
+              }
+            }
+          },
+          {
+            "name": "rake_collected",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_id",
+            "type": "u64"
+          },
+          {
+            "name": "buy_in",
+            "type": "u64"
+          },
+          {
+            "name": "entry_fee",
+            "type": "u64"
+          },
+          {
+            "name": "rake_bps",
+            "type": "u32"
+          },
+          {
+            "name": "rake_cap",
+            "type": "u64"
+          },
+          {
+            "name": "min_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "config_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price_feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "scheduled_end_ts",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_delay_window_sec",
+            "type": "u64"
+          },
+          {
+            "name": "max_oracle_confidence",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_exponent",
+            "type": "i32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitActionLogParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "button",
+            "type": "u8"
+          },
+          {
+            "name": "small_blind",
+            "type": "u64"
+          },
+          {
+            "name": "big_blind",
+            "type": "u64"
+          },
+          {
+            "name": "round_count",
+            "type": "u8"
+          },
+          {
+            "name": "settle_deadline_ts",
+            "type": "u64"
+          },
+          {
+            "name": "seal_seq",
+            "type": {
+              "array": [
+                "u64",
+                5
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchAccount",
+      "docs": [
+        "One match. Holds the fee config, the bound-config hash (replay anchor), running",
+        "totals, and the vault bump. Custody of funds lives in the associated `vault` token",
+        "account PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "match_id",
+            "type": "u64"
+          },
+          {
+            "name": "buy_in",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "MatchStatus"
+              }
+            }
+          },
+          {
+            "name": "config_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price_feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "scheduled_end_ts",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_delay_window_sec",
+            "type": "u64"
+          },
+          {
+            "name": "max_oracle_confidence",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_exponent",
+            "type": "i32"
+          },
+          {
+            "name": "entry_fee",
+            "type": "u64"
+          },
+          {
+            "name": "rake_bps",
+            "type": "u32"
+          },
+          {
+            "name": "rake_cap",
+            "type": "u64"
+          },
+          {
+            "name": "min_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "player_count",
+            "type": "u8"
+          },
+          {
+            "name": "total_deposited",
+            "type": "u64"
+          },
+          {
+            "name": "total_fees",
+            "type": "u64"
+          },
+          {
+            "name": "settled_payout",
+            "type": "u64"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vrf_seed",
+            "docs": [
+              "VRF output recorded at SEALING (audit/replay anchor)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "vrf_proof_hash",
+            "docs": [
+              "Hash of the VRF proof bytes (provider-specific; recorded for audit)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "button",
+            "docs": [
+              "Dealer button seat index, derived deterministically from `vrf_seed`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "button_set",
+            "type": "bool"
+          },
+          {
+            "name": "fees_withdrawn",
+            "type": "bool"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Filling"
+          },
+          {
+            "name": "Sealing"
+          },
+          {
+            "name": "Live"
+          },
+          {
+            "name": "Settled"
+          },
+          {
+            "name": "Void"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OnChainDefaultPolicy",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Unset"
+          },
+          {
+            "name": "CheckFold"
+          },
+          {
+            "name": "CheckCallAny"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OraclePriceDto",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "i64"
+          },
+          {
+            "name": "publish_time",
+            "type": "u64"
+          },
+          {
+            "name": "confidence",
+            "type": "u64"
+          },
+          {
+            "name": "exponent",
+            "type": "i32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolRoles",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "emergency_void_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "config_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "upgrade_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolState",
+      "docs": [
+        "Global protocol controls and role registry."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "emergency_void_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "config_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "upgrade_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_new_matches",
+            "type": "bool"
+          },
+          {
+            "name": "pause_settlement",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RegisterDefaultPolicyArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "policy_tag",
+            "type": "u8"
+          },
+          {
+            "name": "ed25519_ix_index",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RegisterPredictionCommitmentArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "seal_seq",
+            "type": "u64"
+          },
+          {
+            "name": "commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ed25519_ix_index",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReturnDto",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RevealedPrediction",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "prediction",
+            "type": "i64"
+          },
+          {
+            "name": "blinding",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatAccount",
+      "docs": [
+        "One player's seat in a match. `payout` is written during verified settlement; the",
+        "player then `claim`s it (pull-based, idempotent via `claimed`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "deposit",
+            "type": "u64"
+          },
+          {
+            "name": "entry_fee_paid",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatIndexAccount",
+      "docs": [
+        "One PDA per occupied seat index, preventing duplicate seat numbers in a match."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatMeta",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "default_policy",
+            "type": {
+              "defined": {
+                "name": "OnChainDefaultPolicy"
+              }
+            }
+          },
+          {
+            "name": "default_set",
+            "type": "bool"
+          },
+          {
+            "name": "prediction_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "seal_seq",
+            "type": "u64"
+          },
+          {
+            "name": "commitment_set",
+            "type": "bool"
+          },
+          {
+            "name": "occupied",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SetButtonSeedArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vrf_seed",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "vrf_proof_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettleArgs",
+      "docs": [
+        "Settlement args — player states come from the on-chain action-log replay, not from trust."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vrf_seed",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "oracle_price",
+            "type": {
+              "defined": {
+                "name": "OraclePriceDto"
+              }
+            }
+          },
+          {
+            "name": "claimed",
+            "type": {
+              "defined": {
+                "name": "ClaimedResult"
+              }
+            }
+          },
+          {
+            "name": "revealed",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "RevealedPrediction"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
 }
