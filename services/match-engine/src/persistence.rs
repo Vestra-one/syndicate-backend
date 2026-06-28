@@ -113,17 +113,14 @@ impl PostgresMatchStore {
         let row = client
             .query_opt(
                 ACQUIRE_MATCH_LEASE_SQL,
-                &[
-                    &match_uuid,
-                    &owner_id,
-                    &now,
-                    &(ttl_ms as i64),
-                ],
+                &[&match_uuid, &owner_id, &now, &(ttl_ms as i64)],
             )
             .await
             .map_err(map_pg)?;
         let Some(row) = row else {
-            return Err(PersistenceError::Invalid("lease held by another node".into()));
+            return Err(PersistenceError::Invalid(
+                "lease held by another node".into(),
+            ));
         };
         let fencing_token: i64 = row.get("owner_fencing_token");
         let expires_at: chrono::DateTime<chrono::Utc> = row.get("owner_lease_expires_at");
@@ -511,31 +508,31 @@ pub fn parse_persisted_event(payload: &Value) -> Result<EngineLogEvent, Persiste
                 }
             }
             Ok(EngineLogEvent::PlayerAction {
-            intent: SignedActionIntent {
-                seat_index: payload
-                    .get("seat_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize,
-                wallet: payload
-                    .get("wallet")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                nonce: payload.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0),
-                prev_head,
-                signature: payload
-                    .get("signature")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                action: parse_action(
-                    payload
-                        .get("action")
+                intent: SignedActionIntent {
+                    seat_index: payload
+                        .get("seat_index")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
+                    wallet: payload
+                        .get("wallet")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("Fold"),
-                ),
-            },
-        })
+                        .unwrap_or_default()
+                        .to_string(),
+                    nonce: payload.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0),
+                    prev_head,
+                    signature: payload
+                        .get("signature")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    action: parse_action(
+                        payload
+                            .get("action")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Fold"),
+                    ),
+                },
+            })
         }
         "default.registered" => Ok(EngineLogEvent::DefaultPolicyRegistered {
             policy: SignedDefaultPolicy {

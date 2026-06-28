@@ -1,7 +1,7 @@
 //! Canonical signed-intent message bytes — shared by off-chain verifier, on-chain
 //! program, and frontend (reproduce in TypeScript).
 
-use crate::{Price};
+use crate::Price;
 
 pub const DOMAIN_ACTION: &[u8] = b"syndicate/action/v1";
 pub const DOMAIN_DEFAULT: &[u8] = b"syndicate/default/v1";

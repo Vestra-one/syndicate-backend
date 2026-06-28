@@ -9,7 +9,9 @@
 use std::collections::BTreeMap;
 
 use syndicate_engine::{Action, Engine};
-use syndicate_settlement::{finalize, seal_binding_for, settle_match, Applied, MockSubmitter, Outcome, SettleParams};
+use syndicate_settlement::{
+    finalize, seal_binding_for, settle_match, Applied, MockSubmitter, Outcome, SettleParams,
+};
 use syndicate_shared::{PlayerId, VerifiedOraclePrice};
 use syndicate_timelock::{MockScheme, RoundKey, SealRegistry, TimelockScheme};
 

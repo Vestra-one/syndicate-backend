@@ -58,10 +58,12 @@ impl LeaseAuthorizer for PostgresLeaseCoordinator {
 fn map_persistence(err: PersistenceError) -> MatchServiceError {
     match err {
         PersistenceError::Service(e) => e,
-        PersistenceError::Invalid(msg) if msg.contains("lease held") => MatchServiceError::LeaseHeld {
-            owner_id: "other".into(),
-            expires_at_ms: 0,
-        },
+        PersistenceError::Invalid(msg) if msg.contains("lease held") => {
+            MatchServiceError::LeaseHeld {
+                owner_id: "other".into(),
+                expires_at_ms: 0,
+            }
+        }
         _ => MatchServiceError::LeaseMismatch,
     }
 }

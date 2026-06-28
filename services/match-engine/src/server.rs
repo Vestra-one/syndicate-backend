@@ -36,8 +36,8 @@ impl EngineServerState {
     pub async fn from_env() -> Result<Self, String> {
         let database_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL required")?;
         let node_id = std::env::var("MATCH_ENGINE_NODE_ID").unwrap_or_else(|_| "engine-1".into());
-        let store = PostgresMatchStore::from_url(&database_url, &node_id)
-            .map_err(|e| e.to_string())?;
+        let store =
+            PostgresMatchStore::from_url(&database_url, &node_id).map_err(|e| e.to_string())?;
         let timelock_round = std::env::var("TIMELOCK_TARGET_ROUND")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -190,7 +190,9 @@ async fn timeout_loop(state: EngineServerState) {
             let Some(active) = guard.get_mut(&match_id) else {
                 continue;
             };
-            if active.runtime.engine().phase == Phase::Settlement || active.runtime.engine().is_complete() {
+            if active.runtime.engine().phase == Phase::Settlement
+                || active.runtime.engine().is_complete()
+            {
                 continue;
             }
             let Some(to_act) = active.runtime.engine().to_act else {
@@ -215,7 +217,8 @@ async fn timeout_loop(state: EngineServerState) {
                 .await
                 .is_ok()
             {
-                active.action_deadline_ms = now.saturating_add(active.runtime.config().action_timeout_ms);
+                active.action_deadline_ms =
+                    now.saturating_add(active.runtime.config().action_timeout_ms);
                 let payload = state_payload(&state, &match_id, &active.runtime);
                 drop(coord);
                 state.publisher.publish(&match_id, &payload).await;
@@ -335,7 +338,11 @@ async fn start_match(state: &EngineServerState, body: &str) -> (&'static str, St
     }
 }
 
-async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> (&'static str, String) {
+async fn apply_action(
+    state: &EngineServerState,
+    match_id: &str,
+    body: &str,
+) -> (&'static str, String) {
     let input: ActionBody = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
@@ -361,10 +368,17 @@ async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> 
         let now = now_ms();
         if active
             .runtime
-            .register_default_policy(&crate::service::InMemoryLeaseCoordinator::new(), now, signed)
+            .register_default_policy(
+                &crate::service::InMemoryLeaseCoordinator::new(),
+                now,
+                signed,
+            )
             .is_err()
         {
-            return ("409 Conflict", r#"{"error":"default registration failed"}"#.into());
+            return (
+                "409 Conflict",
+                r#"{"error":"default registration failed"}"#.into(),
+            );
         }
         return ("200 OK", r#"{"ok":true}"#.into());
     }
@@ -374,8 +388,8 @@ async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> 
         Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
     };
     let seat_index = input.seat_index.unwrap_or(0) as usize;
-    let prev_head = parse_head_hex(input.prev_head_hex.as_deref())
-        .unwrap_or_else(|| active.runtime.head());
+    let prev_head =
+        parse_head_hex(input.prev_head_hex.as_deref()).unwrap_or_else(|| active.runtime.head());
     let intent = SignedActionIntent {
         seat_index,
         wallet: input.wallet,
@@ -388,20 +402,30 @@ async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> 
     let now = now_ms();
     let mut coord = state.coordinator.lock().await;
     if let Some(coordinator) = coord.as_mut() {
-        match coordinator.apply_action(&mut active.runtime, now, intent).await {
+        match coordinator
+            .apply_action(&mut active.runtime, now, intent)
+            .await
+        {
             Ok(_) => {
-                active.action_deadline_ms = now.saturating_add(active.runtime.config().action_timeout_ms);
+                active.action_deadline_ms =
+                    now.saturating_add(active.runtime.config().action_timeout_ms);
                 let payload = state_payload(state, match_id, &active.runtime);
                 let to_act = active.runtime.engine().to_act;
                 drop(coord);
                 drop(runtimes);
                 state.publisher.publish(match_id, &payload).await;
                 if let Some(seat) = to_act {
-                    state.publisher.publish(match_id, &serde_json::json!({
-                        "type": "yourTurn",
-                        "matchId": match_id,
-                        "seatIndex": seat,
-                    })).await;
+                    state
+                        .publisher
+                        .publish(
+                            match_id,
+                            &serde_json::json!({
+                                "type": "yourTurn",
+                                "matchId": match_id,
+                                "seatIndex": seat,
+                            }),
+                        )
+                        .await;
                 }
                 return ("200 OK", r#"{"ok":true}"#.into());
             }
@@ -415,7 +439,8 @@ async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> 
         intent,
     ) {
         Ok(_) => {
-            active.action_deadline_ms = now.saturating_add(active.runtime.config().action_timeout_ms);
+            active.action_deadline_ms =
+                now.saturating_add(active.runtime.config().action_timeout_ms);
             let payload = state_payload(state, match_id, &active.runtime);
             drop(runtimes);
             state.publisher.publish(match_id, &payload).await;
@@ -425,7 +450,11 @@ async fn apply_action(state: &EngineServerState, match_id: &str, body: &str) -> 
     }
 }
 
-async fn seal_match(state: &EngineServerState, match_id: &str, body: &str) -> (&'static str, String) {
+async fn seal_match(
+    state: &EngineServerState,
+    match_id: &str,
+    body: &str,
+) -> (&'static str, String) {
     let input: SealBody = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
@@ -465,10 +494,16 @@ async fn seal_match(state: &EngineServerState, match_id: &str, body: &str) -> (&
             .await
             .is_ok()
         {
-            state.publisher.publish(match_id, &serde_json::json!({
-                "type": "matchState",
-                "state": { "matchId": match_id, "phase": "SEALING" }
-            })).await;
+            state
+                .publisher
+                .publish(
+                    match_id,
+                    &serde_json::json!({
+                        "type": "matchState",
+                        "state": { "matchId": match_id, "phase": "SEALING" }
+                    }),
+                )
+                .await;
             return ("200 OK", r#"{"ok":true}"#.into());
         }
     }
@@ -534,7 +569,11 @@ fn demo_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
     build_config(input, players)
 }
 
-fn state_payload(state: &EngineServerState, match_id: &str, runtime: &FencedMatchRuntime) -> serde_json::Value {
+fn state_payload(
+    state: &EngineServerState,
+    match_id: &str,
+    runtime: &FencedMatchRuntime,
+) -> serde_json::Value {
     let engine = runtime.engine();
     serde_json::json!({
         "type": "matchState",
@@ -550,16 +589,15 @@ fn state_payload(state: &EngineServerState, match_id: &str, runtime: &FencedMatc
 }
 
 fn engine_pot(engine: &syndicate_engine_core::Engine) -> u64 {
-    engine
-        .seats
-        .iter()
-        .map(|s| s.total_contribution)
-        .sum()
+    engine.seats.iter().map(|s| s.total_contribution).sum()
 }
 
 fn parse_action(v: Option<&serde_json::Value>) -> Result<Action, &'static str> {
     let v = v.ok_or("action required")?;
-    let t = v.get("type").and_then(|x| x.as_str()).ok_or("action.type required")?;
+    let t = v
+        .get("type")
+        .and_then(|x| x.as_str())
+        .ok_or("action.type required")?;
     Ok(match t {
         "fold" => Action::Fold,
         "check" => Action::Check,

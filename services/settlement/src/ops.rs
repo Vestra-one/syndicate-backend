@@ -1346,11 +1346,7 @@ pub mod net {
                     .map(|r| RevealedWire {
                         seat_index: r.seat_index,
                         prediction: r.prediction.to_string(),
-                        blinding_hex: r
-                            .blinding
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect(),
+                        blinding_hex: r.blinding.iter().map(|b| format!("{b:02x}")).collect(),
                     })
                     .collect(),
                 oracle_price: OracleUpdateWire {
@@ -1747,7 +1743,10 @@ mod tests {
         let mut bindings = BTreeMap::new();
         for (id, pred) in [(0u16, 100_010i128), (1, 99_000), (2, 100_500)] {
             let blinding = [(id + 1) as u8; 32];
-            bindings.insert(syndicate_shared::PlayerId(id), seal_binding_for(pred, blinding));
+            bindings.insert(
+                syndicate_shared::PlayerId(id),
+                seal_binding_for(pred, blinding),
+            );
         }
         match settle_match(
             &engine,

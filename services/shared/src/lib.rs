@@ -30,15 +30,15 @@ pub use intent::{
     DOMAIN_DEFAULT, DOMAIN_PREDICTION,
 };
 
+pub use events::{
+    DepositConfirmed, FormationBootstrapped, FormationDissolved, MatchStarted, ProfileDelta,
+    StartPolicyAction, StartPolicyResult, StartPolicyTrigger, StartPolicyTriggered,
+    EVENT_SCHEMA_VERSION,
+};
 pub use oracle::{
     first_valid_oracle_update, validate_oracle_update, FeedId, OraclePriceUpdate, OracleValidation,
     VerifiedOraclePrice,
 };
 pub use pots::{build_pots, Pot, PotLayout};
 pub use settle::{settle, verify_settlement, Award, SettleInput, SettleResult};
-pub use events::{
-    DepositConfirmed, FormationBootstrapped, FormationDissolved, MatchStarted, ProfileDelta,
-    StartPolicyAction, StartPolicyResult, StartPolicyTriggered, StartPolicyTrigger,
-    EVENT_SCHEMA_VERSION,
-};
 pub use types::{Chips, CoreError, PlayerId, PlayerState, Price};

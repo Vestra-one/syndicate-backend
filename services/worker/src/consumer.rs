@@ -132,7 +132,9 @@ where
     if matches!(job.outcome, Outcome::Settled(_)) {
         if let Err(e) = sync_action_log_for_job(pool, chain, &job).await {
             message
-                .ack_with(async_nats::jetstream::AckKind::Nak(Some(Duration::from_secs(30))))
+                .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+                    Duration::from_secs(30),
+                )))
                 .await
                 .map_err(|e| format!("{e:?}"))?;
             return Err(e);

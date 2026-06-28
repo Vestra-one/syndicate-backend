@@ -290,7 +290,9 @@ impl FencedMatchRuntime {
         leases.assert_current(&self.lease, now_ms)?;
         self.validate_default_policy(&policy)?;
         if self.registered_defaults.contains_key(&policy.seat_index) {
-            return Err(MatchServiceError::InvalidIntent("default policy already registered"));
+            return Err(MatchServiceError::InvalidIntent(
+                "default policy already registered",
+            ));
         }
         self.registered_defaults
             .insert(policy.seat_index, policy.clone());
@@ -325,10 +327,12 @@ impl FencedMatchRuntime {
         if seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));
         }
-        let registered = self
-            .registered_defaults
-            .get(&seat_index)
-            .ok_or(MatchServiceError::InvalidIntent("no registered default policy"))?;
+        let registered =
+            self.registered_defaults
+                .get(&seat_index)
+                .ok_or(MatchServiceError::InvalidIntent(
+                    "no registered default policy",
+                ))?;
         if registered.policy != default {
             return Err(MatchServiceError::InvalidIntent(
                 "timeout default does not match registered policy",
@@ -419,12 +423,17 @@ impl FencedMatchRuntime {
                         return Err(MatchServiceError::Replay("timeout before match start"));
                     };
                     if !registered_defaults.contains_key(seat_index) {
-                        return Err(MatchServiceError::Replay("timeout without registered default"));
+                        return Err(MatchServiceError::Replay(
+                            "timeout without registered default",
+                        ));
                     }
                     e.apply_timeout(*seat_index, *default)?;
                 }
                 EngineLogEvent::DefaultPolicyRegistered { policy } => {
-                    if !registered_defaults.insert(policy.seat_index, policy.clone()).is_none() {
+                    if !registered_defaults
+                        .insert(policy.seat_index, policy.clone())
+                        .is_none()
+                    {
                         return Err(MatchServiceError::Replay("duplicate default policy"));
                     }
                 }
@@ -549,7 +558,10 @@ impl FencedMatchRuntime {
         Ok(())
     }
 
-    fn validate_default_policy(&self, policy: &SignedDefaultPolicy) -> Result<(), MatchServiceError> {
+    fn validate_default_policy(
+        &self,
+        policy: &SignedDefaultPolicy,
+    ) -> Result<(), MatchServiceError> {
         if policy.seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));
         }

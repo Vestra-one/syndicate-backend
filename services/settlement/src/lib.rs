@@ -11,13 +11,13 @@
 //! actually submitting/ confirming the Solana tx, idempotent retry — is the network
 //! layer on top of this pure orchestration.
 
+use std::collections::BTreeMap;
 use syndicate_engine::Engine;
 use syndicate_shared::{
     intent::prediction_commitment_hash, settle, verify_settlement, Chips, CoreError, PlayerId,
     PlayerState, Price, SettleInput, SettleResult, VerifiedOraclePrice,
 };
 use syndicate_timelock::{RoundKey, SealRegistry, TimelockScheme};
-use std::collections::BTreeMap;
 
 pub mod ops;
 
@@ -395,7 +395,15 @@ mod tests {
             key: vec![1],
         };
         assert_eq!(
-            settle_match(&engine, None, &reg, &scheme, Some(&key), &params(), &seal_bindings()),
+            settle_match(
+                &engine,
+                None,
+                &reg,
+                &scheme,
+                Some(&key),
+                &params(),
+                &seal_bindings()
+            ),
             Outcome::Void(VoidReason::OracleDegraded)
         );
     }
@@ -406,7 +414,15 @@ mod tests {
         let scheme = MockScheme;
         let reg = sealed_registry(&scheme);
         assert_eq!(
-            settle_match(&engine, Some(good_oracle()), &reg, &scheme, None, &params(), &seal_bindings()),
+            settle_match(
+                &engine,
+                Some(good_oracle()),
+                &reg,
+                &scheme,
+                None,
+                &params(),
+                &seal_bindings()
+            ),
             Outcome::Void(VoidReason::TimelockUnavailable)
         );
     }

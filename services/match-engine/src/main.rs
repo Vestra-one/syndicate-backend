@@ -1,4 +1,4 @@
-use syndicate_engine::server::{EngineServerState, run};
+use syndicate_engine::server::{run, EngineServerState};
 
 #[tokio::main]
 async fn main() {

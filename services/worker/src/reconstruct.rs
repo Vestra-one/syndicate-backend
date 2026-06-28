@@ -321,7 +321,15 @@ pub async fn load_event_envelopes(
 fn seal_registry_from_events(
     envelopes: &[EventEnvelope],
     fallback_round: u64,
-) -> Result<(SealRegistry, u64, BTreeSet<u16>, BTreeMap<syndicate_shared::PlayerId, SealBinding>), ReconstructError> {
+) -> Result<
+    (
+        SealRegistry,
+        u64,
+        BTreeSet<u16>,
+        BTreeMap<syndicate_shared::PlayerId, SealBinding>,
+    ),
+    ReconstructError,
+> {
     let mut completed_round = if fallback_round == 0 {
         None
     } else {

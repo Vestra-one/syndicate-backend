@@ -281,13 +281,13 @@ fn read_secret_file(name: &str, path: &str) -> String {
 }
 
 mod demo {
+    use std::collections::BTreeMap;
     use syndicate_engine::{Action, Engine};
     use syndicate_settlement::ops::{
         PythFetchRequest, PythSelectedProof, PythSettlementContext, SettlementJob,
         SolanaMatchContext,
     };
     use syndicate_settlement::{seal_binding_for, settle_match, Outcome, SettleParams};
-    use std::collections::BTreeMap;
     use syndicate_shared::{PlayerId, VerifiedOraclePrice};
     use syndicate_timelock::{MockScheme, RoundKey, SealRegistry, TimelockScheme};
 

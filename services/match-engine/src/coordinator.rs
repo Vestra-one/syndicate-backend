@@ -115,7 +115,13 @@ impl MatchCoordinator {
         deadline_ms: u64,
     ) -> Result<(), CoordinatorError> {
         let envelope = runtime
-            .apply_timeout_default(&self.memory_leases, now_ms, seat_index, default, deadline_ms)?
+            .apply_timeout_default(
+                &self.memory_leases,
+                now_ms,
+                seat_index,
+                default,
+                deadline_ms,
+            )?
             .clone();
         self.store.append_event(runtime, &envelope).await?;
         if runtime.engine().is_complete() {

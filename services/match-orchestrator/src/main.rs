@@ -141,11 +141,7 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
-    let body = request
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .trim();
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("").trim();
 
     if path == "/healthz" {
         return ("200 OK", r#"{"ok":true}"#.into());
@@ -190,7 +186,10 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                     }
                 }
                 Ok(resp) if cfg.stub_mode => {
-                    eprintln!("orchestrator stub: create-match returned HTTP {}", resp.status);
+                    eprintln!(
+                        "orchestrator stub: create-match returned HTTP {}",
+                        resp.status
+                    );
                 }
                 Ok(resp) => {
                     return (
@@ -238,7 +237,13 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             });
             if let Err(resp) = require_downstream(
                 cfg,
-                post_json(&cfg.settlement_chain, "/internal/solana/lock-match", &cfg.auth, lock_body).await,
+                post_json(
+                    &cfg.settlement_chain,
+                    "/internal/solana/lock-match",
+                    &cfg.auth,
+                    lock_body,
+                )
+                .await,
                 "lock-match",
             )
             .await
@@ -254,7 +259,13 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             });
             if let Err(resp) = require_downstream(
                 cfg,
-                post_json(&cfg.settlement_chain, "/internal/solana/set-button-seed", &cfg.auth, seed_body).await,
+                post_json(
+                    &cfg.settlement_chain,
+                    "/internal/solana/set-button-seed",
+                    &cfg.auth,
+                    seed_body,
+                )
+                .await,
                 "set-button-seed",
             )
             .await
@@ -267,7 +278,13 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             });
             if let Err(resp) = require_downstream(
                 cfg,
-                post_json(&cfg.settlement_chain, "/internal/solana/begin-live", &cfg.auth, live_body).await,
+                post_json(
+                    &cfg.settlement_chain,
+                    "/internal/solana/begin-live",
+                    &cfg.auth,
+                    live_body,
+                )
+                .await,
                 "begin-live",
             )
             .await
@@ -300,7 +317,13 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             });
             if let Err(resp) = require_downstream(
                 cfg,
-                post_json(&cfg.match_engine, "/internal/matches/start", &cfg.auth, start_body).await,
+                post_json(
+                    &cfg.match_engine,
+                    "/internal/matches/start",
+                    &cfg.auth,
+                    start_body,
+                )
+                .await,
                 "match-engine start",
             )
             .await
@@ -314,7 +337,13 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             });
             if let Err(resp) = require_downstream(
                 cfg,
-                post_json(&cfg.settlement_chain, "/internal/solana/void-match", &cfg.auth, void_body).await,
+                post_json(
+                    &cfg.settlement_chain,
+                    "/internal/solana/void-match",
+                    &cfg.auth,
+                    void_body,
+                )
+                .await,
                 "void-match",
             )
             .await

@@ -22,9 +22,14 @@ pub fn decode_wallet_pubkey(wallet: &str) -> Result<[u8; 32], VerifyError> {
     Ok(out)
 }
 
-pub fn verify_ed25519(wallet: &str, message: &[u8], signature_b64: &str) -> Result<(), VerifyError> {
+pub fn verify_ed25519(
+    wallet: &str,
+    message: &[u8],
+    signature_b64: &str,
+) -> Result<(), VerifyError> {
     let pk_bytes = decode_wallet_pubkey(wallet)?;
-    let verifying_key = VerifyingKey::from_bytes(&pk_bytes).map_err(|_| VerifyError::InvalidWallet)?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&pk_bytes).map_err(|_| VerifyError::InvalidWallet)?;
     let sig_bytes = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         signature_b64.trim(),
@@ -70,7 +75,8 @@ pub fn verify_default_policy(
     policy_tag: u8,
 ) -> Result<(), VerifyError> {
     let pk = decode_wallet_pubkey(wallet)?;
-    let msg = intent::default_policy_message(match_id, onchain_match_id, seat_index, &pk, policy_tag);
+    let msg =
+        intent::default_policy_message(match_id, onchain_match_id, seat_index, &pk, policy_tag);
     verify_ed25519(wallet, &msg, signature_b64)
 }
 
@@ -112,15 +118,26 @@ mod tests {
         let (wallet, sk) = test_wallet();
         let pk = decode_wallet_pubkey(&wallet).unwrap();
         let head = [0u8; 32];
-        let msg = intent::action_intent_message(1, 42, 0, &pk, 1, &head, intent::ACTION_TAG_CALL, 0);
+        let msg =
+            intent::action_intent_message(1, 42, 0, &pk, 1, &head, intent::ACTION_TAG_CALL, 0);
         let sig = bs58::encode(sk.sign(&msg).to_bytes()).into_string();
         // use base64 for production path
         let sig_b64 = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
             sk.sign(&msg).to_bytes(),
         );
-        verify_action_intent(&wallet, &sig_b64, 1, 42, 0, 1, &head, intent::ACTION_TAG_CALL, 0)
-            .unwrap();
+        verify_action_intent(
+            &wallet,
+            &sig_b64,
+            1,
+            42,
+            0,
+            1,
+            &head,
+            intent::ACTION_TAG_CALL,
+            0,
+        )
+        .unwrap();
         let _ = sig;
     }
 }

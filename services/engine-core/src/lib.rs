@@ -105,7 +105,10 @@ impl Engine {
         big_blind: Chips,
         round_count: u8,
     ) -> Self {
-        assert!(players.len() >= 2 && players.len() <= MAX_SEATS, "2..=5 players");
+        assert!(
+            players.len() >= 2 && players.len() <= MAX_SEATS,
+            "2..=5 players"
+        );
         let n = players.len();
         let seats: Vec<Seat> = players
             .into_iter()
@@ -290,11 +293,7 @@ impl Engine {
                 id: s.id,
                 contribution: s.total_contribution,
                 folded: s.folded,
-                prediction: if s.folded {
-                    None
-                } else {
-                    prediction_of(s.id)
-                },
+                prediction: if s.folded { None } else { prediction_of(s.id) },
                 seal_seq: s.seal_seq,
             })
             .collect()
@@ -470,7 +469,10 @@ mod tests {
         e.apply(2, Action::Check).unwrap();
         let bytes = borsh::to_vec(&e).unwrap();
         let decoded: Engine = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(decoded.seats[0].total_contribution, e.seats[0].total_contribution);
+        assert_eq!(
+            decoded.seats[0].total_contribution,
+            e.seats[0].total_contribution
+        );
         assert_eq!(decoded.phase, e.phase);
     }
 }

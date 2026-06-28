@@ -116,8 +116,8 @@ pub async fn sync_action_log_for_job(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syndicate_engine::{Action, DefaultAction};
     use syndicate_engine::service::{EngineLogEvent, SignedActionIntent, SignedDefaultPolicy};
+    use syndicate_engine::{Action, DefaultAction};
 
     #[test]
     fn player_action_maps_to_sync_entry() {

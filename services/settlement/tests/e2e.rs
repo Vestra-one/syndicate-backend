@@ -15,7 +15,9 @@
 use std::collections::BTreeMap;
 
 use syndicate_engine::{Action, Engine};
-use syndicate_settlement::{seal_binding_for, settle_match, Outcome, SealBinding, SettleParams, VoidReason};
+use syndicate_settlement::{
+    seal_binding_for, settle_match, Outcome, SealBinding, SettleParams, VoidReason,
+};
 use syndicate_shared::{Award, PlayerId, VerifiedOraclePrice};
 use syndicate_timelock::{MockScheme, RoundKey, SealRegistry, TimelockScheme};
 
@@ -260,13 +262,29 @@ fn e2e_every_void_path() {
 
     // (b) oracle degraded (no samples) → VOID
     assert_eq!(
-        settle_match(&done, None, &reg, &scheme, Some(&key()), &params(), &empty_bindings()),
+        settle_match(
+            &done,
+            None,
+            &reg,
+            &scheme,
+            Some(&key()),
+            &params(),
+            &empty_bindings()
+        ),
         Outcome::Void(VoidReason::OracleDegraded)
     );
 
     // (c) time-lock key unavailable → VOID
     assert_eq!(
-        settle_match(&done, Some(good_oracle(1)), &reg, &scheme, None, &params(), &empty_bindings()),
+        settle_match(
+            &done,
+            Some(good_oracle(1)),
+            &reg,
+            &scheme,
+            None,
+            &params(),
+            &empty_bindings()
+        ),
         Outcome::Void(VoidReason::TimelockUnavailable)
     );
 
