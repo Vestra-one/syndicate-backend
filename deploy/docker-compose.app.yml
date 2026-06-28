@@ -147,7 +147,8 @@ services:
     ports:
       - "18790:8790"
     volumes:
-      - ./secrets:/etc/syndicate:ro
+      - ./secrets/settlement-chain.token:/etc/syndicate/settlement-chain.token:ro
+      - ./secrets/settlement-admin-keypair.json:/etc/syndicate/settlement-admin-keypair.json:ro
 
   settlement-worker:
     build:
@@ -174,7 +175,8 @@ services:
     ports:
       - "18084:8084"
     volumes:
-      - ./secrets:/etc/syndicate:ro
+      - ./secrets/settlement-chain.token:/etc/syndicate/settlement-chain.token:ro
+      - ./secrets/settlement-admin-keypair.json:/etc/syndicate/settlement-admin-keypair.json:ro
 volumes:
   action-feed-replays:
 

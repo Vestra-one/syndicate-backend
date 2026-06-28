@@ -90,6 +90,10 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
 
+networks:
+  default:
+    name: syndicate-localnet_default
+
 volumes:
   postgres-data:
   redis-data:
