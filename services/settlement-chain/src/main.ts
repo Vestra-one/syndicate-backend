@@ -9,6 +9,7 @@ import {
   redactSecrets,
   type PythCandidate,
 } from './pyth.ts';
+import { resolvePythStackFromEnv } from './pythStack.ts';
 import {
   anchorDiscriminator,
   buildEd25519VerifyInstruction,
@@ -58,6 +59,7 @@ type Config = {
   receiverProgramId: string;
   wormholeProgramId: string;
   pushOracleProgramId: string;
+  pythStack: string;
   confirmationTimeoutMs: number;
   computeUnitPriceMicroLamports: number;
   allowTwoStepFallback: boolean;
@@ -89,6 +91,8 @@ export function createServer(config: Config) {
           receiverProgramId: config.receiverProgramId,
           wormholeProgramId: config.wormholeProgramId,
           pushOracleProgramId: config.pushOracleProgramId,
+          pythStack: config.pythStack,
+          hermesUrl: config.hermesUrl,
         });
       }
       if (req.method === 'GET' && req.url === '/metrics') {
@@ -199,6 +203,7 @@ export function loadConfigFromEnv(): Config {
   const tokenPath = requiredEnv('SETTLEMENT_CHAIN_AUTH_TOKEN_FILE');
   const signerKeypairPath = requiredEnv('SETTLEMENT_SIGNER_KEYPAIR_PATH');
   const authToken = readSecret(tokenPath, 'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE');
+  const pythStack = resolvePythStackFromEnv(process.env);
   return {
     host: process.env.SETTLEMENT_CHAIN_HOST ?? '127.0.0.1',
     port: envInt('SETTLEMENT_CHAIN_PORT', 8790),
@@ -208,11 +213,12 @@ export function loadConfigFromEnv(): Config {
     secondaryRpcUrl: process.env.SOLANA_RPC_URL_SECONDARY || undefined,
     programId: requiredEnv('SYNDICATE_PROGRAM_ID'),
     chipsTokenMint: process.env.CHIPS_TOKEN_MINT ?? '',
-    hermesUrl: process.env.PYTH_HERMES_URL ?? DEFAULT_PYTH_HERMES_URL,
+    hermesUrl: pythStack.hermesUrl,
     pythApiKey: requiredEnv('PYTH_API_KEY'),
-    receiverProgramId: requiredEnv('PYTH_RECEIVER_PROGRAM_ID'),
-    wormholeProgramId: requiredEnv('PYTH_WORMHOLE_PROGRAM_ID'),
-    pushOracleProgramId: requiredEnv('PYTH_PUSH_ORACLE_PROGRAM_ID'),
+    receiverProgramId: pythStack.receiverProgramId,
+    wormholeProgramId: pythStack.wormholeProgramId,
+    pushOracleProgramId: pythStack.pushOracleProgramId,
+    pythStack: pythStack.stack,
     confirmationTimeoutMs: envInt('SETTLEMENT_CONFIRMATION_TIMEOUT_MS', 60_000),
     computeUnitPriceMicroLamports: envInt('SETTLEMENT_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS', 100_000),
     allowTwoStepFallback: envBool('PYTH_ALLOW_TWO_STEP_FALLBACK', true),
@@ -265,6 +271,18 @@ async function submitSettlement(config: Config, body: any) {
   const actionLog = accounts.actionLog;
   const seats = accounts.seats;
   const settlementArgs = encodeSettleArgsFromBundle(bundle);
+  const submitSettlementIx = (priceUpdateAccount: any) => new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+      { pubkey: protocol, isSigner: false, isWritable: false },
+      { pubkey: match, isSigner: false, isWritable: true },
+      { pubkey: actionLog, isSigner: false, isWritable: false },
+      { pubkey: priceUpdateAccount, isSigner: false, isWritable: false },
+      ...seats.map((seat) => ({ pubkey: seat, isSigner: false, isWritable: true })),
+    ],
+    data: Buffer.concat([discriminator('global:submit_settlement'), settlementArgs]),
+  });
   const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: false });
   await builder.addPostPriceUpdates(selected.priceUpdateData);
   let priceUpdateAccount: any = null;
@@ -272,18 +290,7 @@ async function submitSettlement(config: Config, body: any) {
     priceUpdateAccount = getPriceUpdateAccount(selected.feedIdHex);
     if (!priceUpdateAccount) throw new Error(`Pyth builder did not expose price update account for ${selected.feedIdHex}`);
     return [{
-      instruction: new TransactionInstruction({
-        programId,
-        keys: [
-          { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-          { pubkey: protocol, isSigner: false, isWritable: false },
-          { pubkey: match, isSigner: false, isWritable: true },
-          { pubkey: actionLog, isSigner: false, isWritable: false },
-          { pubkey: priceUpdateAccount, isSigner: false, isWritable: false },
-          ...seats.map((seat) => ({ pubkey: seat, isSigner: false, isWritable: true })),
-        ],
-        data: Buffer.concat([discriminator('global:submit_settlement'), settlementArgs]),
-      }),
+      instruction: submitSettlementIx(priceUpdateAccount),
       signers: [],
       computeUnits: envInt('SETTLEMENT_SUBMIT_COMPUTE_UNITS', 200_000),
     }];
@@ -299,13 +306,43 @@ async function submitSettlement(config: Config, body: any) {
   const signatures = [];
   let computeUnits = null;
   let transactionSize = null;
-  for (const [index, txWithSigners] of txs.entries()) {
-    const sent = await sendVersionedTx(connection, signer, txWithSigners, config.confirmationTimeoutMs);
+  let mode: 'atomic' | 'two_step' = txs.length === 1 ? 'atomic' : 'two_step';
+  if (txs.length === 1) {
+    const sent = await sendVersionedTx(connection, signer, txs[0], config.confirmationTimeoutMs);
     signatures.push(sent.signature);
-    if (index === txs.length - 1) {
-      computeUnits = sent.computeUnits;
-      transactionSize = sent.transactionSize;
+    computeUnits = sent.computeUnits;
+    transactionSize = sent.transactionSize;
+  } else {
+    for (const [index, txWithSigners] of txs.slice(0, -1).entries()) {
+      const sent = await sendVersionedTx(connection, signer, txWithSigners, config.confirmationTimeoutMs);
+      signatures.push(sent.signature);
+      if (index === txs.length - 2) {
+        computeUnits = sent.computeUnits;
+        transactionSize = sent.transactionSize;
+      }
     }
+    priceUpdateAccount = builder.getPriceUpdateAccount(selected.feedIdHex);
+    if (!priceUpdateAccount) {
+      throw new HttpError(422, `Pyth builder did not expose price update account for ${selected.feedIdHex} after posting`);
+    }
+    await assertPriceUpdateOwner(connection, priceUpdateAccount, config.receiverProgramId);
+    const submitTx = new (await import('@solana/web3.js')).Transaction().add(submitSettlementIx(priceUpdateAccount));
+    const latest = await connection.getLatestBlockhash('confirmed');
+    submitTx.feePayer = signer.publicKey;
+    submitTx.recentBlockhash = latest.blockhash;
+    submitTx.sign(signer);
+    const sim = await connection.simulateTransaction(submitTx);
+    if (sim.value.err) {
+      throw new HttpError(422, `submit_settlement simulation failed: ${JSON.stringify(sim.value.err)}`);
+    }
+    const signature = await connection.sendRawTransaction(submitTx.serialize(), {
+      skipPreflight: false,
+      preflightCommitment: 'processed',
+    });
+    await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
+    signatures.push(signature);
+    computeUnits = sim.value.unitsConsumed ?? computeUnits;
+    transactionSize = submitTx.serialize().length;
   }
   const txSig = signatures[signatures.length - 1];
   if (config.secondaryRpcUrl) await verifyOnSecondary(config, txSig);
@@ -323,7 +360,8 @@ async function submitSettlement(config: Config, body: any) {
     computeUnits,
     transactionSize,
     transactionCount: txs.length,
-    mode: txs.length === 1 ? 'atomic' : 'two_step',
+    mode,
+    pythStack: config.pythStack,
   };
 }
 
@@ -648,6 +686,16 @@ function assertBundleMatchesSelected(bundle: any, selected: PythCandidate) {
   }
   if (Number(field(oracle, 'exponent')) !== selected.exponent) {
     throw new HttpError(422, 'bundle oracle exponent does not match selected Pyth proof');
+  }
+}
+
+async function assertPriceUpdateOwner(connection: any, priceUpdateAccount: any, expectedReceiverProgramId: string) {
+  const { PublicKey } = await import('@solana/web3.js');
+  const account = await connection.getAccountInfo(priceUpdateAccount);
+  if (!account) throw new HttpError(422, `Pyth price update account ${priceUpdateAccount.toBase58()} not found`);
+  const expected = new PublicKey(expectedReceiverProgramId);
+  if (!account.owner.equals(expected)) {
+    throw new HttpError(422, `Pyth price update owner ${account.owner.toBase58()} != ${expected.toBase58()}`);
   }
 }
 

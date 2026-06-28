@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { HermesClient } from '@pythnetwork/hermes-client';
+import { DEFAULT_PYTH_HERMES_URL } from './pythStack.ts';
 
+export { DEFAULT_PYTH_HERMES_URL, PYTH_HERMES_CORE_URL, PYTH_HERMES_UPGRADED_URL } from './pythStack.ts';
 export const PYTH_UNAVAILABLE_MESSAGE = 'Pyth Oracle price for settlement is unavailable.';
-export const DEFAULT_PYTH_HERMES_URL = 'https://pyth.dourolabs.app/hermes';
 
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
@@ -44,12 +46,31 @@ export function buildHermesTimestampUrl(baseUrl: string, publishTime: number, fe
   return url.toString();
 }
 
+export function createHermesClient({
+  hermesUrl = DEFAULT_PYTH_HERMES_URL,
+  apiKey,
+  timeoutMs = 5_000,
+  httpRetries = 3,
+}: {
+  hermesUrl?: string;
+  apiKey: string;
+  timeoutMs?: number;
+  httpRetries?: number;
+}): HermesClient {
+  if (!apiKey) throw new Error('PYTH_API_KEY is required for Pyth settlement');
+  return new HermesClient(hermesUrl, {
+    accessToken: apiKey,
+    timeout: timeoutMs,
+    httpRetries,
+  });
+}
+
 export async function fetchEarliestValidPythUpdate({
   hermesUrl = DEFAULT_PYTH_HERMES_URL,
   apiKey,
   rules,
   timeoutMs = 5_000,
-  fetchImpl = fetch,
+  fetchImpl,
 }: {
   hermesUrl?: string;
   apiKey: string;
@@ -60,21 +81,33 @@ export async function fetchEarliestValidPythUpdate({
   if (!apiKey) throw new Error('PYTH_API_KEY is required for Pyth settlement');
   const normalized = normalizeRules(rules);
   const candidates: PythCandidate[] = [];
-  for (let ts = normalized.scheduledEndTs; ts <= normalized.windowEndTs; ts += 1) {
-    const url = buildHermesTimestampUrl(hermesUrl, ts, normalized.feedIdHex);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetchImpl(url, {
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
-      if (!response.ok) throw new Error(`Hermes HTTP ${response.status}`);
-      const json = await response.json();
-      candidates.push(...extractHermesCandidates(json, ts, hermesUrl));
-    } finally {
-      clearTimeout(timeout);
+  if (fetchImpl) {
+    for (let ts = normalized.scheduledEndTs; ts <= normalized.windowEndTs; ts += 1) {
+      const url = buildHermesTimestampUrl(hermesUrl, ts, normalized.feedIdHex);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetchImpl(url, {
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        if (!response.ok) throw new Error(`Hermes HTTP ${response.status}`);
+        const json = await response.json();
+        candidates.push(...extractHermesCandidates(json, ts, hermesUrl));
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+    return selectEarliestValidPythUpdate(candidates, normalized);
+  }
+  const client = createHermesClient({ hermesUrl, apiKey, timeoutMs });
+  for (let ts = normalized.scheduledEndTs; ts <= normalized.windowEndTs; ts += 1) {
+    const response = await client.getPriceUpdatesAtTimestamp(
+      ts,
+      [normalized.feedIdHex],
+      { encoding: 'hex', parsed: true },
+    );
+    candidates.push(...extractHermesCandidates(response, ts, hermesUrl));
   }
   return selectEarliestValidPythUpdate(candidates, normalized);
 }

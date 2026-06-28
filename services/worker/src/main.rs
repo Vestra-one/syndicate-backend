@@ -217,7 +217,6 @@ fn production_preflight() -> ProductionRuntime {
     let chain_url = required_env("SETTLEMENT_CHAIN_URL");
     let auth_token_file = required_env("SETTLEMENT_CHAIN_AUTH_TOKEN_FILE");
     let auth_token = read_secret_file("SETTLEMENT_CHAIN_AUTH_TOKEN_FILE", &auth_token_file);
-    required_env("PYTH_HERMES_URL");
     let _pyth_api_key = std::env::var("PYTH_API_KEY")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -229,9 +228,7 @@ fn production_preflight() -> ProductionRuntime {
         .unwrap_or_else(|| panic!("missing PYTH_API_KEY or PYTH_API_KEY_FILE"));
     required_env("SOLANA_RPC_URL_PRIMARY");
     required_env("SYNDICATE_PROGRAM_ID");
-    required_env("PYTH_RECEIVER_PROGRAM_ID");
-    required_env("PYTH_WORMHOLE_PROGRAM_ID");
-    required_env("PYTH_PUSH_ORACLE_PROGRAM_ID");
+    require_pyth_receiver_env();
     required_env("SETTLEMENT_SIGNER_KEYPAIR_PATH");
     let timelock = DrandTimelockOpenClient::from_env()
         .unwrap_or_else(|e| panic!("drand timelock preflight failed: {e}"));
@@ -263,6 +260,24 @@ fn production_preflight() -> ProductionRuntime {
         database_url,
         bus_config: SettlementBusConfig::from_env(),
     }
+}
+
+fn require_pyth_receiver_env() {
+    let stack = std::env::var("PYTH_RECEIVER_STACK")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("SYNDICATE_PYTH_RECEIVER_STACK")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        });
+    if stack.is_some() {
+        return;
+    }
+    required_env("PYTH_HERMES_URL");
+    required_env("PYTH_RECEIVER_PROGRAM_ID");
+    required_env("PYTH_WORMHOLE_PROGRAM_ID");
+    required_env("PYTH_PUSH_ORACLE_PROGRAM_ID");
 }
 
 fn required_env(name: &str) -> String {

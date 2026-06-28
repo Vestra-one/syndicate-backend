@@ -25,7 +25,7 @@ test('Hermes timestamp URL construction uses v2 timestamp endpoint', () => {
   const url = buildHermesTimestampUrl(DEFAULT_PYTH_HERMES_URL, 1_715_000_000, FEED);
   assert.equal(
     url,
-    'https://pyth.dourolabs.app/hermes/v2/updates/price/1715000000?ids%5B%5D=0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace&encoding=hex&parsed=true',
+    'https://hermes.pyth.network/v2/updates/price/1715000000?ids%5B%5D=0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace&encoding=hex&parsed=true',
   );
 });
 

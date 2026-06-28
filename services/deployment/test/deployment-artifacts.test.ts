@@ -37,7 +37,9 @@ test('phase 8 env template includes settlement and observability controls', asyn
     'DATABASE_URL',
     'NATS_URL',
     'SOLANA_RPC_URL_PRIMARY',
+    'PYTH_HERMES_URL',
     'PYTH_API_KEY',
+    'PYTH_RECEIVER_STACK',
     'SYNDICATE_PROGRAM_ID',
     'SETTLEMENT_WORKER_MODE=production',
     'SETTLEMENT_CHAIN_URL',
@@ -87,14 +89,13 @@ test('Pyth receiver services patch upstream ESM packaging during install', async
   assert.match(devnetHarness, /patch-pyth-solana-utils-esm\.mjs/);
 });
 
-test('devnet and mainnet preflights require runtime settlement secrets and Pyth ids', async () => {
+test('devnet and mainnet preflights accept PYTH_RECEIVER_STACK or explicit Pyth ids', async () => {
   const devnet = await text('scripts/deploy-devnet.sh');
   const mainnet = await text('scripts/deploy-mainnet.sh');
+  assert.match(devnet, /PYTH_RECEIVER_STACK/);
+  assert.match(mainnet, /PYTH_RECEIVER_STACK/);
   for (const key of [
-    'PYTH_HERMES_URL',
-    'PYTH_RECEIVER_PROGRAM_ID',
-    'PYTH_WORMHOLE_PROGRAM_ID',
-    'PYTH_PUSH_ORACLE_PROGRAM_ID',
+    'PYTH_API_KEY',
     'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE',
     'SETTLEMENT_SIGNER_KEYPAIR_PATH',
   ]) {
@@ -104,4 +105,11 @@ test('devnet and mainnet preflights require runtime settlement secrets and Pyth 
   for (const key of ['DRAND_API', 'DRAND_CHAIN_HASH', 'DRAND_EXPECTED_SCHEME_ID']) {
     assert.match(mainnet, new RegExp(`\\b${key}\\b`));
   }
+});
+
+test('canonical pyth-stack manifest is shared across services', async () => {
+  const manifest = JSON.parse(await text('services/settlement-chain/pyth-stack.json'));
+  assert.equal(manifest.stacks.legacy.receiverProgramId, 'rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ');
+  assert.equal(manifest.stacks.upgraded.receiverProgramId, 'rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp');
+  assert.equal(manifest.hermes.core, 'https://hermes.pyth.network');
 });

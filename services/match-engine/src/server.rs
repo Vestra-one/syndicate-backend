@@ -13,8 +13,8 @@ use crate::coordinator::MatchCoordinator;
 use crate::persistence::PostgresMatchStore;
 use crate::redis_pub::MatchEventPublisher;
 use crate::service::{
-    FencedMatchRuntime, MatchConfig, SignedActionIntent, SignedDefaultPolicy,
-    SignedPredictionCommitment,
+    FencedMatchRuntime, InMemoryLeaseCoordinator, MatchConfig, SignedActionIntent,
+    SignedDefaultPolicy, SignedPredictionCommitment,
 };
 use crate::{Action, DefaultAction, Phase};
 use syndicate_shared::PlayerId;
@@ -23,6 +23,8 @@ use syndicate_shared::PlayerId;
 pub struct EngineServerState {
     coordinator: Arc<Mutex<Option<MatchCoordinator>>>,
     runtimes: Arc<Mutex<HashMap<String, ActiveMatch>>>,
+    /// In-memory leases for demo mode (no Postgres coordinator).
+    memory_leases: Arc<Mutex<InMemoryLeaseCoordinator>>,
     publisher: MatchEventPublisher,
     node_id: String,
 }
@@ -53,6 +55,7 @@ impl EngineServerState {
         Ok(Self {
             coordinator: Arc::new(Mutex::new(Some(coordinator))),
             runtimes: Arc::new(Mutex::new(HashMap::new())),
+            memory_leases: Arc::new(Mutex::new(InMemoryLeaseCoordinator::new())),
             publisher: MatchEventPublisher::from_env(),
             node_id,
         })
@@ -62,7 +65,8 @@ impl EngineServerState {
         Self {
             coordinator: Arc::new(Mutex::new(None)),
             runtimes: Arc::new(Mutex::new(HashMap::new())),
-            publisher: MatchEventPublisher::disabled(),
+            memory_leases: Arc::new(Mutex::new(InMemoryLeaseCoordinator::new())),
+            publisher: MatchEventPublisher::from_env(),
             node_id: "demo".into(),
         }
     }
@@ -276,15 +280,26 @@ async fn start_match(state: &EngineServerState, body: &str) -> (&'static str, St
         let mut runtimes = state.runtimes.lock().await;
         let players = input.players.clone().unwrap_or_default();
         let config = demo_config(&input, &players);
-        let runtime = FencedMatchRuntime::start(
-            config,
-            crate::service::MatchLease {
-                match_id: input.match_id.clone(),
-                owner_id: state.node_id.clone(),
-                fencing_token: 1,
-                expires_at_ms: now_ms() + 60_000,
-            },
-        );
+        let now = now_ms();
+        let lease = match state
+            .memory_leases
+            .lock()
+            .await
+            .acquire(
+                input.match_id.clone(),
+                state.node_id.clone(),
+                now,
+                config.lease_ttl_ms,
+            ) {
+            Ok(lease) => lease,
+            Err(e) => {
+                return (
+                    "409 Conflict",
+                    format!(r#"{{"error":"demo lease: {e:?}"}}"#),
+                );
+            }
+        };
+        let runtime = FencedMatchRuntime::start(config, lease);
         runtimes.insert(
             input.match_id.clone(),
             ActiveMatch {
@@ -369,7 +384,7 @@ async fn apply_action(
         if active
             .runtime
             .register_default_policy(
-                &crate::service::InMemoryLeaseCoordinator::new(),
+                &*state.memory_leases.lock().await,
                 now,
                 signed,
             )
@@ -433,17 +448,28 @@ async fn apply_action(
         }
     }
 
-    match active.runtime.apply_signed_action(
-        &crate::service::InMemoryLeaseCoordinator::new(),
-        now,
-        intent,
-    ) {
+    let leases = state.memory_leases.lock().await;
+    match active.runtime.apply_signed_action(&*leases, now, intent) {
         Ok(_) => {
             active.action_deadline_ms =
                 now.saturating_add(active.runtime.config().action_timeout_ms);
             let payload = state_payload(state, match_id, &active.runtime);
+            let to_act = active.runtime.engine().to_act;
             drop(runtimes);
             state.publisher.publish(match_id, &payload).await;
+            if let Some(seat) = to_act {
+                state
+                    .publisher
+                    .publish(
+                        match_id,
+                        &serde_json::json!({
+                            "type": "yourTurn",
+                            "matchId": match_id,
+                            "seatIndex": seat,
+                        }),
+                    )
+                    .await;
+            }
             ("200 OK", r#"{"ok":true}"#.into())
         }
         Err(e) => ("409 Conflict", format!(r#"{{"error":"{e:?}"}}"#)),

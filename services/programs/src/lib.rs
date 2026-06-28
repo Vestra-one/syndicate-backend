@@ -34,7 +34,7 @@ use action_handlers::{
 };
 use action_log::{ActionLog, ACTION_LOG_SEED};
 use error::SyndicateError;
-use pyth_receiver::verified_update_from_pyth_account;
+use pyth_receiver::{load_price_update_v2, verified_update_from_pyth_account};
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use settle_args::{player_states_from_engine, SettleArgs};
 use state::{MatchAccount, MatchStatus, ProtocolState, SeatAccount, SeatIndexAccount};
@@ -378,8 +378,10 @@ pub mod syndicate_program {
             max_confidence: m.max_oracle_confidence,
             expected_exponent: m.oracle_exponent,
         };
-        let authenticated_update =
-            verified_update_from_pyth_account(&ctx.accounts.price_update, m.price_feed_id)?;
+        let authenticated_update = verified_update_from_pyth_account(
+            &load_price_update_v2(&ctx.accounts.price_update.to_account_info())?,
+            m.price_feed_id,
+        )?;
         require!(
             args.oracle_price.to_update() == authenticated_update,
             SyndicateError::InvalidSettlementInput
@@ -723,7 +725,8 @@ pub struct SubmitSettlement<'info> {
         constraint = action_log.finalized @ SyndicateError::ActionLogNotFinalized,
     )]
     pub action_log: Account<'info, action_log::ActionLog>,
-    pub price_update: Account<'info, PriceUpdateV2>,
+    /// CHECK: Pyth Receiver price update; owner + layout validated in handler.
+    pub price_update: UncheckedAccount<'info>,
     // Seats are provided as `remaining_accounts`.
 }
 

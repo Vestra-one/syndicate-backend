@@ -1,13 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Wallet } from '@coral-xyz/anchor';
-import {
-  PRO_COMPATIBLE_PUSH_ORACLE_PROGRAM_ID,
-  PRO_COMPATIBLE_RECEIVER_PROGRAM_ID,
-  PRO_COMPATIBLE_WORMHOLE_PROGRAM_ID,
-  PythSolanaReceiver,
-} from '@pythnetwork/pyth-solana-receiver';
+import { PythSolanaReceiver } from '@pythnetwork/pyth-solana-receiver';
 import {
   Connection,
   Keypair,
@@ -26,8 +21,11 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import {
-  DEFAULT_PRICE_FEEDS,
   DEFAULT_PYTH_HERMES_URL,
+  resolvePythStackFromEnv,
+} from './pythStack.mjs';
+import {
+  DEFAULT_PRICE_FEEDS,
   PYTH_UNAVAILABLE_MESSAGE,
   createHermesClient,
   feedIdToBuffer,
@@ -36,13 +34,37 @@ import {
   pythAuditReceipt,
   redactedHermesConfig,
 } from './pyth.mjs';
+import {
+  ACTION_TAG,
+  actionLogPda,
+  buildAppendPlayerActionIx,
+  buildBeginLiveIx,
+  buildFinalizeActionLogIx,
+  buildInitActionLogIx,
+  buildRegisterPredictionCommitmentIx,
+  buildSetButtonSeedIx,
+  GENESIS_HEAD_HEX,
+  headsUpSbBbSeats,
+  newPredictionSecrets,
+  playerStatesAfterHeadsUpAllInCall,
+  assignWinnerLoserSecrets,
+  deriveButtonFromVrfSeed,
+  readActionLogHead,
+  readMatchButton,
+  readMatchVrfSeed,
+} from './actionLog.mjs';
 
 const PROGRAM_ID = new PublicKey(process.env.SYNDICATE_PROGRAM_ID ?? 'FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS');
-const PYTH_RECEIVER_PROGRAM_ID = PRO_COMPATIBLE_RECEIVER_PROGRAM_ID;
+
+const PYTH_STACK = resolvePythStackFromEnv(process.env);
+const PYTH_RECEIVER_PROGRAM_ID = PYTH_STACK.receiverProgramId;
 const RPC_URL = process.env.SYNDICATE_DEVNET_RPC_URL ?? 'https://api.devnet.solana.com';
 const KEYS_FILE = process.env.SYNDICATE_DEVNET_KEYS_FILE ?? 'devnet_testing_keys.md';
 const CHIPS_DECIMALS = envInt('SYNDICATE_DEVNET_CHIPS_DECIMALS', 6);
 const BUY_IN = envBigInt('SYNDICATE_DEVNET_BUY_IN', 1_000_000n);
+const SMALL_BLIND = envBigInt('SYNDICATE_DEVNET_SMALL_BLIND', 10_000n);
+const BIG_BLIND = envBigInt('SYNDICATE_DEVNET_BIG_BLIND', 20_000n);
+const ROUND_COUNT = envInt('SYNDICATE_DEVNET_ROUND_COUNT', 1);
 const PLAYER_MINT_AMOUNT = envBigInt('SYNDICATE_DEVNET_PLAYER_MINT_AMOUNT', 10_000_000n);
 const ORACLE_DELAY_WINDOW_SEC = envBigInt('SYNDICATE_DEVNET_ORACLE_DELAY_WINDOW_SEC', 5n);
 const MAX_ORACLE_CONFIDENCE = envBigInt('SYNDICATE_DEVNET_MAX_ORACLE_CONFIDENCE', 2n ** 64n - 1n);
@@ -56,8 +78,9 @@ const PYTH_PRICE_FEED_ID_HEX = normalizeFeedIdHex(
 );
 const PYTH_HTTP_TIMEOUT_MS = envInt('PYTH_HTTP_TIMEOUT_MS', 5_000);
 const PYTH_HTTP_RETRIES = envInt('PYTH_HTTP_RETRIES', 3);
-const DEVNET_RPC_RETRIES = envInt('SYNDICATE_DEVNET_RPC_RETRIES', 6);
-const DEVNET_RPC_RETRY_BASE_MS = envInt('SYNDICATE_DEVNET_RPC_RETRY_BASE_MS', 500);
+const DEVNET_RPC_RETRIES = envInt('SYNDICATE_DEVNET_RPC_RETRIES', 10);
+const DEVNET_RPC_RETRY_BASE_MS = envInt('SYNDICATE_DEVNET_RPC_RETRY_BASE_MS', 750);
+const DEVNET_INTER_TX_DELAY_MS = envInt('SYNDICATE_DEVNET_INTER_TX_DELAY_MS', 2_000);
 const PYTH_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = envInt('SYNDICATE_PYTH_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS', 100_000);
 const SUBMIT_SETTLEMENT_COMPUTE_UNITS = envInt('SYNDICATE_SUBMIT_SETTLEMENT_COMPUTE_UNITS', 200_000);
 const ALLOW_TWO_STEP_PYTH_FALLBACK = envBool('SYNDICATE_DEVNET_ALLOW_TWO_STEP_PYTH_FALLBACK', true);
@@ -110,7 +133,9 @@ async function main() {
     ? BigInt(process.env.SYNDICATE_DEVNET_MATCH_ID)
     : BigInt(Math.floor(Date.now() / 1000));
 
-  await runRefundLifecycle(connection, operator, playerA, playerB, protocolPda, mint.publicKey, ataA, ataB, baseMatchId);
+  if (!envBool('SYNDICATE_DEVNET_SETTLEMENT_ONLY', false)) {
+    await runRefundLifecycle(connection, operator, playerA, playerB, protocolPda, mint.publicKey, ataA, ataB, baseMatchId);
+  }
 
   if (!PYTH_API_KEY) {
     const message = `settlement/claim skipped: PYTH_API_KEY is not set ${JSON.stringify(redactedHermesConfig({
@@ -275,6 +300,9 @@ async function runSettlementLifecycle(connection, operator, playerA, playerB, pr
     exponent: selected.exponent,
     publishTime: selected.publishTime,
   };
+
+  await runSealingAndActionLog(connection, operator, playerA, playerB, protocolPda, ctx, oracle);
+
   const receipt = await submitSettlementWithPyth(connection, operator, protocolPda, ctx, selected, oracle, pyth);
   await claimOrRefund(connection, playerA, ctx, ataA, 'claim');
   await claimOrRefund(connection, playerB, ctx, ataB, 'claim');
@@ -357,6 +385,116 @@ async function adminMatch(connection, operator, protocolPda, matchPda, name) {
   ]);
 }
 
+async function runSealingAndActionLog(connection, operator, playerA, playerB, protocolPda, ctx, oracle) {
+  const players = [playerA, playerB];
+  const seedBytes = randomBytes(32);
+  seedBytes[0] = 1; // non-zero seed required by program
+  const vrfProofHash = createHash('sha256').update('devnet-harness-vrf-proof').update(seedBytes).digest();
+
+  await sendTx(connection, operator, 'set_button_seed', [
+    buildSetButtonSeedIx(PROGRAM_ID, operator.publicKey, protocolPda, ctx.matchPda, seedBytes, vrfProofHash),
+  ]);
+  await sendTx(connection, operator, 'begin_live', [
+    buildBeginLiveIx(PROGRAM_ID, operator.publicKey, protocolPda, ctx.matchPda),
+  ]);
+
+  const matchData = await accountData(connection, ctx.matchPda);
+  const vrfSeed = readMatchVrfSeed(matchData);
+  const button = readMatchButton(matchData);
+  if (button !== deriveButtonFromVrfSeed(vrfSeed, 2)) {
+    throw new Error(`button mismatch: account=${button} derived=${deriveButtonFromVrfSeed(vrfSeed, 2)}`);
+  }
+  ctx.vrfSeed = vrfSeed;
+  ctx.button = button;
+  console.log(`sealing complete: button=${button} vrf_seed=${ctx.vrfSeed.toString('hex')}`);
+
+  const settleDeadlineTs = BigInt(Math.floor(Date.now() / 1000) + 86_400);
+  const sealSeq = [0n, 1n, 0n, 0n, 0n];
+  await sendTx(connection, operator, 'init_action_log', [
+    buildInitActionLogIx(
+      PROGRAM_ID,
+      operator.publicKey,
+      protocolPda,
+      ctx.matchPda,
+      [ctx.seatA, ctx.seatB],
+      {
+        button,
+        smallBlind: SMALL_BLIND,
+        bigBlind: BIG_BLIND,
+        roundCount: ROUND_COUNT,
+        settleDeadlineTs,
+        sealSeq,
+      },
+    ),
+  ]);
+
+  const { winnerSecrets, loserSecrets } = assignWinnerLoserSecrets(oracle.price, button);
+  ctx.winnerSecrets = winnerSecrets;
+  ctx.loserSecrets = loserSecrets;
+  const { sbSeat, bbSeat } = headsUpSbBbSeats(button);
+
+  for (const seatIndex of [0, 1]) {
+    const secrets = seatIndex === winnerSecrets.seatIndex ? winnerSecrets : loserSecrets;
+    const registerIxs = buildRegisterPredictionCommitmentIx(
+      PROGRAM_ID,
+      players[seatIndex],
+      ctx.matchPda,
+      {
+        matchId: ctx.matchId,
+        seatIndex,
+        sealSeq: BigInt(seatIndex),
+        commitmentHex: secrets.commitmentHex,
+      },
+    );
+    await sendTx(connection, players[seatIndex], `register_prediction_commitment_${seatIndex}`, registerIxs);
+  }
+
+  const allInIxs = buildAppendPlayerActionIx(
+    PROGRAM_ID,
+    players[sbSeat],
+    protocolPda,
+    ctx.matchPda,
+    {
+      matchId: ctx.matchId,
+      seatIndex: sbSeat,
+      nonce: 1n,
+      prevHeadHex: GENESIS_HEAD_HEX,
+      actionTag: ACTION_TAG.allIn,
+      amount: 0n,
+    },
+  );
+  await sendTx(connection, players[sbSeat], 'append_player_action_all_in', allInIxs);
+
+  let actionLogData = await accountData(connection, actionLogPda(PROGRAM_ID, ctx.matchPda)[0]);
+  let head = readActionLogHead(actionLogData);
+
+  const callIxs = buildAppendPlayerActionIx(
+    PROGRAM_ID,
+    players[bbSeat],
+    protocolPda,
+    ctx.matchPda,
+    {
+      matchId: ctx.matchId,
+      seatIndex: bbSeat,
+      nonce: 1n,
+      prevHeadHex: head.toString('hex'),
+      actionTag: ACTION_TAG.call,
+      amount: 0n,
+    },
+  );
+  await sendTx(connection, players[bbSeat], 'append_player_action_call', callIxs);
+
+  actionLogData = await accountData(connection, actionLogPda(PROGRAM_ID, ctx.matchPda)[0]);
+  head = readActionLogHead(actionLogData);
+  ctx.eventRoot = head;
+  console.log(`action log head: ${head.toString('hex')}`);
+
+  await sendTx(connection, operator, 'finalize_action_log', [
+    buildFinalizeActionLogIx(PROGRAM_ID, operator.publicKey, protocolPda, ctx.matchPda, head),
+  ]);
+  console.log(`action log finalized: match_id=${ctx.matchId}`);
+}
+
 async function claimOrRefund(connection, player, ctx, playerToken, name) {
   const [seat] = PublicKey.findProgramAddressSync([Buffer.from('seat'), ctx.matchPda.toBuffer(), player.publicKey.toBuffer()], PROGRAM_ID);
   const seatData = await accountData(connection, seat);
@@ -381,9 +519,9 @@ async function submitSettlementWithPyth(connection, operator, protocolPda, ctx, 
   const receiver = new PythSolanaReceiver({
     connection,
     wallet,
-    receiverProgramId: PRO_COMPATIBLE_RECEIVER_PROGRAM_ID,
-    wormholeProgramId: PRO_COMPATIBLE_WORMHOLE_PROGRAM_ID,
-    pushOracleProgramId: PRO_COMPATIBLE_PUSH_ORACLE_PROGRAM_ID,
+    receiverProgramId: PYTH_STACK.receiverProgramId,
+    wormholeProgramId: PYTH_STACK.wormholeProgramId,
+    pushOracleProgramId: PYTH_STACK.pushOracleProgramId,
   });
   const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: false });
   await builder.addPostPriceUpdates(selected.priceUpdateData);
@@ -411,11 +549,29 @@ async function submitSettlementWithPyth(connection, operator, protocolPda, ctx, 
     );
   }
   const signatures = [];
-  for (const [index, transaction] of transactions.entries()) {
-    const name = transactions.length === 1
-      ? 'pyth_submit_settlement_atomic'
-      : `pyth_submit_settlement_step_${index + 1}_of_${transactions.length}`;
-    signatures.push(await sendVersionedTx(connection, operator, name, transaction));
+  if (transactions.length === 1) {
+    signatures.push(await sendVersionedTx(connection, operator, 'pyth_submit_settlement_atomic', transactions[0]));
+  } else {
+    for (const [index, transaction] of transactions.slice(0, -1).entries()) {
+      signatures.push(await sendVersionedTxWithRetry(
+        connection,
+        operator,
+        `pyth_post_price_update_step_${index + 1}_of_${transactions.length - 1}`,
+        transaction,
+      ));
+    }
+    priceUpdateAccount = builder.getPriceUpdateAccount(selected.feedIdHex);
+    if (!priceUpdateAccount) {
+      throw new Error(`Pyth builder did not expose price update account for ${selected.feedIdHex} after posting`);
+    }
+    await assertPriceUpdateOwner(connection, priceUpdateAccount, PYTH_STACK.receiverProgramId);
+    console.log(`pyth price update account: ${priceUpdateAccount.toBase58()} owner=${PYTH_STACK.receiverProgramId.toBase58()}`);
+    signatures.push(await sendTx(
+      connection,
+      operator,
+      'submit_settlement',
+      [submitSettlementIx(operator, protocolPda, ctx, priceUpdateAccount, oracle)],
+    ));
   }
   const txSig = signatures[signatures.length - 1];
   const receipt = pythAuditReceipt({
@@ -426,9 +582,9 @@ async function submitSettlementWithPyth(connection, operator, protocolPda, ctx, 
     settlementTxSignature: txSig,
     settlementTxSignatures: signatures,
     settlementMode: transactions.length === 1 ? 'atomic' : 'two_step',
-    receiverProgramId: PRO_COMPATIBLE_RECEIVER_PROGRAM_ID.toBase58(),
-    wormholeProgramId: PRO_COMPATIBLE_WORMHOLE_PROGRAM_ID.toBase58(),
-    pushOracleProgramId: PRO_COMPATIBLE_PUSH_ORACLE_PROGRAM_ID.toBase58(),
+    receiverProgramId: PYTH_STACK.receiverProgramId.toBase58(),
+    wormholeProgramId: PYTH_STACK.wormholeProgramId.toBase58(),
+    pushOracleProgramId: PYTH_STACK.pushOracleProgramId.toBase58(),
   });
   persistPythAuditReceipt(receipt);
   console.log(`pyth settlement receipt: ${JSON.stringify(receipt)}`);
@@ -437,10 +593,12 @@ async function submitSettlementWithPyth(connection, operator, protocolPda, ctx, 
 
 function submitSettlementIx(operator, protocolPda, ctx, priceUpdate, oracle) {
   const args = encodeSettleArgs(ctx, oracle);
+  const [actionLog] = actionLogPda(PROGRAM_ID, ctx.matchPda);
   return ix('submit_settlement', [
     meta(operator.publicKey, true, false),
     meta(protocolPda, false, false),
     meta(ctx.matchPda, false, true),
+    meta(actionLog, false, false),
     meta(priceUpdate, false, false),
     meta(ctx.seatA, false, true),
     meta(ctx.seatB, false, true),
@@ -448,20 +606,17 @@ function submitSettlementIx(operator, protocolPda, ctx, priceUpdate, oracle) {
 }
 
 function encodeSettleArgs(ctx, oracle) {
-  const players = [
-    { seatIndex: 0, contribution: BUY_IN, folded: false, hasPrediction: true, prediction: BigInt(oracle.price), sealSeq: 0n },
-    { seatIndex: 1, contribution: BUY_IN, folded: false, hasPrediction: true, prediction: BigInt(oracle.price + 1000n), sealSeq: 1n },
-  ];
+  if (!ctx.vrfSeed || !ctx.winnerSecrets || !ctx.loserSecrets || ctx.button === undefined) {
+    throw new Error('encodeSettleArgs requires sealing/action-log context');
+  }
+  const { players, revealed } = playerStatesAfterHeadsUpAllInCall({
+    buyIn: BUY_IN,
+    winnerSecrets: ctx.winnerSecrets,
+    loserSecrets: ctx.loserSecrets,
+  });
   const result = settle(players, oracle);
   return Buffer.concat([
-    vec(players.map((p) => Buffer.concat([
-      u16(p.seatIndex),
-      u64(p.contribution),
-      bool(p.folded),
-      bool(p.hasPrediction),
-      i64(p.prediction),
-      u64(p.sealSeq),
-    ]))),
+    ctx.vrfSeed,
     oracle.feedId,
     i64(oracle.price),
     u64(BigInt(oracle.publishTime)),
@@ -472,6 +627,10 @@ function encodeSettleArgs(ctx, oracle) {
     vec(result.potAwards.map((a) => Buffer.concat([u16(a.seatIndex), u64(a.amount)]))),
     vec(result.uncalledReturns.map((r) => Buffer.concat([u16(r.seatIndex), u64(r.amount)]))),
     u64(result.rakeCollected),
+    vec(revealed.map((r) => {
+      const blinding = Buffer.from(r.blindingHex.replace(/^0x/, ''), 'hex');
+      return Buffer.concat([u16(r.seatIndex), i64(r.prediction), blinding]);
+    })),
   ]);
 }
 
@@ -589,6 +748,19 @@ function absBigInt(value) {
   return value < 0n ? -value : value;
 }
 
+async function assertPriceUpdateOwner(connection, priceUpdate, expectedOwner) {
+  const account = await rpcRetry(
+    `get pyth price update owner ${priceUpdate.toBase58()}`,
+    () => connection.getAccountInfo(priceUpdate, 'confirmed'),
+  );
+  if (!account) throw new Error(`Pyth price update account not found: ${priceUpdate.toBase58()}`);
+  if (!account.owner.equals(expectedOwner)) {
+    throw new Error(
+      `Pyth price update owner ${account.owner.toBase58()} != expected ${expectedOwner.toBase58()}`,
+    );
+  }
+}
+
 async function parsePythPriceUpdate(connection, priceUpdate) {
   const account = await rpcRetry(
     `get pyth price update ${priceUpdate.toBase58()}`,
@@ -635,6 +807,7 @@ async function accountData(connection, pubkey) {
 }
 
 async function sendTx(connection, payer, name, instructions, extraSigners = []) {
+  await sleep(DEVNET_INTER_TX_DELAY_MS);
   const latest = await rpcRetry(`${name} getLatestBlockhash`, () => connection.getLatestBlockhash('confirmed'));
   const tx = new Transaction({
     feePayer: payer.publicKey,
@@ -656,7 +829,27 @@ async function sendTx(connection, payer, name, instructions, extraSigners = []) 
   return sig;
 }
 
+async function sendVersionedTxWithRetry(connection, payer, name, transactionWithSigners) {
+  let lastErr;
+  for (let attempt = 0; attempt <= DEVNET_RPC_RETRIES; attempt += 1) {
+    try {
+      return await sendVersionedTx(connection, payer, name, transactionWithSigners);
+    } catch (err) {
+      lastErr = err;
+      const message = retryableMessage(err);
+      if (attempt === DEVNET_RPC_RETRIES || !/guardian_set|AccountNotInitialized|3012|429|Too Many Requests/i.test(message)) {
+        throw err;
+      }
+      const delayMs = DEVNET_RPC_RETRY_BASE_MS * 2 ** Math.min(attempt, 5);
+      console.warn(`${name} failed (${message}), retrying in ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
 async function sendVersionedTx(connection, payer, name, transactionWithSigners) {
+  await sleep(DEVNET_INTER_TX_DELAY_MS);
   const { tx, signers = [] } = transactionWithSigners;
   tx.sign([payer, ...signers]);
   const sim = await rpcRetry(`${name} simulate`, () => connection.simulateTransaction(tx, { sigVerify: true }));
@@ -796,6 +989,12 @@ function i64(value) {
   const out = Buffer.alloc(8);
   out.writeBigInt64LE(BigInt(value));
   return out;
+}
+
+function envPubkey(name) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return undefined;
+  return new PublicKey(value);
 }
 
 function envBigInt(name, fallback) {

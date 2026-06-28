@@ -31,6 +31,11 @@ export class MatchSubscriber {
     this.write(['SUBSCRIBE', channel]);
   }
 
+  close(): void {
+    this.socket?.destroy();
+    this.reset();
+  }
+
   private async connect(): Promise<void> {
     if (this.socket && !this.socket.destroyed) return;
     const port = Number.parseInt(this.url.port || '6379', 10);

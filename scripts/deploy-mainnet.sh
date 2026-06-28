@@ -12,11 +12,7 @@ required_vars=(
   NATS_URL
   SOLANA_RPC_URL_PRIMARY
   SOLANA_RPC_URL_SECONDARY
-  PYTH_HERMES_URL
   PYTH_API_KEY
-  PYTH_RECEIVER_PROGRAM_ID
-  PYTH_WORMHOLE_PROGRAM_ID
-  PYTH_PUSH_ORACLE_PROGRAM_ID
   SYNDICATE_PROGRAM_ID
   SETTLEMENT_CHAIN_AUTH_TOKEN_FILE
   SETTLEMENT_SIGNER_KEYPAIR_PATH
@@ -36,6 +32,15 @@ for name in "${required_vars[@]}"; do
     exit 1
   fi
 done
+
+if [[ -z "${PYTH_RECEIVER_STACK:-}" ]]; then
+  for name in PYTH_HERMES_URL PYTH_RECEIVER_PROGRAM_ID PYTH_WORMHOLE_PROGRAM_ID PYTH_PUSH_ORACLE_PROGRAM_ID; do
+    if [[ -z "${!name:-}" ]]; then
+      echo "missing required environment variable: $name (or set PYTH_RECEIVER_STACK=legacy|upgraded)" >&2
+      exit 1
+    fi
+  done
+fi
 
 current_ref="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$current_ref" != "main" ]]; then

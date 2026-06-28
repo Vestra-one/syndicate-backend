@@ -57,12 +57,21 @@ Pyth audit receipts are written to `/tmp/syndicate-devnet-receipts` by default. 
 | `SYNDICATE_DEVNET_RPC_URL` | `https://api.devnet.solana.com` | Solana RPC endpoint. |
 | `SYNDICATE_DEVNET_KEYS_FILE` | `devnet_testing_keys.md` | Markdown file containing test keypairs. |
 | `SYNDICATE_DEVNET_MATCH_ID` | current Unix timestamp | Override match id for deterministic reruns. |
-| `PYTH_HERMES_URL` | `https://pyth.dourolabs.app/hermes` | Hermes endpoint. |
+| `PYTH_HERMES_URL` | `https://hermes.pyth.network` | Pyth Core Hermes endpoint. Upgraded: `https://pyth.dourolabs.app/hermes`. |
 | `PYTH_API_KEY` | unset | Hermes API key. Required for the Pyth settlement path; never printed. |
-| `SYNDICATE_DEVNET_PRICE_FEED_ID_HEX` | BTC/USD | 32-byte Pyth feed id. Launch feeds are configurable: BTC/USD, ETH/USD, SOL/USD. |
+| `PYTH_RECEIVER_STACK` | `legacy` | `legacy` (Core current programs, devnet) or `upgraded` (mainnet production stack). Sets Hermes + receiver/wormhole/push IDs unless overridden. |
+| `PYTH_RECEIVER_PROGRAM_ID` | stack preset | Override receiver program id. |
+| `PYTH_WORMHOLE_PROGRAM_ID` | stack preset | Override Wormhole program id. |
+| `PYTH_PUSH_ORACLE_PROGRAM_ID` | stack preset | Override push oracle program id. |
 | `SYNDICATE_DEVNET_SETTLEMENT_TS` | current Unix timestamp | Match scheduled end timestamp for the settlement test. |
 | `SYNDICATE_DEVNET_IDEMPOTENCY_KEY` | derived from timestamp + feed | Audit/idempotency label for the settlement receipt. |
 | `SYNDICATE_DEVNET_BUY_IN` | `1000000` | Per-seat buy-in in token base units. |
+| `SYNDICATE_DEVNET_SMALL_BLIND` | `10000` | Small blind for action-log init (heads-up SB/BB). |
+| `SYNDICATE_DEVNET_BIG_BLIND` | `20000` | Big blind for action-log init. |
+| `SYNDICATE_DEVNET_ROUND_COUNT` | `1` | Round count passed to `init_action_log`. |
+| `SYNDICATE_DEVNET_INTER_TX_DELAY_MS` | `2500` | Delay between Devnet txs (RPC rate-limit pacing). |
+| `SYNDICATE_DEVNET_SETTLEMENT_ONLY` | `false` | Skip refund lifecycle; run settlement path only. |
+| `SYNDICATE_DEVNET_PRICE_FEED_ID_HEX` | BTC/USD | 32-byte Pyth feed id. Launch feeds are configurable: BTC/USD, ETH/USD, SOL/USD. |
 | `SYNDICATE_DEVNET_PLAYER_MINT_AMOUNT` | `10000000` | Test chips minted to each player. |
 | `SYNDICATE_DEVNET_ORACLE_DELAY_WINDOW_SEC` | `5` | Exact-after settlement window. |
 | `SYNDICATE_DEVNET_MAX_ORACLE_CONFIDENCE` | `u64::MAX` | Confidence guard for the created match. |

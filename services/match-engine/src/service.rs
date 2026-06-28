@@ -537,8 +537,7 @@ impl FencedMatchRuntime {
                 nonce: intent.nonce,
             });
         }
-        #[cfg(test)]
-        if intent.signature.starts_with("sig-") {
+        if allow_dev_signature(&intent.signature) {
             return Ok(());
         }
         let (tag, amount) = action_to_tag_amount(intent.action);
@@ -565,8 +564,7 @@ impl FencedMatchRuntime {
         if policy.seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));
         }
-        #[cfg(test)]
-        if policy.signature.starts_with("sig-") {
+        if allow_dev_signature(&policy.signature) {
             return Ok(());
         }
         let tag = match policy.policy {
@@ -591,8 +589,7 @@ impl FencedMatchRuntime {
         if commitment.blinding.iter().all(|b| *b == 0) {
             return Err(MatchServiceError::InvalidIntent("blinding is required"));
         }
-        #[cfg(test)]
-        if commitment.signature.starts_with("sig-") {
+        if allow_dev_signature(&commitment.signature) {
             return Ok(());
         }
         verify::verify_prediction_commitment(
@@ -755,6 +752,19 @@ fn push_usize(out: &mut Vec<u8>, value: usize) {
 fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(value.to_string().as_bytes());
     out.push(b'|');
+}
+
+fn allow_dev_signature(signature: &str) -> bool {
+    #[cfg(test)]
+    {
+        if signature.starts_with("sig-") {
+            return true;
+        }
+    }
+    std::env::var("SYNDICATE_ALLOW_DEV_SIGNATURES")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        && signature.starts_with("sig-")
 }
 
 fn match_id_signing_key(match_id: &str) -> u64 {
