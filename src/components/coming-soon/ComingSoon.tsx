@@ -84,10 +84,6 @@ export function ComingSoon() {
                 aria-label={`${s.label} — ${s.handle}`}
               >
                 <span className="cs-social-coin">{s.icon}</span>
-                <span className="cs-social-meta">
-                  <span className="cs-social-label">{s.label}</span>
-                  <span className="cs-social-handle">{s.handle}</span>
-                </span>
               </a>
             ))}
           </nav>
