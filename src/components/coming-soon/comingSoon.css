@@ -168,9 +168,9 @@
 }
 .cs-join-sub {
   margin: 0;
-  font-size: 10.5px;
-  letter-spacing: 0.34em;
-  text-transform: uppercase;
+  font-size: clamp(12.5px, 1.5vw, 14px);
+  letter-spacing: 0.01em;
+  line-height: 1.4;
   color: var(--text-dim);
 }
 

@@ -136,15 +136,17 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, mode: Mode) {
   }
 
   // ---- dark cracked patina field over the whole disc ----
+  // a warm dark brown rather than near-black, so the face reads the same struck
+  // coin whether it is lit flat-on (stack tops) or tipped into shadow (leaners)
   if (mode === 'color') {
     const g = ctx.createRadialGradient(C, C, rad(0.05), C, C, R)
-    g.addColorStop(0, '#140d07')
-    g.addColorStop(0.5, '#0e0905')
-    g.addColorStop(0.85, '#080503')
-    g.addColorStop(1, '#040302')
+    g.addColorStop(0, '#3a2614')
+    g.addColorStop(0.5, '#2c1d0f')
+    g.addColorStop(0.85, '#1c1208')
+    g.addColorStop(1, '#120b06')
     ctx.fillStyle = g
   } else {
-    ctx.fillStyle = sty(mode, '#000', 112, 55, 205)
+    ctx.fillStyle = sty(mode, '#000', 112, 70, 188)
   }
   circle(1.0, ctx.fillStyle as string)
 
@@ -544,7 +546,7 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
       envMapIntensity: 1.15,
       emissive: 0xffffff,
       emissiveMap: faceMaps.map,
-      emissiveIntensity: 0.09,
+      emissiveIntensity: 0.16,
     })
     const edge = new THREE.MeshStandardMaterial({
       ...edgeMaps,
@@ -608,7 +610,10 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
         if (sup) {
           usedSupports.add(sup)
           const ang = Math.atan2(sup.z, sup.x) || hash(i, 31) * Math.PI * 2 // outward
-          const phi = 0.92 + hash(i, 30) * 0.3 // ~53–70° off the felt
+          // a gentle lean (≈34–48° off the felt) so the face still catches the
+          // overhead light like the stack tops — a near-vertical coin falls into
+          // shadow and reads as a different, dark coin
+          const phi = 0.6 + hash(i, 30) * 0.25
           // a disc of radius COIN_R tilted by phi reaches inward by COIN_R·cos(phi)
           // from its centre, so the centre must sit this far out for the whole
           // coin to stay outside the stack (radius COIN_R, plus jitter slack) and

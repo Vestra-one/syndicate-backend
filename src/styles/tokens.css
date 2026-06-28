@@ -37,7 +37,7 @@
   --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.6);
 
   /* type */
-  --font-display: 'Georgia', 'Times New Roman', serif;
+  --font-display: 'Fraunces', 'Georgia', 'Times New Roman', serif;
   --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 

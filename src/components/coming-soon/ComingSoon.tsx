@@ -51,7 +51,7 @@ export function ComingSoon() {
       {/* ── Hero ───────────────────────────────────────────── */}
       <header className="cs-top">
         <p className="cs-eyebrow cs-rise" style={delay(0)}>
-          <span className="cs-eyebrow-dot" /> Coming soon · MMXXVI
+          <span className="cs-eyebrow-dot" /> Almost ready
         </p>
 
         <h1 className="cs-wordmark cs-rise" style={delay(1)}>
@@ -70,7 +70,7 @@ export function ComingSoon() {
         <div className="cs-cta cs-rise" style={delay(3)}>
           <div className="cs-join">
             <p className="cs-join-lead">Pull up a chair</p>
-            <p className="cs-join-sub">Join the conversation</p>
+            <p className="cs-join-sub">Come hang out while we get the table ready</p>
           </div>
 
           <nav className="cs-socials" aria-label="Community channels">
@@ -90,9 +90,9 @@ export function ComingSoon() {
         </div>
 
         <p className="cs-foot cs-rise" style={delay(4)}>
-          <span>© MMXXVI Satoshi&rsquo;s Table</span>
+          <span>© 2026 Satoshi&rsquo;s Table</span>
           <span className="cs-foot-sep">·</span>
-          <span>Play responsibly</span>
+          <span>Please play responsibly</span>
           <span className="cs-foot-sep">·</span>
           <span>18+</span>
         </p>
