@@ -62,6 +62,7 @@
 - [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
 - [docs/frontend/INTEGRATION_GUIDE.md](docs/frontend/INTEGRATION_GUIDE.md)
 - [docs/frontend/protocol.ts](docs/frontend/protocol.ts)
+- [docs/deployment/README.md](docs/deployment/README.md) — operator runbook index (01 contract → 02 VPS → 03 backend)
 - [docs/deployment/PRODUCTION_DEPLOYMENT_FRAMEWORK.md](docs/deployment/PRODUCTION_DEPLOYMENT_FRAMEWORK.md)
 - [docs/deployment/SECRETS_AND_KEYS.md](docs/deployment/SECRETS_AND_KEYS.md)
 - [docs/deployment/AUDIT_AND_BUG_BOUNTY.md](docs/deployment/AUDIT_AND_BUG_BOUNTY.md)

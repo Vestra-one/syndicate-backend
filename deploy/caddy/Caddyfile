@@ -1,0 +1,46 @@
+# Syndicate — satoshitable.fun (devnet service subdomains)
+# Install: sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# Guide: docs/deployment/04_DOMAIN_AND_TLS.md
+
+{
+	email hello@satoshitable.fun
+}
+
+# Redirect www → apex
+www.satoshitable.fun {
+	redir https://satoshitable.fun{uri} permanent
+}
+
+# Marketing / main site
+satoshitable.fun {
+	encode gzip zstd
+	root * /var/www/satoshitable
+	try_files {path} /index.html
+	file_server
+}
+
+# Devnet game client (optional — deploy SPA dist here)
+devnet.satoshitable.fun {
+	encode gzip zstd
+	root * /var/www/satoshitable-devnet
+	try_files {path} /index.html
+	file_server
+}
+
+# Gateway WebSocket
+gateway.devnet.satoshitable.fun {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:18081
+}
+
+# Action-feed REST (history, discovery, profiles)
+api.devnet.satoshitable.fun {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:18080
+}
+
+# Config REST (table terms, tiers, catalog)
+config.devnet.satoshitable.fun {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:18085
+}

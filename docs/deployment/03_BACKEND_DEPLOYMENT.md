@@ -63,7 +63,10 @@ openssl rand -hex 32 > deploy/secrets/settlement-chain.token
 # Copy settlement-admin-keypair.json from guide 01:
 # scp ~/settlement-admin-keypair.json deploy@<SERVER_IP>:/opt/syndicate/backend/deploy/secrets/
 
-chmod 600 deploy/secrets/settlement-chain.token deploy/secrets/settlement-admin-keypair.json
+# Docker: settlement-worker runs as non-root `syndicate`. The host directory must be
+# traversable (execute bit) and secret files world-readable.
+chmod 755 deploy/secrets
+chmod 644 deploy/secrets/settlement-chain.token deploy/secrets/settlement-admin-keypair.json
 ls -l deploy/secrets/settlement-admin-keypair.json
 ```
 
@@ -185,10 +188,27 @@ Re-run these exports in every new shell.
 
 ## 7. Start infrastructure
 
+Postgres is published on **host port 5433** (not 5432) so it can run alongside a system Postgres. Other infra host ports are also offset to avoid clashes on a shared VPS:
+
+| Service | Host port | UI / notes |
+|---------|-----------|------------|
+| Postgres | 5433 | migrations from host |
+| Redis | 6380 | |
+| NATS | 4223 | monitor 8223 |
+| MinIO | 9002 | console 9003 |
+| Prometheus | 9091 | http://HOST:9091 |
+| Grafana | 3002 | admin / syndicate-localnet |
+
+App containers use internal names (`postgres:5432`, `redis:6379`, …) and are unaffected.
+
 ```bash
+$COMPOSE_INFRA down 2>/dev/null || true
 $COMPOSE_INFRA up -d
 watch -n 3 'docker ps --format "table {{.Names}}\t{{.Status}}" | grep syndicate-localnet'
 # Ctrl+C when postgres, redis, nats show (healthy)
+
+# App containers join this network and resolve postgres, redis, nats by service name.
+docker network inspect syndicate-localnet_default -f '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep localnet
 ```
 
 ---
@@ -196,7 +216,7 @@ watch -n 3 'docker ps --format "table {{.Names}}\t{{.Status}}" | grep syndicate-
 ## 8. Database migrations
 
 ```bash
-DATABASE_URL="postgres://syndicate:syndicate@localhost:5432/syndicate_local" \
+DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
   ./scripts/db-migrate-local.sh
 
 PGPASSWORD=syndicate psql -h localhost -U syndicate -d syndicate_local -c '\dt' | head
@@ -208,10 +228,15 @@ PGPASSWORD=syndicate psql -h localhost -U syndicate -d syndicate_local -c '\dt' 
 
 First build: **10–25 minutes** (Rust compile). Ensure swap is enabled on ≤4 GB RAM hosts (guide 02 §9).
 
+Node services (including `settlement-chain`) build on **Node 24** in Docker — required by `@pythnetwork/hermes-client` and a lockfile generated with npm 11. After `git pull`, rebuild if you previously failed on `npm ci` / `rpc-websockets` under Node 22.
+
 ```bash
 $COMPOSE_APP build
 $COMPOSE_APP up -d
 docker ps --format "table {{.Names}}\t{{.Status}}" | grep syndicate-app
+
+# App must share syndicate-localnet_default with infra (do not pass docker-compose.localnet.yml here).
+docker exec syndicate-app-action-feed-1 getent hosts postgres
 ```
 
 ---
@@ -239,13 +264,13 @@ docker logs $(docker ps -qf name=settlement-worker) 2>&1 | tail -n 20
 
 ## 11. Frontend URLs (after reverse proxy)
 
-Give the frontend team:
+Wire the domain in [04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md). Devnet handoff:
 
-| Key | Example (devnet staging) |
-|-----|--------------------------|
-| `GATEWAY_WS_URL` | `wss://<your-domain>/ws` (proxy to gateway :18081) |
-| `ACTION_FEED_URL` | `https://<your-domain>/api` (proxy to action-feed :18080) |
-| `CONFIG_URL` | `https://<your-domain>/config` (proxy to config :18085) |
+| Key | Devnet value |
+|-----|--------------|
+| `GATEWAY_WS_URL` | `wss://gateway.devnet.satoshitable.fun` |
+| `ACTION_FEED_URL` | `https://api.devnet.satoshitable.fun` |
+| `CONFIG_URL` | `https://config.devnet.satoshitable.fun` |
 | `PROGRAM_ID` | from `app.env` |
 | `CHIPS_TOKEN_MINT` | from `app.env` |
 | `SOLANA_RPC_URL` | public RPC or client-side provider |
@@ -279,9 +304,14 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 
 | Symptom | Fix |
 |---------|-----|
+| `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` / parameter property | `git pull` (matchmaking fix); rebuild: `$COMPOSE_APP build matchmaking` |
+| `RpcWebSocketClient extends value undefined` (settlement-chain) | `git pull` (removed bad `rpc-websockets` override in lockfile); `$COMPOSE_APP build --no-cache settlement-chain` |
+| Worker: `Permission denied` reading `SETTLEMENT_CHAIN_AUTH_TOKEN_FILE` | `chmod 755 deploy/secrets` and `chmod 644 deploy/secrets/settlement-chain.token deploy/secrets/settlement-admin-keypair.json` (§3) |
+| `could not translate host name "postgres"` | Infra not running or app not on shared network: `$COMPOSE_INFRA up -d`, then `$COMPOSE_APP up -d` **without** `-f deploy/docker-compose.localnet.yml`; verify `docker exec syndicate-app-action-feed-1 getent hosts postgres` |
+| `Bind for 0.0.0.0:9091 failed: port is already allocated` | Infra already running — start app with `$COMPOSE_APP` only, not app+localnet merged |
 | Worker restarts: `settlement-chain health check failed` | Wait for chain startup; `curl 127.0.0.1:18790/health` |
 | Worker: `missing required environment variable` | Fill `deploy/secrets/app.env`; re-export `COMPOSE_APP` |
-| Worker: empty secret file | Re-create `settlement-chain.token` / keypair (§3) |
+| `settlement relay/poller error: error serializing parameter` | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker` |
 | Wrong programId on `/health` | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d` |
 | Pyth settlement fails on devnet | Keep `PYTH_RECEIVER_STACK=legacy`; do **not** use `upgraded` on devnet |
 | OOM during build | Add swap (guide 02 §9); rebuild |
@@ -291,6 +321,6 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 
 ## 14. Done
 
-When §10 passes, the backend is live against your on-chain program. Next: TLS reverse proxy, rotate Grafana password, point frontend at gateway WS.
+When §10 passes, the backend is live against your on-chain program. Next: [04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md) (DNS + HTTPS for satoshitable.fun), rotate Grafana password.
 
 See also [README.md](./README.md) · [SECRETS_AND_KEYS.md](./SECRETS_AND_KEYS.md)

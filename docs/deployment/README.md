@@ -7,6 +7,7 @@ Copy/paste operator runbooks. Run **in order**:
 | 1 | [01_CONTRACT_DEPLOYMENT.md](./01_CONTRACT_DEPLOYMENT.md) | Build + deploy the Syndicate Anchor program on Solana (devnet / testnet / mainnet) and run `initialize_protocol` |
 | 2 | [02_VPS_SETUP.md](./02_VPS_SETUP.md) | Prepare a Ubuntu VPS (Docker, firewall, deploy user) |
 | 3 | [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) | Clone repo, secrets, Docker Compose, migrations, health checks |
+| 4 | [04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md) | DNS, TLS (Caddy), devnet subdomains (`gateway|api|config.devnet.satoshitable.fun`) |
 
 Supporting docs: [env.example](./env.example) · [SECRETS_AND_KEYS.md](./SECRETS_AND_KEYS.md) · [PRODUCTION_DEPLOYMENT_FRAMEWORK.md](./PRODUCTION_DEPLOYMENT_FRAMEWORK.md)
 
