@@ -17,6 +17,9 @@ RUN if [ ! -f "services/${SERVICE}/package.json" ]; then \
       npm ci --omit=dev --prefix "services/${SERVICE}"; \
     else \
       npm install --omit=dev --prefix "services/${SERVICE}"; \
+    fi; \
+    if grep -q patch-pyth-solana-utils-esm "services/${SERVICE}/package.json" 2>/dev/null; then \
+      npm run postinstall --prefix "services/${SERVICE}"; \
     fi
 
 ENV SERVICE=${SERVICE}

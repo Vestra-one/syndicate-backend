@@ -9,12 +9,19 @@ import { hashMatchId } from './orchestrator-client.ts';
 export class DeadlineWorker {
   private timer?: ReturnType<typeof setInterval>;
   private running = false;
+  private redis: RedisClient;
+  private store: MatchmakingStore;
+  private orchestrator: OrchestratorClient;
 
   constructor(
-    private redis: RedisClient,
-    private store: MatchmakingStore,
-    private orchestrator: OrchestratorClient,
-  ) {}
+    redis: RedisClient,
+    store: MatchmakingStore,
+    orchestrator: OrchestratorClient,
+  ) {
+    this.redis = redis;
+    this.store = store;
+    this.orchestrator = orchestrator;
+  }
 
   start(intervalMs = 5_000): void {
     if (this.timer) return;
