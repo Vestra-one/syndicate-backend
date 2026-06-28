@@ -438,19 +438,20 @@ function buildFaceMaps(): {
 // ---- reeded edge --------------------------------------------------------------
 
 function paintEdge(ctx: CanvasRenderingContext2D, W: number, H: number, mode: Mode) {
-  // base gold
+  // base gold — warm and mid-toned (no near-white highlights) so a stack of
+  // edges reads the same rich gold as the coin face, not pale and over-bright
   if (mode === 'color') {
     const g = ctx.createLinearGradient(0, 0, 0, H)
-    g.addColorStop(0, G_MD)
-    g.addColorStop(0.12, G_HI)
-    g.addColorStop(0.2, G_LT)
-    g.addColorStop(0.5, G)
-    g.addColorStop(0.8, G_LT)
-    g.addColorStop(0.88, G_HI)
-    g.addColorStop(1, G_MD)
+    g.addColorStop(0, G_LO)
+    g.addColorStop(0.12, G_LT)
+    g.addColorStop(0.2, G)
+    g.addColorStop(0.5, G_MD)
+    g.addColorStop(0.8, G)
+    g.addColorStop(0.88, G_LT)
+    g.addColorStop(1, G_LO)
     ctx.fillStyle = g
   } else {
-    ctx.fillStyle = sty(mode, '#000', 150, 250, 78)
+    ctx.fillStyle = sty(mode, '#000', 150, 250, 96)
   }
   ctx.fillRect(0, 0, W, H)
 
@@ -459,15 +460,15 @@ function paintEdge(ctx: CanvasRenderingContext2D, W: number, H: number, mode: Mo
   for (let i = 0; i < reeds; i++) {
     const x = (i / reeds) * W
     const w = W / reeds
-    // bright crest
-    ctx.fillStyle = sty(mode, 'rgba(255,243,200,0.55)', 220, 250, 50)
+    // warm crest highlight (not white)
+    ctx.fillStyle = sty(mode, 'rgba(250,214,128,0.4)', 220, 250, 64)
     ctx.fillRect(x, 0, w * 0.42, H)
     // dark groove
-    ctx.fillStyle = sty(mode, 'rgba(50,32,10,0.6)', 70, 250, 120)
+    ctx.fillStyle = sty(mode, 'rgba(48,30,10,0.62)', 70, 250, 130)
     ctx.fillRect(x + w * 0.5, 0, w * 0.4, H)
   }
-  // bright polished rim lips top & bottom
-  ctx.fillStyle = sty(mode, 'rgba(255,245,205,0.6)', 235, 250, 46)
+  // polished rim lips top & bottom — warm gold, gently brighter than the field
+  ctx.fillStyle = sty(mode, 'rgba(250,220,148,0.42)', 230, 250, 60)
   ctx.fillRect(0, 0, W, H * 0.09)
   ctx.fillRect(0, H * 0.91, W, H * 0.09)
   ctx.fillStyle = sty(mode, 'rgba(0,0,0,0.45)', 96, 250, 150)
@@ -553,11 +554,11 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
       bumpScale: 0.6,
       color: tint,
       metalness: 1.0,
-      roughness: 0.22,
-      envMapIntensity: 1.3,
+      roughness: 0.34,
+      envMapIntensity: 1.0,
       emissive: 0xffffff,
       emissiveMap: edgeMaps.map,
-      emissiveIntensity: 0.12,
+      emissiveIntensity: 0.06,
     })
     return [face, face, edge] as THREE.Material[]
   })
