@@ -61,7 +61,11 @@ pub struct SealRegistry {
 
 impl SealRegistry {
     pub fn new(target_round: u64) -> Self {
-        Self { target_round, locked: false, sealed: BTreeMap::new() }
+        Self {
+            target_round,
+            locked: false,
+            sealed: BTreeMap::new(),
+        }
     }
 
     pub fn target_round(&self) -> u64 {
@@ -152,7 +156,10 @@ mod tests {
         reg.seal(pid(0), scheme.encrypt(105_000, 42)).unwrap();
         reg.seal(pid(1), scheme.encrypt(104_800, 42)).unwrap();
         reg.lock();
-        let key = RoundKey { round: 42, key: vec![0xAB] };
+        let key = RoundKey {
+            round: 42,
+            key: vec![0xAB],
+        };
         let out = reg.decrypt_all(&scheme, Some(&key)).unwrap();
         assert_eq!(out.get(&pid(0)), Some(&105_000));
         assert_eq!(out.get(&pid(1)), Some(&104_800));
@@ -163,7 +170,10 @@ mod tests {
         let scheme = MockScheme;
         let mut reg = SealRegistry::new(7);
         reg.lock();
-        assert_eq!(reg.seal(pid(0), scheme.encrypt(1, 7)), Err(TlError::SealAfterLock));
+        assert_eq!(
+            reg.seal(pid(0), scheme.encrypt(1, 7)),
+            Err(TlError::SealAfterLock)
+        );
     }
 
     #[test]
@@ -181,7 +191,13 @@ mod tests {
         let mut reg = SealRegistry::new(7);
         reg.seal(pid(0), scheme.encrypt(123, 7)).unwrap();
         reg.lock();
-        let wrong = RoundKey { round: 8, key: vec![] };
-        assert_eq!(reg.decrypt_all(&scheme, Some(&wrong)), Err(TlError::KeyUnavailable));
+        let wrong = RoundKey {
+            round: 8,
+            key: vec![],
+        };
+        assert_eq!(
+            reg.decrypt_all(&scheme, Some(&wrong)),
+            Err(TlError::KeyUnavailable)
+        );
     }
 }

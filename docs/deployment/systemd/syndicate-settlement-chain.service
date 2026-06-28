@@ -1,0 +1,23 @@
+[Unit]
+Description=Syndicate Settlement Chain Adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=syndicate
+Group=syndicate
+WorkingDirectory=/opt/syndicate/backend
+EnvironmentFile=/etc/syndicate/settlement-chain.env
+ExecStart=/usr/bin/node --experimental-strip-types /opt/syndicate/backend/services/settlement-chain/src/main.ts
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/syndicate /var/log/syndicate
+ReadOnlyPaths=/etc/syndicate
+
+[Install]
+WantedBy=multi-user.target

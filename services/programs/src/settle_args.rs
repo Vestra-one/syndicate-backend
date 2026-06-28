@@ -1,21 +1,16 @@
 //! Instruction DTOs for settlement, and conversion to the `syndicate-shared` types.
-//!
-//! The program never re-implements settlement: it deserializes these recorded inputs,
-//! rebuilds the shared types, and calls `syndicate_shared::verify_settlement` (the same
-//! code the off-chain builder ran). Prices are fixed-point `i64` here (ample for any
-//! feed precision) and widened to the shared `Price` (`i128`).
 
 use anchor_lang::prelude::*;
-use syndicate_shared::{Award, Chips, PlayerId, PlayerState, Price, SettleResult};
+use syndicate_shared::{
+    Award, Chips, OraclePriceUpdate, PlayerId, PlayerState, Price, SettleResult,
+    VerifiedOraclePrice,
+};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct PlayerInput {
+pub struct RevealedPrediction {
     pub seat_index: u16,
-    pub contribution: u64,
-    pub folded: bool,
-    pub has_prediction: bool,
     pub prediction: i64,
-    pub seal_seq: u64,
+    pub blinding: [u8; 32],
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -31,31 +26,49 @@ pub struct ReturnDto {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct OraclePriceDto {
+    pub feed_id: [u8; 32],
+    pub price: i64,
+    pub publish_time: u64,
+    pub confidence: u64,
+    pub exponent: i32,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ClaimedResult {
     pub settlement_price: i64,
+    pub oracle_publish_time: u64,
     pub pot_awards: Vec<AwardDto>,
     pub uncalled_returns: Vec<ReturnDto>,
     pub rake_collected: u64,
 }
 
+/// Settlement args — player states come from the on-chain action-log replay, not from trust.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct SettleArgs {
-    pub players: Vec<PlayerInput>,
-    pub settlement_samples: Vec<i64>,
-    pub min_samples: u32,
-    pub rake_bps: u32,
-    pub rake_cap: u64,
+    pub oracle_price: OraclePriceDto,
     pub claimed: ClaimedResult,
+    pub revealed: Vec<RevealedPrediction>,
 }
 
-impl PlayerInput {
-    pub fn to_shared(&self) -> PlayerState {
-        PlayerState {
-            id: PlayerId(self.seat_index),
-            contribution: self.contribution,
-            folded: self.folded,
-            prediction: if self.has_prediction { Some(self.prediction as Price) } else { None },
-            seal_seq: self.seal_seq,
+impl OraclePriceDto {
+    pub fn to_update(&self) -> OraclePriceUpdate {
+        OraclePriceUpdate {
+            feed_id: self.feed_id,
+            price: self.price as Price,
+            publish_time: self.publish_time,
+            confidence: self.confidence,
+            exponent: self.exponent,
+        }
+    }
+
+    pub fn to_shared(&self) -> VerifiedOraclePrice {
+        VerifiedOraclePrice {
+            feed_id: self.feed_id,
+            price: self.price as Price,
+            publish_time: self.publish_time,
+            confidence: self.confidence,
+            exponent: self.exponent,
         }
     }
 }
@@ -64,10 +77,14 @@ impl ClaimedResult {
     pub fn to_shared(&self) -> SettleResult {
         SettleResult {
             settlement_price: self.settlement_price as Price,
+            oracle_publish_time: self.oracle_publish_time,
             pot_awards: self
                 .pot_awards
                 .iter()
-                .map(|a| Award { player: PlayerId(a.seat_index), amount: a.amount as Chips })
+                .map(|a| Award {
+                    player: PlayerId(a.seat_index),
+                    amount: a.amount as Chips,
+                })
                 .collect(),
             uncalled_returns: self
                 .uncalled_returns
@@ -78,11 +95,55 @@ impl ClaimedResult {
         }
     }
 
-    /// Total payable (winnings + returns) for a given seat — written to the seat at
-    /// settlement so the player can later pull it via `claim`.
     pub fn payout_for(&self, seat_index: u16) -> u64 {
-        let won: u64 = self.pot_awards.iter().filter(|a| a.seat_index == seat_index).map(|a| a.amount).sum();
-        let ret: u64 = self.uncalled_returns.iter().filter(|r| r.seat_index == seat_index).map(|r| r.amount).sum();
+        let won: u64 = self
+            .pot_awards
+            .iter()
+            .filter(|a| a.seat_index == seat_index)
+            .map(|a| a.amount)
+            .sum();
+        let ret: u64 = self
+            .uncalled_returns
+            .iter()
+            .filter(|r| r.seat_index == seat_index)
+            .map(|r| r.amount)
+            .sum();
         won.saturating_add(ret)
     }
+}
+
+pub fn player_states_from_engine(
+    engine: &syndicate_engine_core::Engine,
+    revealed: &[RevealedPrediction],
+    seats: &[crate::action_log::SeatMeta; syndicate_engine_core::MAX_SEATS],
+) -> Result<Vec<PlayerState>> {
+    let mut pred_map = [None::<i64>; syndicate_engine_core::MAX_SEATS];
+    for r in revealed {
+        let idx = r.seat_index as usize;
+        if idx >= syndicate_engine_core::MAX_SEATS {
+            return Err(error!(crate::error::SyndicateError::InvalidSeat));
+        }
+        let seat = &seats[idx];
+        if !seat.occupied {
+            return Err(error!(crate::error::SyndicateError::InvalidSeat));
+        }
+        let expected =
+            crate::intent::prediction_commitment_hash(r.prediction as i128, &r.blinding);
+        if expected != seat.prediction_commitment {
+            return Err(error!(crate::error::SyndicateError::PredictionCommitmentMismatch));
+        }
+        if seat.seal_seq != engine.seats[idx].seal_seq {
+            return Err(error!(crate::error::SyndicateError::PredictionCommitmentMismatch));
+        }
+        pred_map[idx] = Some(r.prediction);
+    }
+
+    Ok(engine.to_player_states(|id| {
+        let idx = id.0 as usize;
+        if engine.seats[idx].folded {
+            None
+        } else {
+            pred_map[idx].map(|p| p as Price)
+        }
+    }))
 }

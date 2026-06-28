@@ -11,6 +11,13 @@
 - **Post-match reveal projection:** surface **all** opened numbers (incl. folded/early-out) for the emotional beat (`08 OQ9`).
 - **Live-games dashboard:** rank live games by popularity (a "rated" score from spectator count + activity), **sortable by game time, pot size, buy-in, feed,** etc. (`08 OQ20`).
 - Caching + scalable fan-out to large spectator counts.
+- Rebuildable read models for active games, historical games, replay bundles,
+  profiles, and leaderboards.
+- HTTP read APIs for active games, history, replay, profiles, leaderboards, and
+  health checks.
+- WebSocket public-event broadcast for spectators with match-level subscriptions.
+- Replay bundle upload through an object-store abstraction; filesystem/local and
+  in-memory implementations are available for day-0/dev wiring.
 
 ## Non-responsibilities
 - No outcome computation, no custody, no gameplay authority.
@@ -23,6 +30,9 @@ action-feed/src/
   project/       # action-log → public event projection (redaction rules)
   stream/        # spectator fan-out (separate tier, backpressure-isolated)
   dashboard/     # ranking score + sort/filter API
+  projections/   # checkpointed live/history/replay/profile read models
+  server/        # HTTP read APIs + WebSocket public event broadcast
+  object-store/  # replay bundle uploads (filesystem/local, S3-compatible adapter)
   cache/
   index.ts
 ```
@@ -44,6 +54,8 @@ action-feed/src/
 - Redaction tests: sealed predictions/intents/PII never appear pre-open (fuzz the projector).
 - Isolation/load: spectator fan-out under high count does not affect gameplay latency.
 - Dashboard ranking/sort correctness; post-match reveal completeness.
+- Projection rebuild tests: checkpoint monotonicity, replay redaction, profile
+  stat aggregation, and leaderboard ordering.
 
 ## AI-agent rules
 - Treat this as an **untrusted-output** surface: default-deny, allow-list only public fields; when unsure whether a field is safe, **don't expose it**.

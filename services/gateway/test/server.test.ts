@@ -63,6 +63,51 @@ test('ws server: bad signature is rejected and the socket closed', async () => {
   await server.close();
 });
 
+test('ws server: challenge nonce is one-time use', async () => {
+  const server = new GatewayServer({ verifier: mock });
+  await server.ready;
+  let nonce = '';
+
+  await new Promise<void>((resolve, reject) => {
+    const client = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    const timer = setTimeout(() => reject(new Error('timeout')), 5000);
+    client.on('message', (raw: unknown) => {
+      const msg = JSON.parse(String(raw));
+      if (msg.type === 'challenge') {
+        nonce = msg.nonce;
+        client.send(JSON.stringify({ type: 'auth', wallet: 'walletA', signature: `sig:${msg.nonce}` }));
+      } else if (msg.type === 'authenticated') {
+        clearTimeout(timer);
+        client.close();
+        resolve();
+      }
+    });
+    client.on('error', reject);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const client = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    const timer = setTimeout(() => reject(new Error('timeout')), 5000);
+    let rejected = false;
+    client.on('message', (raw: unknown) => {
+      const msg = JSON.parse(String(raw));
+      if (msg.type === 'challenge') {
+        client.send(JSON.stringify({ type: 'auth', wallet: 'walletA', signature: `sig:${nonce}` }));
+      } else if (msg.type === 'error') {
+        rejected = true;
+      }
+    });
+    client.on('close', () => {
+      clearTimeout(timer);
+      assert.ok(rejected, 'replayed nonce must be rejected');
+      resolve();
+    });
+    client.on('error', () => {});
+  });
+
+  await server.close();
+});
+
 test('ws server: geofenced connection is blocked', async () => {
   const server = new GatewayServer({ verifier: mock, blocklist: ['XX'], countryOf: () => 'XX' });
   await server.ready;
@@ -83,5 +128,15 @@ test('ws server: geofenced connection is blocked', async () => {
     client.on('error', () => {});
   });
 
+  await server.close();
+});
+
+test('gateway exposes health and prometheus metrics', async () => {
+  const server = new GatewayServer({ verifier: mock });
+  await server.ready;
+  const health = await fetch(`http://127.0.0.1:${server.port}/healthz`);
+  assert.equal(health.status, 200);
+  const metrics = await (await fetch(`http://127.0.0.1:${server.port}/metrics`)).text();
+  assert.match(metrics, /syndicate_gateway_connections_total/);
   await server.close();
 });

@@ -1,0 +1,24 @@
+# De-indexed from semantic search / auto-context.
+# Files remain readable on demand — zero information loss.
+# See AGENTS.md for doc classification.
+
+# Assessment / superseded canon (canonical versions kept indexed)
+01_EXECUTIVE_ASSESSMENT.md
+02_CONTRADICTIONS_AND_WEAKNESSES.md
+03_BUILDER_VISION_CANONICAL.md
+
+# Superseded originals (replaced by numbered canon)
+Builder_vision.md
+Game_mechanics.md
+Game_requirement_user_pov.md
+
+# Point-in-time process / audit reports
+docs/PRODUCTION_READINESS_REVIEW_PROMPT_3.md
+docs/PRODUCTION_GO_NO_GO_AUDIT.md
+docs/PRODUCTION_HARDENING_REMEDIATION.md
+docs/PROMPT_4_TEST_EXECUTION_REPORT.md
+
+# Large generated / data files
+Cargo.lock
+services/programs/Cargo.lock
+golden/*.json

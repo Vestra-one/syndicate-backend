@@ -12,13 +12,33 @@
 //!   is explicit (stable sorts, id/seal tiebreaks). No iteration-order surprises.
 //!
 //! Purity: no I/O, no clock, no randomness generation. The VRF seed, oracle
-//! samples, and decrypted predictions are *inputs*. This is what makes the result
+//! verified oracle price, and decrypted predictions are *inputs*. This is what makes the result
 //! independently verifiable on-chain.
 
-pub mod types;
+pub mod events;
+pub mod intent;
+pub mod oracle;
 pub mod pots;
 pub mod settle;
+pub mod types;
 
-pub use types::{Chips, CoreError, PlayerId, PlayerState, Price};
+pub use intent::{
+    action_head_step, action_intent_message, action_tag_and_amount, chain_hash,
+    default_policy_message, prediction_commitment_hash, prediction_commitment_message,
+    ACTION_TAG_ALL_IN, ACTION_TAG_BET_TO, ACTION_TAG_CALL, ACTION_TAG_CHECK, ACTION_TAG_FOLD,
+    ACTION_TAG_RAISE_TO, DEFAULT_TAG_CHECK_CALL_ANY, DEFAULT_TAG_CHECK_FOLD, DOMAIN_ACTION,
+    DOMAIN_DEFAULT, DOMAIN_PREDICTION,
+};
+
+pub use oracle::{
+    first_valid_oracle_update, validate_oracle_update, FeedId, OraclePriceUpdate, OracleValidation,
+    VerifiedOraclePrice,
+};
 pub use pots::{build_pots, Pot, PotLayout};
-pub use settle::{median_price, settle, verify_settlement, Award, SettleInput, SettleResult};
+pub use settle::{settle, verify_settlement, Award, SettleInput, SettleResult};
+pub use events::{
+    DepositConfirmed, FormationBootstrapped, FormationDissolved, MatchStarted, ProfileDelta,
+    StartPolicyAction, StartPolicyResult, StartPolicyTriggered, StartPolicyTrigger,
+    EVENT_SCHEMA_VERSION,
+};
+pub use types::{Chips, CoreError, PlayerId, PlayerState, Price};

@@ -1,0 +1,8 @@
+# Fully excluded from agent access (non-coding or sensitive).
+# See AGENTS.md for doc classification.
+
+# Go-to-market / business strategy (not backend coding context)
+marketing_and_go_to_market/
+
+# Test key material — must not enter agent context
+devnet_testing_keys.md

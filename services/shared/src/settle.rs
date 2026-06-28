@@ -1,29 +1,12 @@
-//! Settlement price, winner determination, ties, fees, and the top-level pure
-//! `settle()` entrypoint (`04_GAME_MECHANICS §11, §13, §14, §18`).
+//! Winner determination, ties, fees, and the top-level pure `settle()` entrypoint.
+//! The settlement price is a single Pyth-authenticated bounded exact-after update,
+//! validated before it reaches this module.
 
 use std::collections::BTreeMap;
 
 use crate::pots::{build_pots, Pot};
 use crate::types::{Chips, CoreError, PlayerId, PlayerState, Price};
-
-/// Settlement price `S` = window **median** of guard-filtered samples (`04 §11`).
-/// Even sample counts use the floor of the two central values' average (prices are
-/// non-negative fixed-point, so this is deterministic and unbiased enough for a
-/// median-of-window). Returns `None` only for an empty slice.
-pub fn median_price(samples: &[Price]) -> Option<Price> {
-    if samples.is_empty() {
-        return None;
-    }
-    let mut s = samples.to_vec();
-    s.sort_unstable();
-    let n = s.len();
-    if n % 2 == 1 {
-        Some(s[n / 2])
-    } else {
-        // div_euclid floors toward negative infinity; safe for non-negative prices.
-        Some((s[n / 2 - 1] + s[n / 2]).div_euclid(2))
-    }
-}
+use crate::VerifiedOraclePrice;
 
 /// A chip award to a player (pot winnings). Returns/uncalled-bets are tracked
 /// separately in [`SettleResult`].
@@ -37,9 +20,8 @@ pub struct Award {
 /// data, so `settle` is replayable and on-chain-verifiable (`04 §18`).
 pub struct SettleInput<'a> {
     pub players: &'a [PlayerState],
-    /// Oracle samples already filtered by confidence/staleness guards (`04 §11`).
-    pub settlement_samples: &'a [Price],
-    pub min_samples: usize,
+    /// Single Pyth-authenticated bounded exact-after settlement price.
+    pub oracle_price: VerifiedOraclePrice,
     /// Pot rake in basis points (e.g. 300 = 3%).
     pub rake_bps: u32,
     /// Per-pot rake cap in chips.
@@ -50,6 +32,7 @@ pub struct SettleInput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettleResult {
     pub settlement_price: Price,
+    pub oracle_publish_time: u64,
     /// Net pot winnings per player (one merged entry per winner, id-ordered).
     pub pot_awards: Vec<Award>,
     /// Uncalled-bet + degenerate pro-rata returns (id-ordered, merged).
@@ -63,10 +46,7 @@ pub struct SettleResult {
 /// formed pot → award each pot to the closest eligible prediction (or the lone
 /// eligible player for an uncontested layer) → assert conservation.
 pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
-    if input.settlement_samples.len() < input.min_samples {
-        return Err(CoreError::InsufficientOracleSamples);
-    }
-    let s = median_price(input.settlement_samples).ok_or(CoreError::InsufficientOracleSamples)?;
+    let s = input.oracle_price.price;
 
     let layout = build_pots(input.players)?;
 
@@ -97,7 +77,10 @@ pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
     // Conservation (net of fees): awards + returns + rake == total contributions.
     let total_in: u128 = input.players.iter().map(|p| p.contribution as u128).sum();
     let total_out: u128 = pot_awards.iter().map(|a| a.amount as u128).sum::<u128>()
-        + uncalled_returns.iter().map(|(_, c)| *c as u128).sum::<u128>()
+        + uncalled_returns
+            .iter()
+            .map(|(_, c)| *c as u128)
+            .sum::<u128>()
         + rake_collected as u128;
     if total_in != total_out {
         return Err(CoreError::ConservationViolation);
@@ -105,6 +88,7 @@ pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
 
     Ok(SettleResult {
         settlement_price: s,
+        oracle_publish_time: input.oracle_price.publish_time,
         pot_awards,
         uncalled_returns,
         rake_collected,
@@ -151,7 +135,9 @@ fn winners_of(players: &[PlayerState], pot: &Pot, s: Price) -> Result<Vec<Player
     let mut best: Option<u128> = None;
     let mut winners: Vec<PlayerId> = Vec::new();
     for &id in &pot.eligible {
-        let pred = player(players, id).prediction.ok_or(CoreError::MissingPrediction)?;
+        let pred = player(players, id)
+            .prediction
+            .ok_or(CoreError::MissingPrediction)?;
         let dist = (pred - s).unsigned_abs();
         match best {
             None => {
@@ -171,7 +157,12 @@ fn winners_of(players: &[PlayerState], pot: &Pot, s: Price) -> Result<Vec<Player
 
 /// Split a payable pot equally among winners; the indivisible remainder goes to the
 /// earliest-sealed winner (then lowest id) — `04 §13`.
-fn award_split(payable: Chips, winners: &[PlayerId], players: &[PlayerState], out: &mut Vec<Award>) {
+fn award_split(
+    payable: Chips,
+    winners: &[PlayerId],
+    players: &[PlayerState],
+    out: &mut Vec<Award>,
+) {
     let k = winners.len() as u64;
     let base = payable / k;
     let rem = payable % k;
@@ -182,7 +173,10 @@ fn award_split(payable: Chips, winners: &[PlayerId], players: &[PlayerState], ou
     });
     for (i, id) in ordered.iter().enumerate() {
         let extra = if i == 0 { rem } else { 0 };
-        out.push(Award { player: *id, amount: base + extra });
+        out.push(Award {
+            player: *id,
+            amount: base + extra,
+        });
     }
 }
 
@@ -210,7 +204,10 @@ fn merge_by_player(awards: Vec<Award>) -> Vec<Award> {
     }
     m.into_iter()
         .filter(|(_, amount)| *amount > 0)
-        .map(|(id, amount)| Award { player: PlayerId(id), amount })
+        .map(|(id, amount)| Award {
+            player: PlayerId(id),
+            amount,
+        })
         .collect()
 }
 
@@ -223,17 +220,4 @@ fn merge_returns(returns: Vec<(PlayerId, Chips)>) -> Vec<(PlayerId, Chips)> {
         .filter(|(_, c)| *c > 0)
         .map(|(id, c)| (PlayerId(id), c))
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn median_odd_and_even() {
-        assert_eq!(median_price(&[5, 1, 3]), Some(3));
-        assert_eq!(median_price(&[10, 20, 30, 40]), Some(25)); // floor((20+30)/2)
-        assert_eq!(median_price(&[10, 21, 30, 41]), Some(25)); // floor((21+30)/2)=25
-        assert_eq!(median_price(&[]), None);
-    }
 }

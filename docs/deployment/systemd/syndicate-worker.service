@@ -1,0 +1,22 @@
+[Unit]
+Description=Syndicate Settlement Worker
+After=network-online.target syndicate-settlement-chain.service
+Wants=network-online.target syndicate-settlement-chain.service
+
+[Service]
+Type=simple
+User=syndicate
+Group=syndicate
+WorkingDirectory=/opt/syndicate/backend
+EnvironmentFile=/etc/syndicate/settlement-worker.env
+ExecStart=/opt/syndicate/backend/target/release/syndicate-worker
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/syndicate /var/log/syndicate
+
+[Install]
+WantedBy=multi-user.target

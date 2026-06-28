@@ -6,9 +6,11 @@
 //! is chained `hash_i = sha256(hash_{i-1} || payload_i)` (genesis = 32 zero bytes), and
 //! loading re-derives the chain and rejects any modification.
 //!
-//! Two backends: [`InMemoryStore`] (tests / ephemeral) and [`FileStore`] (durable,
-//! append-only, fsync'd). Records are opaque bytes — serialization of the action is the
-//! caller's concern, keeping this layer reusable and dependency-light.
+//! Production persistence is Postgres-first and defined by [`POSTGRES_SCHEMA_V1`].
+//! The two Rust backends here remain useful for unit tests and single-process local
+//! fixtures: [`InMemoryStore`] (ephemeral) and [`FileStore`] (fsync'd local file).
+//! Records are opaque bytes — serialization of the action is the caller's concern,
+//! keeping this layer reusable and dependency-light.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -16,13 +18,32 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+pub mod postgres;
+pub mod schema;
+
+pub use postgres::{
+    ACQUIRE_MATCH_LEASE_SQL, ADVANCE_READ_MODEL_CHECKPOINT_SQL, APPEND_MATCH_EVENT_WITH_OUTBOX_SQL,
+    CLAIM_SETTLEMENT_OUTBOX_SQL, ENQUEUE_SETTLEMENT_REQUEST_SQL, INSERT_MATCH_SNAPSHOT_SQL,
+    INSERT_REPLAY_BUNDLE_SQL, INSERT_SETTLEMENT_DEAD_LETTER_SQL, INSERT_VAULT_RECONCILIATION_SQL,
+    LIST_DUE_SETTLEMENT_ATTEMPTS_SQL, LOAD_ALL_MATCH_EVENTS_SQL, LOAD_LATEST_MATCH_SNAPSHOT_SQL,
+    LOAD_MATCH_EVENTS_AFTER_SQL, LOAD_MATCH_SEATS_SQL, LOAD_MATCH_SETTLEMENT_CONTEXT_SQL,
+    LOAD_SETTLEMENT_ATTEMPT_SQL, LOCK_SETTLEMENT_ATTEMPT_SQL, MARK_OUTBOX_DEAD_LETTER_SQL,
+    MARK_OUTBOX_PUBLISHED_SQL, MARK_OUTBOX_RETRY_SQL, MARK_SETTLEMENT_CONFIRMED_SQL,
+    MARK_SETTLEMENT_DEAD_LETTER_SQL, MARK_SETTLEMENT_RETRY_SQL, MARK_SETTLEMENT_SUBMITTED_SQL,
+    MARK_SETTLEMENT_VOIDED_SQL, RENEW_MATCH_LEASE_SQL, UPSERT_LIVE_GAME_SQL,
+    UPSERT_MATCH_HISTORY_SQL, UPSERT_PROFILE_STATS_SQL, UPSERT_SETTLEMENT_ATTEMPT_SQL,
+};
+pub use schema::POSTGRES_SCHEMA_V1;
+
 pub const GENESIS: [u8; 32] = [0u8; 32];
 
 #[derive(Debug)]
 pub enum StoreError {
     Io(std::io::Error),
     /// The persisted chain does not validate — data was modified/corrupted.
-    ChainBroken { seq: u64 },
+    ChainBroken {
+        seq: u64,
+    },
     /// A persisted line was malformed.
     Corrupt(String),
 }
@@ -86,7 +107,10 @@ impl Store for InMemoryStore {
         let hash = chain(&prev, payload);
         self.payloads.push(payload.to_vec());
         self.hashes.push(hash);
-        Ok(RecordMeta { seq: (self.payloads.len() - 1) as u64, hash })
+        Ok(RecordMeta {
+            seq: (self.payloads.len() - 1) as u64,
+            hash,
+        })
     }
     fn load(&self) -> Result<Vec<Vec<u8>>, StoreError> {
         self.verify()?;
@@ -126,7 +150,11 @@ impl FileStore {
     /// Open (or create) a store at `path`, verifying any existing chain.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
-        let mut store = FileStore { path: path.clone(), head: GENESIS, count: 0 };
+        let mut store = FileStore {
+            path: path.clone(),
+            head: GENESIS,
+            count: 0,
+        };
         if path.exists() {
             let (payloads, head) = read_and_verify(&path)?;
             store.head = head;
@@ -149,11 +177,19 @@ fn read_and_verify(path: &Path) -> Result<(Vec<Vec<u8>>, [u8; 32]), StoreError> 
             continue;
         }
         let mut parts = line.split('\t');
-        let _seq = parts.next().ok_or_else(|| StoreError::Corrupt("missing seq".into()))?;
-        let payload_hex = parts.next().ok_or_else(|| StoreError::Corrupt("missing payload".into()))?;
-        let hash_hex = parts.next().ok_or_else(|| StoreError::Corrupt("missing hash".into()))?;
-        let payload = from_hex(payload_hex).ok_or_else(|| StoreError::Corrupt("bad payload hex".into()))?;
-        let stored_hash = from_hex(hash_hex).ok_or_else(|| StoreError::Corrupt("bad hash hex".into()))?;
+        let _seq = parts
+            .next()
+            .ok_or_else(|| StoreError::Corrupt("missing seq".into()))?;
+        let payload_hex = parts
+            .next()
+            .ok_or_else(|| StoreError::Corrupt("missing payload".into()))?;
+        let hash_hex = parts
+            .next()
+            .ok_or_else(|| StoreError::Corrupt("missing hash".into()))?;
+        let payload =
+            from_hex(payload_hex).ok_or_else(|| StoreError::Corrupt("bad payload hex".into()))?;
+        let stored_hash =
+            from_hex(hash_hex).ok_or_else(|| StoreError::Corrupt("bad hash hex".into()))?;
         let expect = chain(&prev, &payload);
         if stored_hash.as_slice() != expect.as_slice() {
             return Err(StoreError::ChainBroken { seq: i as u64 });
@@ -203,7 +239,10 @@ fn from_hex(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 != 0 {
         return None;
     }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -219,7 +258,10 @@ mod tests {
         assert_eq!(m1.seq, 1);
         assert_eq!(s.head(), m1.hash);
         assert_eq!(m1.hash, chain(&m0.hash, b"action-1"));
-        assert_eq!(s.load().unwrap(), vec![b"action-0".to_vec(), b"action-1".to_vec()]);
+        assert_eq!(
+            s.load().unwrap(),
+            vec![b"action-0".to_vec(), b"action-1".to_vec()]
+        );
         s.verify().unwrap();
     }
 
@@ -229,7 +271,10 @@ mod tests {
         s.append(b"a").unwrap();
         s.append(b"b").unwrap();
         s.payloads[0] = b"tampered".to_vec(); // mutate a recorded payload
-        assert!(matches!(s.verify(), Err(StoreError::ChainBroken { seq: 0 })));
+        assert!(matches!(
+            s.verify(),
+            Err(StoreError::ChainBroken { seq: 0 })
+        ));
     }
 
     #[test]
@@ -248,7 +293,10 @@ mod tests {
         // Reopen: chain re-verified, payloads replayable.
         let s2 = FileStore::open(&path).unwrap();
         assert_eq!(s2.len(), 3);
-        assert_eq!(s2.load().unwrap(), vec![b"deposit".to_vec(), b"bet:50".to_vec(), b"fold".to_vec()]);
+        assert_eq!(
+            s2.load().unwrap(),
+            vec![b"deposit".to_vec(), b"bet:50".to_vec(), b"fold".to_vec()]
+        );
         let head_before = s2.head();
         // Continue appending after reopen; chain extends from the persisted head.
         let mut s3 = FileStore::open(&path).unwrap();

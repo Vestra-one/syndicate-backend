@@ -5,9 +5,10 @@
 resolver = "2"
 members = [
     "services/shared",
+    "services/engine-core",
     "services/settlement",
     "services/match-engine",
-    "services/oracle-adapter",
+    "services/match-orchestrator",
     "services/timelock",
     "services/store",
     "services/worker",

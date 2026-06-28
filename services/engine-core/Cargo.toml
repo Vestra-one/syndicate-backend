@@ -1,0 +1,16 @@
+[package]
+name = "syndicate-engine-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure deterministic match engine: betting state machine, turn order, contribution tracking. Shared off-chain and on-chain (SBF)."
+
+[lib]
+name = "syndicate_engine_core"
+path = "src/lib.rs"
+
+[dependencies]
+syndicate-shared = { path = "../shared" }
+borsh = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+syndicate-shared = { path = "../shared" }

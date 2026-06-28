@@ -40,10 +40,19 @@ pub fn info_url(base: &str, chain_hash: &str) -> String {
     format!("{}/{}/info", base.trim_end_matches('/'), chain_hash)
 }
 pub fn round_url(base: &str, chain_hash: &str, round: u64) -> String {
-    format!("{}/{}/public/{}", base.trim_end_matches('/'), chain_hash, round)
+    format!(
+        "{}/{}/public/{}",
+        base.trim_end_matches('/'),
+        chain_hash,
+        round
+    )
 }
 pub fn latest_url(base: &str, chain_hash: &str) -> String {
-    format!("{}/{}/public/latest", base.trim_end_matches('/'), chain_hash)
+    format!(
+        "{}/{}/public/latest",
+        base.trim_end_matches('/'),
+        chain_hash
+    )
 }
 
 pub fn parse_info(json: &str) -> Result<DrandInfo, serde_json::Error> {
@@ -66,7 +75,10 @@ impl DrandRound {
     /// Map a fetched round to the time-lock [`RoundKey`]. The signature bytes are the
     /// IBE decryption key for `round`.
     pub fn to_round_key(&self) -> Option<RoundKey> {
-        Some(RoundKey { round: self.round, key: hex_to_bytes(&self.signature)? })
+        Some(RoundKey {
+            round: self.round,
+            key: hex_to_bytes(&self.signature)?,
+        })
     }
 }
 
@@ -87,12 +99,21 @@ pub trait BeaconClient {
 pub struct HttpBeaconClient {
     pub base: String,
     pub chain_hash: String,
+    pub timeout_ms: u64,
 }
 
 #[cfg(feature = "net")]
 impl HttpBeaconClient {
     pub fn new(base: impl Into<String>, chain_hash: impl Into<String>) -> Self {
-        Self { base: base.into(), chain_hash: chain_hash.into() }
+        Self {
+            base: base.into(),
+            chain_hash: chain_hash.into(),
+            timeout_ms: 5_000,
+        }
+    }
+    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
     }
     /// drand "quicknet" (fast, unchained) — the chain used for time-lock encryption.
     pub fn mainnet_quicknet() -> Self {
@@ -108,6 +129,7 @@ impl BeaconClient for HttpBeaconClient {
     fn info(&self) -> Result<DrandInfo, BeaconError> {
         let url = info_url(&self.base, &self.chain_hash);
         let body = ureq::get(&url)
+            .timeout(std::time::Duration::from_millis(self.timeout_ms))
             .call()
             .map_err(|e| BeaconError::Http(e.to_string()))?
             .into_string()
@@ -117,6 +139,7 @@ impl BeaconClient for HttpBeaconClient {
     fn round(&self, round: u64) -> Result<DrandRound, BeaconError> {
         let url = round_url(&self.base, &self.chain_hash, round);
         let body = ureq::get(&url)
+            .timeout(std::time::Duration::from_millis(self.timeout_ms))
             .call()
             .map_err(|e| BeaconError::Http(e.to_string()))?
             .into_string()
@@ -130,7 +153,10 @@ pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 != 0 {
         return None;
     }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 #[cfg(test)]

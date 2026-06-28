@@ -19,8 +19,21 @@ cargo test --workspace
 
 echo
 echo "== TypeScript edge/read-path services =="
-echo "   (config, matchmaking, action-feed, gateway, trust-safety)"
-node --experimental-strip-types --test $(find services -name '*.test.ts' | sort)
+echo "   (config, matchmaking, action-feed, gateway, trust-safety, settlement-chain, devnet harness)"
+node_tests=()
+while IFS= read -r test_file; do
+  node_tests+=("$test_file")
+done < <(
+  find services \
+    -path '*/node_modules' -prune -o \
+    \( -path '*/test/*.test.ts' -o -path '*/test/*.test.mjs' \) \
+    -type f -print | sort
+)
+if [[ ${#node_tests[@]} -eq 0 ]]; then
+  echo "no TypeScript/JavaScript test files found" >&2
+  exit 1
+fi
+node --experimental-strip-types --test "${node_tests[@]}"
 
 echo
 echo "NOTE: the on-chain program is built + tested in the Solana CI:"

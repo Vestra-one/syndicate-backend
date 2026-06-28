@@ -18,11 +18,12 @@
 
 ## Non-responsibilities
 - **No pot/`S`/winner math** (→ `shared` via `settlement`).
-- No custody (→ `programs`), no oracle sampling (→ `oracle-adapter`), no seal/decrypt (→ `timelock`), no socket transport (→ `gateway`).
+- No custody (→ `programs`), no oracle price selection (→ settlement worker / Pyth path), no seal/decrypt (→ `timelock`), no socket transport (→ `gateway`).
 
 ## Internal structure (suggested)
 ```
 match-engine/src/
+  service.rs     # fenced runtime: leases, intent append, snapshots, replay
   sm/            # state machine + transitions
   betting/       # legality, turn order, min-raise, reopen, heads-up
   timers/        # action_timer + replenishing time_bank + pre-signed defaults
@@ -33,7 +34,7 @@ match-engine/src/
 ```
 
 ## Interfaces
-- **In:** validated player intents (via `gateway`); table+config at creation (from `matchmaking`/`config`); oracle ticks (from `oracle-adapter`) for the clock/observation; drand key availability (from `timelock`) at match end.
+- **In:** validated player intents (via `gateway`); table+config at creation (from `matchmaking`/`config`); drand key availability (from `timelock`) at match end.
 - **Out:** authoritative state + public events (to `gateway` and `action-feed`); the input bundle (log, contributions, seal refs, vrf seed, config) to `settlement` at match end.
 
 ## Invariants & failure modes
@@ -44,13 +45,15 @@ match-engine/src/
 - Engine never reads a sealed prediction (it only holds ciphertext refs).
 
 ## Dependencies
-`shared` (types, log, legality helpers), `oracle-adapter`, `timelock`, `config`.
+`shared` (types, log, legality helpers), `timelock`, `config`.
 
 ## Testing
 - State-machine exhaustiveness: every transition + every degenerate state in `04 §17`.
 - Betting-legality property tests (min-raise, reopen, heads-up, sub-blind all-in).
 - Timer/disconnect/pre-signed-default simulations; reconnect re-sync.
 - Golden logs feed the `shared`/`settlement`/`programs` replay tests.
+- Split-brain tests prove stale fencing tokens cannot append after lease handoff.
+- Load smoke covers 2,000 fenced match runtimes without requiring deployment.
 
 ## AI-agent rules
 - This service **orders**, it does not **decide outcomes** — never compute a pot or winner here.

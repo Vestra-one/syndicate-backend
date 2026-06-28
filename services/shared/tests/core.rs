@@ -3,10 +3,34 @@
 //! invariant from `§0`. The property test uses a std-only xorshift RNG (no external
 //! crates) so it runs in any environment.
 
-use syndicate_shared::{build_pots, settle, PlayerId, PlayerState, SettleInput};
+use syndicate_shared::{
+    build_pots, settle, PlayerId, PlayerState, SettleInput, VerifiedOraclePrice,
+};
 
-fn p(id: u16, contribution: u64, folded: bool, prediction: Option<i128>, seal_seq: u64) -> PlayerState {
-    PlayerState { id: PlayerId(id), contribution, folded, prediction, seal_seq }
+fn p(
+    id: u16,
+    contribution: u64,
+    folded: bool,
+    prediction: Option<i128>,
+    seal_seq: u64,
+) -> PlayerState {
+    PlayerState {
+        id: PlayerId(id),
+        contribution,
+        folded,
+        prediction,
+        seal_seq,
+    }
+}
+
+fn oracle(price: i128) -> VerifiedOraclePrice {
+    VerifiedOraclePrice {
+        feed_id: [7u8; 32],
+        price,
+        publish_time: 1_000,
+        confidence: 10,
+        exponent: -8,
+    }
 }
 
 /// `04 §9` worked example: D=20 (folded), B=60, A=100, C=100 → pots 80/120/80.
@@ -40,8 +64,7 @@ fn golden_section9_award_no_rake() {
     ];
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[105_120],
-        min_samples: 1,
+        oracle_price: oracle(105_120),
         rake_bps: 0,
         rake_cap: 0,
     };
@@ -63,14 +86,19 @@ fn uncalled_bet_is_returned() {
     ];
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[100_000, 100_000, 100_000],
-        min_samples: 1,
+        oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
     };
     let r = settle(&input).unwrap();
     // One pot of 200 (100+100); A wins it. A also gets 20 back uncalled.
-    assert_eq!(r.pot_awards, vec![syndicate_shared::Award { player: PlayerId(0), amount: 200 }]);
+    assert_eq!(
+        r.pot_awards,
+        vec![syndicate_shared::Award {
+            player: PlayerId(0),
+            amount: 200
+        }]
+    );
     assert_eq!(r.uncalled_returns, vec![(PlayerId(0), 20)]);
 }
 
@@ -79,13 +107,12 @@ fn uncalled_bet_is_returned() {
 fn tie_split_with_odd_chip_to_earliest_seal() {
     // Two equal-and-opposite distances around S; pot = 2*51 = 102 (odd split of 101 after... use 51 each)
     let players = vec![
-        p(0, 51, false, Some(99_900), 5),   // A dist 100, sealed later
-        p(1, 51, false, Some(100_100), 2),  // B dist 100, sealed earlier
+        p(0, 51, false, Some(99_900), 5),  // A dist 100, sealed later
+        p(1, 51, false, Some(100_100), 2), // B dist 100, sealed earlier
     ];
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[100_000],
-        min_samples: 1,
+        oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
     };
@@ -108,15 +135,24 @@ fn odd_remainder_to_earliest_seal() {
     // Layer51: {B} alone → uncalled return 1 to B.
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[100_000],
-        min_samples: 1,
+        oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
     };
     let r = settle(&input).unwrap();
     // pot 100 tie → 50/50, no remainder; B also gets 1 uncalled back.
-    let a = r.pot_awards.iter().find(|x| x.player == PlayerId(0)).unwrap().amount;
-    let b = r.pot_awards.iter().find(|x| x.player == PlayerId(1)).unwrap().amount;
+    let a = r
+        .pot_awards
+        .iter()
+        .find(|x| x.player == PlayerId(0))
+        .unwrap()
+        .amount;
+    let b = r
+        .pot_awards
+        .iter()
+        .find(|x| x.player == PlayerId(1))
+        .unwrap()
+        .amount;
     assert_eq!(a, 50);
     assert_eq!(b, 50);
     assert_eq!(r.uncalled_returns, vec![(PlayerId(1), 1)]);
@@ -131,29 +167,35 @@ fn rake_is_deducted_from_pot() {
     ];
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[100_000],
-        min_samples: 1,
+        oracle_price: oracle(100_000),
         rake_bps: 300, // 3%
         rake_cap: 1_000_000,
     };
     let r = settle(&input).unwrap();
     // pot 200, rake 6, payable 194 to A.
     assert_eq!(r.rake_collected, 6);
-    assert_eq!(r.pot_awards, vec![syndicate_shared::Award { player: PlayerId(0), amount: 194 }]);
+    assert_eq!(
+        r.pot_awards,
+        vec![syndicate_shared::Award {
+            player: PlayerId(0),
+            amount: 194
+        }]
+    );
 }
 
-/// Too few oracle samples → VOID signal (no panic, no settlement).
+/// Settlement consumes the verified Pyth oracle price exactly.
 #[test]
-fn insufficient_samples_voids() {
+fn settlement_uses_verified_oracle_price() {
     let players = vec![p(0, 10, false, Some(1), 0), p(1, 10, false, Some(2), 1)];
     let input = SettleInput {
         players: &players,
-        settlement_samples: &[],
-        min_samples: 30,
+        oracle_price: oracle(2),
         rake_bps: 0,
         rake_cap: 0,
     };
-    assert!(settle(&input).is_err());
+    let r = settle(&input).unwrap();
+    assert_eq!(r.settlement_price, 2);
+    assert_eq!(r.oracle_publish_time, 1_000);
 }
 
 // ---- Property test: conservation always holds (std-only RNG) ----
@@ -183,15 +225,17 @@ fn property_conservation_over_100k_random_scenarios() {
         for id in 0..n {
             let contribution = rng.below(201); // 0..=200
             let folded = rng.below(10) < 4; // ~40% fold
-            // non-folded get a prediction; folded none
-            let prediction = if folded { None } else { Some(rng.below(200_000) as i128) };
+                                            // non-folded get a prediction; folded none
+            let prediction = if folded {
+                None
+            } else {
+                Some(rng.below(200_000) as i128)
+            };
             players.push(p(id as u16, contribution, folded, prediction, id));
         }
-        let samples: Vec<i128> = vec![rng.below(200_000) as i128];
         let input = SettleInput {
             players: &players,
-            settlement_samples: &samples,
-            min_samples: 1,
+            oracle_price: oracle(rng.below(200_000) as i128),
             rake_bps: (rng.below(1001)) as u32, // 0..=10%
             rake_cap: rng.below(500),
         };
@@ -200,9 +244,16 @@ fn property_conservation_over_100k_random_scenarios() {
                 // Conservation: awards + returns + rake == total contributions.
                 let total_in: u128 = players.iter().map(|p| p.contribution as u128).sum();
                 let total_out: u128 = r.pot_awards.iter().map(|a| a.amount as u128).sum::<u128>()
-                    + r.uncalled_returns.iter().map(|(_, c)| *c as u128).sum::<u128>()
+                    + r.uncalled_returns
+                        .iter()
+                        .map(|(_, c)| *c as u128)
+                        .sum::<u128>()
                     + r.rake_collected as u128;
-                assert_eq!(total_in, total_out, "conservation must hold for players={:?}", players);
+                assert_eq!(
+                    total_in, total_out,
+                    "conservation must hold for players={:?}",
+                    players
+                );
                 // No folded player may ever receive a pot award.
                 for a in &r.pot_awards {
                     let pl = players.iter().find(|x| x.id == a.player).unwrap();
@@ -213,13 +264,21 @@ fn property_conservation_over_100k_random_scenarios() {
             Err(_) => { /* defined error paths are acceptable */ }
         }
     }
-    assert!(ok > 90_000, "expected most random scenarios to settle, got {ok}");
+    assert!(
+        ok > 90_000,
+        "expected most random scenarios to settle, got {ok}"
+    );
 }
 
 // ---- Phase 2: on-chain re-verification core ----
 
 fn sample_input(players: &[PlayerState]) -> SettleInput<'_> {
-    SettleInput { players, settlement_samples: &[105_120], min_samples: 1, rake_bps: 0, rake_cap: 0 }
+    SettleInput {
+        players,
+        oracle_price: oracle(105_120),
+        rake_bps: 0,
+        rake_cap: 0,
+    }
 }
 
 /// A correctly computed settlement re-verifies as valid (safe to release funds).
@@ -265,4 +324,23 @@ fn verify_rejects_wrong_winner() {
     let mut tampered = settle(&input).unwrap();
     tampered.pot_awards[0].player = PlayerId(1); // award the loser
     assert!(syndicate_shared::verify_settlement(&input, &tampered).is_err());
+}
+
+#[test]
+fn intent_action_message_binds_prev_head() {
+    use syndicate_shared::intent::{action_intent_message, ACTION_TAG_CALL};
+    let pk = [1u8; 32];
+    let head = [2u8; 32];
+    let msg = action_intent_message(1, 42, 0, &pk, 1, &head, ACTION_TAG_CALL, 0);
+    assert!(msg.windows(32).any(|w| w == head));
+}
+
+#[test]
+fn prediction_commitment_hash_is_sensitive() {
+    use syndicate_shared::intent::prediction_commitment_hash;
+    let b = [7u8; 32];
+    assert_ne!(
+        prediction_commitment_hash(100_000, &b),
+        prediction_commitment_hash(100_001, &b)
+    );
 }

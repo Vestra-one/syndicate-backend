@@ -65,7 +65,11 @@ pub fn build_pots(players: &[PlayerState]) -> Result<PotLayout, CoreError> {
                 .filter(|p| !p.folded && p.contribution >= level)
                 .map(|p| p.id)
                 .collect();
-            pots.push(Pot { amount, contributors, eligible });
+            pots.push(Pot {
+                amount,
+                contributors,
+                eligible,
+            });
         }
         prev = level;
     }
@@ -73,10 +77,16 @@ pub fn build_pots(players: &[PlayerState]) -> Result<PotLayout, CoreError> {
     // Conservation: every contributed chip is accounted for in pots + returns.
     let total_in: u128 = players.iter().map(|p| p.contribution as u128).sum();
     let total_out: u128 = pots.iter().map(|p| p.amount as u128).sum::<u128>()
-        + uncalled_returns.iter().map(|(_, c)| *c as u128).sum::<u128>();
+        + uncalled_returns
+            .iter()
+            .map(|(_, c)| *c as u128)
+            .sum::<u128>();
     if total_in != total_out {
         return Err(CoreError::ConservationViolation);
     }
 
-    Ok(PotLayout { pots, uncalled_returns })
+    Ok(PotLayout {
+        pots,
+        uncalled_returns,
+    })
 }

@@ -17,7 +17,7 @@ Syndicate runs many small (2–5 player) real-money matches concurrently. Each m
 ```
  Clients ──ws──▶ gateway ──▶ match-engine (authoritative ordering, single-writer/match)
                                   │  appends signed intents to a hash-chained log
-                                  │  pulls oracle samples + drand key
+                                  │  verified Pyth exact-after price + drand key
                                   ▼
                             settlement (pure fn, Rust shared crate)
                                   │  recompute pots + S
@@ -40,10 +40,9 @@ Monorepo under `backend/services/`. Stack: **Rust core + TypeScript edge** (rati
 | Service | Owns | Stack | Key upstream deps |
 |---------|------|-------|-------------------|
 | `programs` | On-chain truth: vault PDA, deposits/claims/refunds, VRF, settlement **verification**, fee accounting | Rust + Anchor | `shared` |
-| `shared` | The deterministic core: domain types, integer money math, **pot/side-pot construction**, `S` median, replay | Rust crate (+ optional WASM) | — |
-| `settlement` | Off-chain settlement builder: recompute pots + `S`, assemble & submit the on-chain settlement tx | Rust | `shared`, `oracle-adapter`, `timelock`, `programs` |
-| `match-engine` | Authoritative state machine, signed action log, timers, pre-signed defaults, side-pot tracking | Rust (tokio) | `shared`, `oracle-adapter`, `timelock`, `config` |
-| `oracle-adapter` | Modular **pull** oracle (Switchboard On-Demand default), sampling, window median, feed-health/VOID guards | Rust | external oracle |
+| `shared` | The deterministic core: domain types, integer money math, **pot/side-pot construction**, Pyth bounded exact-after oracle validation, replay | Rust crate (+ optional WASM) | — |
+| `settlement` | Off-chain settlement builder: recompute pots + verified oracle price, assemble & submit the on-chain settlement tx | Rust | `shared`, `timelock`, `programs` |
+| `match-engine` | Authoritative state machine, signed action log, timers, pre-signed defaults, side-pot tracking | Rust (tokio) | `shared`, `timelock`, `config` |
 | `timelock` | Time-lock encryption seal/verify + **drand `tlock`** decryption at match end | Rust | external drand beacon |
 | `gateway` | Edge: WebSocket fan-out, wallet auth (nonce/sig/session), **geofencing**, optimistic client views | TS/Node | `match-engine`, `matchmaking` |
 | `matchmaking` | Public queue + private rooms, rating buckets, **deposit-to-enter gate**, seat assignment | TS/Node | `programs` (deposit finality), `config`, `trust-safety` |
@@ -59,7 +58,7 @@ Deferred (not built in v1, seam only): spectator prediction market — would con
 
 1. **Money is integer-only.** No floats anywhere near chips, fees, prices, or `S`. Fixed-point per `04 §1`. This rule is absolute.
 2. **The deterministic core lives once.** Pot construction, side-pots, `S` median, winner selection, tie-breaks → `shared` (Rust). `settlement` and `programs` both call it; nobody re-implements it. Edge services never compute outcomes.
-3. **Every player action is a signed intent** appended to an ordered, **hash-chained** event log. Engine-authored events (timeouts, auto-resolution) are explicitly marked. Replay of (log + sealed predictions + drand key + oracle samples + VRF seed + config) must reproduce settlement bit-for-bit. A CI **replay determinism test** gates merges to `shared`/`settlement`/`match-engine`.
+3. **Every player action is a signed intent** appended to an ordered, **hash-chained** event log. Engine-authored events (timeouts, auto-resolution) are explicitly marked. Replay of (log + sealed predictions + drand key + verified Pyth oracle price + VRF seed + config) must reproduce settlement bit-for-bit. A CI **replay determinism test** gates merges to `shared`/`settlement`/`match-engine`.
 4. **Config-driven, not code-driven.** Round count, durations, blinds, timers, fees, caps, feed, token, player counts come from `config`, bound at match creation, recorded for replay. Never hard-code a game number. (`08 OQ7`.)
 5. **Events are contracts.** Inter-service messages have versioned schemas (see `shared` + `config`). Public (`action-feed`) events must *never* carry sealed predictions before the time-lock opens, queued intents, pre-signed defaults, or PII.
 6. **Single-writer per match.** Exactly one `match-engine` instance owns a match (lease/fencing). No split-brain.
@@ -75,8 +74,8 @@ States (authoritative in `match-engine`, mirrored on-chain): `CREATED → FILLIN
 
 1. **Discover/join** — `gateway` (auth + geofence) → `matchmaking` assigns/forms a table from `config`; **deposit to `programs` vault gates the seat** (anti-spam).
 2. **Seal** — client time-lock-encrypts its prediction (`timelock` scheme params); ciphertext recorded before LIVE.
-3. **Live** — `match-engine` posts blinds once, runs streets with per-turn timers + pre-signed defaults; `oracle-adapter` samples the feed continuously; `action-feed` broadcasts public events; chart driven by the same recorded feed source.
-4. **Settle** — at match end, `oracle-adapter` finalizes `S` (window median + guards); `timelock` decrypts all predictions via the drand key; `settlement` recomputes pots via `shared`; `programs` re-verifies and releases funds (entry fee + pot rake applied per `04 §14`).
+3. **Live** — `match-engine` posts blinds once, runs streets with per-turn timers + pre-signed defaults; `action-feed` broadcasts public events; live chart data is non-authoritative and separate from settlement.
+4. **Settle** — at match end, the settlement worker selects the first valid Pyth bounded exact-after update (`shared::oracle`); `timelock` decrypts all predictions via the drand key; `settlement` recomputes pots via `shared`; `programs` re-verifies and releases funds (entry fee + pot rake applied per `04 §14`).
 5. **Resolve** — contested showdown or uncontested win; **all numbers open post-match**; `action-feed` presents; players claim from the vault.
 
 ---
@@ -92,7 +91,6 @@ backend/
     shared/          ARCHITECTURE.md   # Rust deterministic core + domain types
     settlement/      ARCHITECTURE.md
     match-engine/    ARCHITECTURE.md
-    oracle-adapter/  ARCHITECTURE.md
     timelock/        ARCHITECTURE.md
     gateway/         ARCHITECTURE.md
     matchmaking/     ARCHITECTURE.md
@@ -102,6 +100,8 @@ backend/
 ```
 
 Each service dir is self-contained (its own build, tests, and `ARCHITECTURE.md`). Rust services share workspace crates via `shared`.
+
+**Context & doc policy:** Coding agents should start from [AGENTS.md](AGENTS.md), which defines the canonical reading order, classifies every doc as PRIMARY / REFERENCE / ARCHIVE, and maps superseded drafts to their canonical replacements. De-indexed files (`.cursorindexingignore`) remain readable on demand; marketing and test keys are blocked (`.cursorignore`).
 
 ---
 

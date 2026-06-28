@@ -36,8 +36,10 @@ pub struct PlayerState {
 /// (typically VOID + refund). Never panics on adversarial input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoreError {
-    /// Fewer valid oracle samples than required ⇒ VOID (`04 §11`).
-    InsufficientOracleSamples,
+    /// No valid Pyth price update exists in the configured settlement window ⇒ VOID.
+    OracleUnavailable,
+    /// The submitted oracle price did not match the configured feed/time/confidence rules.
+    InvalidOraclePrice,
     /// Conservation invariant violated ⇒ VOID; this is a hard bug signal (`04 §0`).
     ConservationViolation,
     /// A contender in a contested pot lacked a decrypted prediction (should be

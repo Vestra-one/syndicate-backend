@@ -7,9 +7,9 @@
 ## 1. What an external auditor must review (scope, in priority order)
 
 1. ⛔ **On-chain program (`services/programs`)** — custody is here. Vault PDA authority, deposit/lock/settle/claim/void/refund, the settlement re-verification path, fee accounting, idempotent claim, arithmetic, account constraints/seeds. This is the highest-value target and gets the deepest review + a dedicated audit.
-2. ⛔ **Deterministic core (`services/shared`)** — the money math the program links. Side-pot construction, `S` median, winner/tie, conservation. A bug here mis-pays on **both** sides identically (the parity check won't catch it), so it needs its own scrutiny + fuzzing.
+2. ⛔ **Deterministic core (`services/shared`)** — the money math the program links. Side-pot construction, bounded exact-after Pyth price validation, winner/tie, conservation. A bug here mis-pays on **both** sides identically (the parity check won't catch it), so it needs its own scrutiny + fuzzing.
 3. **Settlement builder (`services/settlement`)** — input collection + VOID orchestration; ensure no path releases funds on unverified or degraded inputs.
-4. **Oracle adapter + time-lock** — sample authenticity, guard thresholds, beacon trust, binding-before-LIVE.
+4. **Pyth updater/receiver path + time-lock** — Pyth update authenticity, feed/timestamp/confidence/exponent guards, beacon trust, binding-before-LIVE.
 5. **Edge (`gateway`, `matchmaking`)** — auth/signature handling, deposit-finality gating, geofencing bypass.
 6. **Read path (`action-feed`)** — redaction (no secret ever leaves).
 
@@ -22,7 +22,7 @@
 | Drain the vault | Minimal-trust program; funds release only after on-chain re-verification; conservation assert | `programs::submit_settlement` + audit; `shared::verify_settlement` tamper tests |
 | Submit a forged/inflated settlement | Chain recomputes via `shared` and rejects mismatch | `e2e_contested_showdown_parity_and_tamper_rejection`, `verify_rejects_*` |
 | Read a prediction early | Time-lock encryption, no key holder | `timelock` binding/round-gating tests; `04 §12` |
-| Decide a pot on a bad/﻿manipulated price | Window-median + confidence/staleness guards → VOID; buy-in caps « market impact | `oracle` guard/insufficient→VOID tests; `04 §11`, `08 OQ2` |
+| Decide a pot on a bad/manipulated price | Pyth-authenticated bounded exact-after update + confidence/exponent/feed/timestamp guards → VOID; buy-in caps << market impact | `shared::oracle` guard/no-update tests; `settlement::ops` Pyth tests; `04 §11`, `08 OQ2` |
 | Steal via tiny bet vs big all-in | Side-pot eligibility caps winnings to matched chips | `shared` golden/property tests; `04 §9` |
 | Grief settlement by not revealing | Auto-decrypt at match end (no manual reveal); missing key → VOID | `timelock` missing-key test; `04 §12` |
 | Collude / chip-dump / bot / Sybil | Muck-on-fold, VRF seating, deposit gate, T&S telemetry; residual priced | `trust-safety` detectors; `07 S3/S4` |
@@ -36,7 +36,7 @@
 ## 3. Invariants the auditor must confirm hold (and that we already test)
 
 - ⛔ **Conservation:** `Σ payouts + Σ returns + fees == Σ deposits`, on every path (incl. VOID). *Tested:* 100k-scenario property test (`shared`), on-chain assert (`programs`).
-- ⛔ **Determinism / parity:** off-chain settlement == on-chain recomputation, byte-identical, from `(signed log, sealed predictions, drand key, oracle samples, VRF seed, config)`. *Tested:* `golden/` vectors across all three sites; e2e parity test.
+- ⛔ **Determinism / parity:** off-chain settlement == on-chain recomputation, byte-identical, from `(signed log, sealed predictions, drand key, verified Pyth update metadata, VRF seed, config)`. *Tested:* `golden/` vectors across all three sites; e2e parity test.
 - ⛔ **No-privilege / concealment:** no actor (incl. operator) can read a prediction before `timelock_target` or alter an outcome. *Mechanism:* TLE no-key-holder; *Tested:* timelock + redaction tests.
 - ⛔ **Capital safety:** every fault has a deterministic refund/VOID; no path releases funds on unverified state. *Tested:* every VOID path in `settlement`/e2e.
 - **Config integrity:** a match settles under the exact recorded `config_hash`. *Tested:* `config` bind-hash tests.
@@ -50,7 +50,8 @@
 - [ ] ⛔ Formal-ish review of conservation + settlement-verification paths.
 - [ ] ⛔ `anchor build && anchor test` green incl. `golden/` parity + every VOID/refund instruction path.
 - [ ] ⛔ Replay-determinism + 100k conservation suites green in CI as the merge gate.
-- [ ] ⛔ Oracle integration (Switchboard On-Demand) signature/authenticity verified on-chain; guard thresholds tuned (`08 OQ1`).
+- [ ] ⛔ Pyth Receiver integration is implemented in source (`PriceUpdateV2` full verification + feed/time/confidence/exponent checks); before real money, complete live Devnet atomic settlement evidence, Anchor runtime tests, transaction fit/compute measurement, and audit evidence (`08 OQ1`).
+- [ ] ⛔ Pyth unavailable path rehearsed: no valid update in window leads to a separate emergency-void-admin `void` transaction, followed by player pull-based `refund` transactions; no operator-selected price or median fallback.
 - [ ] ⛔ Time-lock (drand `tlock`) beacon trust + grace→VOID validated end-to-end.
 - [ ] ⛔ Vault reconciliation invariant (on-chain balance == Σ ledgers) monitored; alerting live.
 - [ ] ⛔ Geofencing enforced at the edge; high-risk jurisdictions blocked (`08 OQ18`).

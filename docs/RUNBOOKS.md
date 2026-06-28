@@ -11,18 +11,18 @@
 |--------|--------------|-----|
 | Action round-trip latency (turn act → ack) | p99 < 250 ms | Turn-timer fairness (`06 §7`) |
 | Settlement time (match end → SETTLED on-chain) | p99 < 30 s | Player trust; capital unlocked |
-| Oracle sample success rate (in window) | > 99.9% | `S` integrity (`04 §11`) |
+| Pyth exact-after update success rate (in window) | > 99.9% | settlement price integrity (`04 §11`) |
 | Time-lock key availability at match end | > 99.99% | Decryption liveness (`04 §12`) |
 | Vault reconciliation drift | **0, always** | Custody integrity (hard invariant) |
 | VOID rate | < 0.5% of matches | Health of oracle/beacon/infra |
 | Settlement-verification mismatch | **0** | A single one is a Sev-1 (`04 §18`) |
 
 ### 1.2 Required metrics (per match, correlation-id'd)
-Match lifecycle transitions; per-turn timer/timeout/auto-action counts; oracle samples + confidence + staleness drops; drand round fetch latency/failures; settlement recompute result + conservation check; on-chain submit/confirm/retry; refund/VOID events with reason; deposit-finality latency; auth failures; geofence blocks; T&S scores/flags/bans; action-feed redaction-guard rejections (should be 0).
+Match lifecycle transitions; per-turn timer/timeout/auto-action counts; Pyth update fetch/post latency, confidence, exponent, and no-update VOID rate; drand round fetch latency/failures; settlement recompute result + conservation check; on-chain submit/confirm/retry; refund/VOID events with reason; deposit-finality latency; auth failures; geofence blocks; T&S scores/flags/bans; action-feed redaction-guard rejections (should be 0).
 
 ### 1.3 Dashboards
 - **Custody (Sev-1 board):** vault balance == Σ ledgers per open match; pending claims/refunds; settlement mismatches; VOID reasons.
-- **Integrity:** oracle health + confidence distribution; drand beacon health; settlement latency; replay/parity CI status.
+- **Integrity:** Pyth update availability + confidence distribution; drand beacon health; settlement latency; replay/parity CI status.
 - **Gameplay:** concurrent matches, fill rates, timeout/auto-fold rate, median pot ÷ blinds (nit-equilibrium watch, `02 S2`).
 - **Trust & safety:** collusion/bot/Sybil flags, ban actions, co-seating anomalies.
 
@@ -36,10 +36,10 @@ Match lifecycle transitions; per-turn timer/timeout/auto-action counts; oracle s
 
 > Common first move for any custody/integrity Sev-1: **engage the kill switch (§3)** to stop new matches at the affected scope, finish or VOID in-flight matches capital-safely, then diagnose. New matches never resume until the invariant is re-verified.
 
-### RB-1 — Oracle degradation / outage (`risk S1`)
-**Detect:** sample success rate or confidence guard breaches; affected matches signal `OracleDegraded`.
-**Act:** in-flight matches with insufficient valid window samples **auto-VOID + full refund** (already wired). Halt new matches on the affected feed. Verify the adapter and the provider (Switchboard On-Demand) status; fail over to the secondary feed/provider via config if the issue is provider-specific. **Never** hand-pick a settlement price.
-**Resume:** only after sample success ≥ SLO for a sustained window.
+### RB-1 — Pyth update degradation / outage (`risk S1`)
+**Detect:** no valid Pyth update in `[scheduled_end_ts, scheduled_end_ts + oracle_delay_window_sec]`, confidence/exponent/feed-id guard breach, Pyth post failure, or affected matches signal `OracleDegraded`.
+**Act:** in-flight matches with no valid exact-after Pyth update must go to **VOID + full refund**. Halt new matches on the affected feed. The backend may automate this, but on-chain it is still a separate emergency-void-admin `void` transaction; refunds are then pull-based player `refund` transactions. Verify Hermes access, Pyth Receiver posting, RPC health, and provider status. **Never** hand-pick a settlement price or fall back to a median sample path.
+**Resume:** only after exact-after update success ≥ SLO for a sustained window.
 
 ### RB-2 — Time-lock beacon (drand) unavailable (`risk A8`)
 **Detect:** round key not published by `timelock_target` + grace.
@@ -65,6 +65,16 @@ Match lifecycle transitions; per-turn timer/timeout/auto-action counts; oracle s
 ### RB-7 — Suspected collusion/bot ring (`risk S3/S4`)
 **Detect:** T&S flags (co-seating, chip-dumping, uniform timing, wallet clusters).
 **Act:** deny seating / ban per the fair-play policy (`ROLLOUT.md`); enforcement is **pre-settlement** — no clawback of settled on-chain funds. Tighten matchmaking buckets / proof-of-personhood for the affected cohort.
+
+### RB-8 — Settlement queue backlog
+**Detect:** `syndicate_settlement_outbox_backlog` rising, relay publish retries, or JetStream consumer pending growth.
+**Act:** verify Postgres, NATS JetStream, and `syndicate-worker` health (`/healthz`, `/metrics`). Check `outbox_events` for `aggregate_type = 'settlement'` rows stuck in `pending`/`processing`. Inspect relay logs for publish failures. Scale worker replicas only after confirming idempotency keys prevent double-pay. If NATS is down, backlog is safe in Postgres; restore relay before clearing manually.
+**Resume:** backlog drains to zero and `settlement_attempts` has no growing `retry_scheduled` cohort.
+
+### RB-9 — Settlement dead-letter recovery
+**Detect:** `syndicate_settlement_attempt_dead_letter_total` increases or rows in `settlement_dead_letters`.
+**Act:** inspect `settlement_dead_letters.payload` and `settlement_attempts.last_error`. Common causes: bundle self-verify failure, void tx failure after retry budget, or Hermes/Pyth post errors. For operator-recoverable cases, fix root cause (RPC, feed config, timelock key) and re-drive via due-poller after correcting data. **Never** manually mark `confirmed` without an on-chain tx signature. For capital-safe cases, submit emergency `void` then player `refund` txs per RB-1.
+**Resume:** dead-letter row triaged with documented root cause; affected match reaches `confirmed` or `voided` terminal state.
 
 ---
 

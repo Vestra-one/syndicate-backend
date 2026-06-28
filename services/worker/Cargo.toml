@@ -2,17 +2,37 @@
 name = "syndicate-worker"
 version = "0.1.0"
 edition = "2021"
-description = "Runnable settlement worker daemon (tokio): consumes completed matches off a channel, settles via the shared core, finalizes (submit/refund), and persists each settlement to the hash-chained event store. Demonstrates a real async service runtime wiring the libraries together."
+description = "Settlement worker daemon: durable JetStream consumer, Postgres outbox relay, crash-safe resume poller, and settlement-chain execution."
 
 [[bin]]
 name = "syndicate-worker"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+async-nats = "0.38"
+futures-util = "0.3"
+deadpool-postgres = "0.14"
+tokio-postgres = "0.7"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+sha2 = "0.10"
+ureq = "2"
 syndicate-shared = { path = "../shared" }
 syndicate-engine = { path = "../match-engine" }
-syndicate-oracle = { path = "../oracle-adapter" }
-syndicate-timelock = { path = "../timelock" }
-syndicate-settlement = { path = "../settlement" }
+syndicate-timelock = { path = "../timelock", features = ["net", "tlock"] }
+syndicate-settlement = { path = "../settlement", features = ["net", "pg", "nats"] }
 syndicate-store = { path = "../store" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-postgres = "0.7"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+serde_json = "1"
+
+[[test]]
+name = "queue_integration"
+path = "tests/queue_integration.rs"

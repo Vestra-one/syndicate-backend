@@ -1,0 +1,12 @@
+.git
+.agents
+.codex
+target
+services/programs/target
+node_modules
+**/node_modules
+.DS_Store
+*.log
+tmp
+dist
+coverage

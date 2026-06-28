@@ -13,8 +13,8 @@ This guide + `protocol.ts` (copy-paste types) + `example-client.ts` (reference f
 The client talks to three surfaces:
 
 1. **Gateway (WebSocket)** — the realtime channel for gameplay: auth, lobby, turn prompts, betting actions, and the public event feed. One socket per session. 🟢 (auth handshake + broadcast) / 🟡 (game messages)
-2. **Solana (on-chain, via the user's wallet)** — custody: the client builds & the wallet signs **deposit**, **claim**, **refund** transactions against the Syndicate Anchor program. 🟡 (program is source-complete; IDL ships from `anchor build`)
-3. **Discovery/History (read)** — the live-games dashboard and a player's match history. Served over the gateway (`subscribe`) or a thin REST endpoint. 🟡
+2. **Solana (on-chain, via the user's wallet)** — custody: the client builds & the wallet signs **deposit**, **claim**, **refund** transactions against the Syndicate Anchor program. 🟡 (program is deployed on Devnet; IDL ships from `anchor build`)
+3. **Discovery/History (read)** — live-games dashboard, historical-game archive, per-match public action timeline, profile, and leaderboard REST endpoints. 🟢
 
 Two things the client owns end-to-end:
 - 🔵 **Wallet signing** (ed25519): the login nonce, and each gameplay intent.
@@ -32,12 +32,12 @@ The client needs these per environment (devnet/mainnet):
 |-----|---------|-------|
 | `GATEWAY_WS_URL` | `wss://gw.syndicate.example` | the realtime socket |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | for building/sending tx |
-| `PROGRAM_ID` | (from `anchor keys`) | Syndicate program; IDL from `anchor build` |
+| `PROGRAM_ID` | `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS` on Devnet | Syndicate program; IDL from `anchor build` |
 | `CHIPS_TOKEN_MINT` | USDC mint | the betting token (default USDC) |
 | `DRAND_API` | `https://api.drand.sh` | time-lock beacon |
 | `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` | **quicknet** (the tlock chain) |
 
-Feeds (e.g. `BTC/USD`), tiers, blinds, timers, and the settlement window are **server-driven config** — the client reads them from the table/lobby payload, never hard-codes them (the game is tuned via config).
+Feeds (launch default `BTC/USD`, `ETH/USD`, `SOL/USD`), tiers, blinds, timers, geofence blocklist, fees, and the Pyth bounded exact-after oracle window are **server-driven config** — the client reads them from the table/lobby payload, never hard-codes them (the game is tuned via config).
 
 ---
 
@@ -66,7 +66,7 @@ The signature is over the **raw nonce string** (UTF-8), encoded base64. (Backend
 
 | Step | Surface | Client does |
 |------|---------|-------------|
-| Discover games | Gateway `subscribe` / REST 🟡 | render the live-games dashboard (ranked by popularity; sortable by time/pot/buy-in/feed) |
+| Discover games | REST read 🟢 | render the live-games dashboard (ranked by popularity; sortable by time/pot/buy-in/feed) |
 | Connect wallet | Gateway 🟢 | the §3 handshake |
 | Choose table & **deposit** | Solana 🟡🔵 | build + sign `deposit` tx (buy-in + entry fee) → seat is granted on **finality** |
 | Enter lobby | Gateway 🟡 | show table terms (feed, token, buy-in, blinds, rake, capacity, timers, match length) |
@@ -75,7 +75,7 @@ The signature is over the **raw nonce string** (UTF-8), encoded base64. (Backend
 | Watch the market | Gateway 🟡 | render the live chart + your distance-to-conviction from the `event` feed |
 | Resolution | Gateway 🟡 | uncontested win, or the sequential reveal ceremony; **all numbers open post-match** |
 | **Claim / refund** | Solana 🟡🔵 | after SETTLED build+sign `claim`; after VOID build+sign `refund` |
-| History | read 🟡 | show deposit, committed, winnings, rake, settlement price, samples, tx |
+| History | REST read 🟢 | list historical games; open a match to show settlement summary and chronological public actions |
 
 Match lifecycle the UI should reflect: `FILLING → SEALING → LIVE(Round 1..N) → SETTLEMENT_WINDOW → DECRYPT → SETTLED` (or `VOID`).
 
@@ -119,7 +119,7 @@ That's it — there is no "reveal" step for the user. At match end the backend f
 
 ## 7. On-chain (custody) 🟡🔵
 
-Custody is on Solana. The client builds the instruction and the **wallet signs**; the backend never holds user keys. Use `@solana/web3.js` + the Anchor IDL (emitted by `anchor build`).
+Custody is on Solana. The client builds the instruction and the **wallet signs**; the backend never holds user keys. Use `@solana/web3.js` + the Anchor IDL (emitted by `anchor build`). Current Devnet program id: `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS`.
 
 Program instructions and who calls them:
 
@@ -139,13 +139,38 @@ Flow notes:
 - **Deposit gates the seat** — the player is only seated once the deposit **finalizes**; show a clear "confirming" state and only enter the lobby on finality.
 - **Claim is idempotent and pull-based** — safe to retry; the program rejects double-claims.
 - Fees: an entry fee (at deposit) and a pot rake (at settlement) are disclosed in the table terms; the entry fee is refunded on VOID/leave-before-LIVE.
+- Pyth settlement is backend-only. The frontend never calls Hermes and never sees `PYTH_API_KEY`; history/replay may show the public `PythOracleProofView` fields from `protocol.ts`.
 
 ---
 
-## 8. Discovery & spectating 🟡
+## 8. Discovery, history & spectating 🟢
 
 - **Live-games dashboard:** a list of live games ranked by popularity (a "rated" score), sortable by `gameTime | potSize | buyIn | feed`. Each item: `{ matchId, feed, buyIn, potSize, spectators, startedAt }`.
 - **Spectate:** `subscribe` to a match to receive its public `event` feed (same redacted events players see). Spectators never receive sealed predictions, queued intents, or wallets — only public, pseudonymous (seat-indexed) data. Numbers open for everyone post-match.
+
+### REST read endpoints 🟢
+
+Base URL is the action-feed read service.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /active-games` | Returns `{ games: LiveGame[] }`, ranked by live popularity. |
+| `GET /matches/history?limit=50&cursor=<opaque>&status=settled\|voided\|live\|all` | Returns `{ matches, nextCursor? }`. With no `status`, only historical terminal games (`settled`/`voided`) are returned. Use `status=all` only for admin/internal views that also need live matches. |
+| `GET /matches/:matchId/history` | Returns `{ match }` for the historical-game detail header: status, feed, buy-in, settlement price, replay URI, and summary counters. |
+| `GET /matches/:matchId/actions` | Returns `{ matchId, events }`, a chronological public timeline for the history page. This is the endpoint to render "what happened in the game". |
+| `GET /matches/:matchId/replay` | Returns `{ bundle }` and uploads/returns an object-store replay URI for durable sharing/audit export. The UI can use `/actions` for normal page rendering and `/replay` for downloadable proof bundles. |
+| `GET /profiles/:userId` | Returns `{ profile }` with public aggregate stats. |
+| `GET /leaderboard` | Returns `{ entries }`. |
+
+Redaction guarantee: `/matches/:matchId/actions` and `/matches/:matchId/replay` emit only `PublicEvent` records from `protocol.ts`. They never include wallet addresses, sealed ciphertexts, queued/pre-signed intents, or hidden predictions before the time-lock opens. Public identity inside the history timeline is `seat` only.
+
+Settlement proof display: when present, render `oracleProof` as the audit block for the match. It contains the Pyth feed id, selected publish time, selected price, confidence, exponent, Pyth Receiver price update account, atomic settlement tx signature, Pro-compatible Receiver/Wormhole/Push ids, Hermes response hash, and binary update hash. The canonical unavailable/VOID message is exactly `Pyth Oracle price for settlement is unavailable.`
+
+Frontend archive flow:
+1. Call `GET /matches/history?limit=50` for the archive page.
+2. Use `nextCursor` for infinite scroll or pagination; treat it as opaque.
+3. On match open, call `GET /matches/:matchId/history` for the header and `GET /matches/:matchId/actions` for the action timeline.
+4. Offer a replay/export button backed by `GET /matches/:matchId/replay` when the user wants a durable audit bundle.
 
 ---
 
@@ -186,4 +211,4 @@ From `03_BUILDER_VISION_CANONICAL.md` / `05 §15` — these are requirements, no
 - [ ] Handle every error/VOID path (§9) and the UX invariants (§10).
 - [ ] Use `example-client.ts` as the reference for the end-to-end flow.
 
-**Coordinate with backend on:** the final `matchState`/`yourTurn`/`lobby` payload fields, the IDL/`PROGRAM_ID`, the discovery transport (WS `subscribe` vs REST), and the per-environment config in §2. Those are the 🟡 items being finalized.
+**Coordinate with backend on:** the final `matchState`/`yourTurn`/`lobby` payload fields, the IDL/`PROGRAM_ID`, and the per-environment config in §2. Those are the 🟡 items being finalized.

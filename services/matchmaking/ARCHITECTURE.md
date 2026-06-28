@@ -10,7 +10,7 @@
 - **Public matchmaking:** tier + feed + token selection → queue → form/assign a table from `config`.
 - **Private rooms:** create (feed+token+tier), Room ID, invite-only join, host cancel, host-disconnect rules.
 - **Deposit-to-enter gate:** a seat is offered only after `programs` reports **deposit finality** (anti-spam / anti-Sybil flood) (`05 §4`).
-- **Rating buckets** so casual players aren't farmed; **progressive Sybil resistance** (device/wallet-cluster heuristics; stronger PoP for higher tiers) (`08 OQ15`).
+- **Rating buckets** so casual players aren't farmed; **progressive Sybil resistance** and active trust-safety admission enforcement (`08 OQ15`).
 - Fill windows, min-2 start, seat-reservation race resolution by deposit-finality order; refund-on-not-filled trigger to `programs`.
 - Launch surface: USDC, 3 buy-in tiers, **no-stakes practice mode** (`08 OQ13`).
 
@@ -35,6 +35,7 @@ matchmaking/src/
 
 ## Invariants & failure modes
 - **No seat without finalized deposit.** No exceptions, both modes.
+- A wallet under active trust-safety enforcement must not be seated in public tables or private rooms.
 - **No bots** seeded as players (integrity > cold-start) (`08 OQ14`).
 - Not-filled by deadline → VOID + full refund; host cancel before LIVE → full refunds.
 
@@ -43,6 +44,7 @@ matchmaking/src/
 
 ## Testing
 - Seat-race correctness under concurrent deposits; finality-gated seating.
+- Active enforcement denies public and private-room seating.
 - Fill-window / min-2 / cancel / host-disconnect flows → correct refunds.
 - Bucketing + Sybil heuristics; practice-mode isolation (no real capital).
 

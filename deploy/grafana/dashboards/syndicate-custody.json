@@ -1,0 +1,34 @@
+{
+  "uid": "syndicate-custody",
+  "title": "Syndicate Custody and Integrity",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "tags": ["syndicate", "custody"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Vault Drift Chips",
+      "targets": [{ "expr": "syndicate_vault_reconciliation_drift_chips" }],
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 }
+    },
+    {
+      "type": "stat",
+      "title": "Settlement Mismatches",
+      "targets": [{ "expr": "increase(syndicate_settlement_verification_mismatch_total[24h])" }],
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pyth Exact-After Success Ratio",
+      "targets": [{ "expr": "syndicate_pyth_exact_after_success_ratio" }],
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Settlement p99 Seconds",
+      "targets": [{ "expr": "histogram_quantile(0.99, rate(syndicate_settlement_latency_seconds_bucket[10m]))" }],
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 }
+    }
+  ]
+}

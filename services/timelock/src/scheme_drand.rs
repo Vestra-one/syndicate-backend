@@ -21,7 +21,10 @@ pub struct DrandTlockScheme {
 impl DrandTlockScheme {
     /// `chain_hash` and `public_key` come from the beacon's `/info` (hex-decoded).
     pub fn new(chain_hash: Vec<u8>, public_key: Vec<u8>) -> Self {
-        Self { chain_hash, public_key }
+        Self {
+            chain_hash,
+            public_key,
+        }
     }
 }
 
@@ -29,8 +32,14 @@ impl TimelockScheme for DrandTlockScheme {
     fn encrypt(&self, price: Price, target_round: u64) -> Vec<u8> {
         let plaintext = price.to_le_bytes(); // 16 bytes, fixed-point
         let mut ct = Vec::new();
-        tlock_age::encrypt(&mut ct, &plaintext[..], &self.chain_hash, &self.public_key, target_round)
-            .expect("tlock encryption with valid chain params must not fail");
+        tlock_age::encrypt(
+            &mut ct,
+            &plaintext[..],
+            &self.chain_hash,
+            &self.public_key,
+            target_round,
+        )
+        .expect("tlock encryption with valid chain params must not fail");
         ct
     }
 
@@ -60,7 +69,9 @@ mod live_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let target = crate::beacon::round_at(info.genesis_time, info.period, now).saturating_sub(5).max(1);
+        let target = crate::beacon::round_at(info.genesis_time, info.period, now)
+            .saturating_sub(5)
+            .max(1);
         let round = client.round(target).expect("fetch round signature");
 
         let scheme = DrandTlockScheme::new(
@@ -71,7 +82,9 @@ mod live_tests {
         let secret: Price = 10_754_273; // a sealed prediction (fixed-point)
         let ciphertext = scheme.encrypt(secret, round.round);
         let key = round.to_round_key().expect("round key");
-        let recovered = scheme.decrypt(&ciphertext, &key).expect("decrypt with real drand signature");
+        let recovered = scheme
+            .decrypt(&ciphertext, &key)
+            .expect("decrypt with real drand signature");
 
         assert_eq!(recovered, secret);
     }

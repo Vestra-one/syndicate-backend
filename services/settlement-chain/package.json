@@ -1,0 +1,24 @@
+{
+  "name": "@syndicate/settlement-chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node ../../scripts/patch-pyth-solana-utils-esm.mjs",
+    "start": "node --experimental-strip-types src/main.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.29.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.16.0",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "overrides": {
+    "jito-ts": {
+      "@solana/web3.js": {
+        "rpc-websockets": "7.11.0"
+      }
+    }
+  }
+}

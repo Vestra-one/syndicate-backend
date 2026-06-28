@@ -7,13 +7,19 @@
       { "seat": 1, "contribution": 2, "folded": false, "prediction": 99000, "seal_seq": 1 },
       { "seat": 2, "contribution": 2, "folded": false, "prediction": 100500, "seal_seq": 2 }
     ],
-    "settlement_samples": [100000, 100000, 100000, 100000, 100000],
-    "min_samples": 3,
+    "oracle_price": {
+      "feed_id": "0707070707070707070707070707070707070707070707070707070707070707",
+      "price": 100000,
+      "publish_time": 1000,
+      "confidence": 10,
+      "exponent": -8
+    },
     "rake_bps": 0,
     "rake_cap": 0
   },
   "expected": {
     "settlement_price": 100000,
+    "oracle_publish_time": 1000,
     "pot_awards": [{ "seat": 0, "amount": 6 }],
     "uncalled_returns": [],
     "rake_collected": 0

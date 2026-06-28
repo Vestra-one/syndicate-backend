@@ -16,10 +16,34 @@ pub enum SyndicateError {
     ConservationViolation,
     #[msg("Oracle/settlement inputs invalid or insufficient.")]
     InvalidSettlementInput,
+    #[msg("Pyth Receiver price update account/proof is missing, unauthenticated, or does not match the bound feed.")]
+    InvalidOracleProof,
     #[msg("Seat already claimed.")]
     AlreadyClaimed,
     #[msg("Arithmetic overflow.")]
     Overflow,
     #[msg("Unauthorized.")]
     Unauthorized,
+    #[msg("Protocol action is paused.")]
+    Paused,
+    #[msg("Seat index is invalid or duplicated.")]
+    InvalidSeat,
+    #[msg("Settlement did not include exactly the occupied seats.")]
+    SeatSetMismatch,
+    #[msg("Invalid signed action input.")]
+    InvalidActionInput,
+    #[msg("Action log is invalid or not initialized.")]
+    InvalidActionLog,
+    #[msg("Ed25519 signature verification failed.")]
+    InvalidSignature,
+    #[msg("Not this player's turn.")]
+    NotYourTurn,
+    #[msg("Action log is not finalized.")]
+    ActionLogNotFinalized,
+    #[msg("Engine replay is not complete.")]
+    EngineNotComplete,
+    #[msg("Prediction reveal does not match signed commitment.")]
+    PredictionCommitmentMismatch,
+    #[msg("Settlement deadline passed; use void/refund path.")]
+    SettlementDeadlinePassed,
 }

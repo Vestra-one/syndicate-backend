@@ -2,17 +2,17 @@
 
 **Stack:** Rust crate (pure, `no_std`-friendly where possible; optional WASM build for TS consumers). **Trust role:** the single source of truth for all outcome math. **Implements:** `04 §1,§9,§11,§13,§18`.
 
-> This crate is the most important code in the system. The exact same compiled logic runs in `settlement` (off-chain) and `programs` (on-chain) so results are **byte-identical**. There must be **exactly one** implementation of pot construction, `S`, winner selection, and tie-breaks — here.
+> This crate is the most important code in the system. The exact same compiled logic runs in `settlement` (off-chain) and `programs` (on-chain) so results are **byte-identical**. There must be **exactly one** implementation of pot construction, Pyth bounded exact-after oracle validation, winner selection, and tie-breaks — here.
 
 ---
 
 ## Responsibilities (owns)
-- **Domain types:** `Chips` (integer), fixed-point `Price` (per-feed precision), `MatchConfig`, `Contribution`, `Action`, `EventLog` (hash-chained), `OracleSample`, `SealedPrediction`, `SettlementResult`.
+- **Domain types:** `Chips` (integer), fixed-point `Price` (per-feed precision), `MatchConfig`, `Contribution`, `Action`, `EventLog` (hash-chained), `VerifiedOraclePrice`, `SealedPrediction`, `SettlementResult`.
 - **Pure money math:** integer-only arithmetic; no floats, ever.
 - **Pot construction & side-pots** (`04 §9` algorithm): contribution-tier layering, uncalled-bet returns, dead-money handling, conservation check.
-- **Settlement price `S`:** window-median over oracle samples with confidence/staleness guards (`04 §11`).
+- **Settlement price `S`:** a single Pyth-authenticated bounded exact-after update. The selected update must satisfy feed id, publish-time window, confidence, and exponent rules.
 - **Winner determination & ties:** smallest `|p_i − S|` per eligible pot; equal split; odd-chip → earliest seal timestamp → lowest seat index (`04 §13`).
-- **Replay function:** `settle(log, sealed+key, samples, vrf_seed, config) → SettlementResult` — the canonical pure function (`04 §18`).
+- **Replay function:** `settle(log, sealed+key, verified_oracle_price, vrf_seed, config) → SettlementResult` — the canonical pure function (`04 §18`).
 
 ## Non-responsibilities
 - No I/O, no network, no clock, no randomness *generation* (VRF seed is an input), no oracle fetching, no decryption (takes already-decrypted predictions + verifies binding). Purity is what makes it verifiable.
@@ -23,7 +23,8 @@ shared/src/
   types/         # Chips, Price, ids, config
   log/           # hash-chained event log + intent verification
   pots/          # side-pot construction (the §9 algorithm)
-  settle/        # S median + winner selection + ties + top-level settle()
+  oracle/        # Pyth bounded exact-after validation + first-valid selection
+  settle/        # winner selection + ties + top-level settle()
   replay/        # pure replay entrypoint
   lib.rs
 tests/           # property + golden-vector tests

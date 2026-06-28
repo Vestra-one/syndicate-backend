@@ -1,0 +1,24 @@
+FROM node:22-bookworm-slim
+
+WORKDIR /opt/syndicate/backend
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client \
+  && rm -rf /var/lib/apt/lists/*
+COPY services ./services
+COPY docs/deployment/env.example ./docs/deployment/env.example
+
+ARG SERVICE
+RUN if [ ! -f "services/${SERVICE}/package.json" ]; then \
+      echo "unknown node service: ${SERVICE}" >&2; exit 1; \
+    fi; \
+    if [ -f "services/${SERVICE}/package-lock.json" ]; then \
+      npm ci --omit=dev --prefix "services/${SERVICE}"; \
+    else \
+      npm install --omit=dev --prefix "services/${SERVICE}"; \
+    fi
+
+ENV SERVICE=${SERVICE}
+ENV NODE_ENV=production
+
+CMD ["sh", "-c", "node --experimental-strip-types services/${SERVICE}/src/main.ts"]

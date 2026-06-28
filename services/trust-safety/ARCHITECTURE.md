@@ -11,7 +11,8 @@
 - **Bot detection:** action-timing fingerprints, superhuman consistency, automation signals.
 - **Sybil analysis:** wallet-cluster graphs feeding `matchmaking`'s progressive PoP (`08 OQ15`).
 - **Enforcement signals & policy:** published fair-play policy; bans + forfeiture of future access for proven collusion; **no retroactive clawback** of settled on-chain funds (`08 OQ16`).
-- Investigation tooling / case management.
+- Investigation tooling / case management: explainable signals, active enforcement records, appeal records, and lift/reject outcomes.
+- **Compliance hooks:** geofence blocks and KYC-required pre-seat actions.
 
 ## Non-responsibilities
 - No custody and **no clawback of settled funds** (on-chain finality stands; expectations set in policy).
@@ -30,10 +31,12 @@ trust-safety/src/
 ## Interfaces
 - **In:** match events/outcomes from `match-engine`/`settlement`; seating + identity signals from `matchmaking`.
 - **Out:** risk scores + ban/seat-deny signals to `matchmaking`/`gateway`; investigator dashboards.
+- **Persistence:** `trust_safety_signals`, `enforcement_actions`, and `enforcement_appeals` in Postgres; these are private operational records and never action-feed output.
 
 ## Invariants & failure modes
 - Detection is **advisory + enforced pre-settlement** (seat denial, bans) — never a post-hoc seizure of settled capital.
 - False-positive sensitivity is tunable via `config`; err toward investigation, not silent punishment.
+- A wallet with any active `seat_deny`, `temporary_ban`, `ban`, `kyc_required`, or `geofence_block` action must be denied new seating until the action expires or an appeal lifts it.
 - Residual small-table collusion is acknowledged and monitored (risk S3), not assumed solved.
 
 ## Dependencies

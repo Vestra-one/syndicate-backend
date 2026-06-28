@@ -46,7 +46,7 @@ jobs:
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
           cargo install --git https://github.com/coral-xyz/anchor avm --locked
-          avm install 0.30.1 && avm use 0.30.1
+          avm install 0.32.1 && avm use 0.32.1
       - name: Anchor test — program must reproduce golden/ vectors
         working-directory: services/programs
-        run: anchor test
+        run: cargo build-sbf && cargo test --manifest-path litesvm-tests/Cargo.toml -- --nocapture

@@ -1,0 +1,111 @@
+groups:
+  - name: syndicate-custody-integrity
+    rules:
+      - alert: VaultReconciliationDrift
+        expr: syndicate_vault_reconciliation_drift_chips != 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Vault reconciliation drift detected"
+          runbook: "docs/RUNBOOKS.md#rb-4--vault-reconciliation-drift-risk-a7"
+
+      - alert: SettlementVerificationMismatch
+        expr: increase(syndicate_settlement_verification_mismatch_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Settlement verification mismatch"
+          runbook: "docs/RUNBOOKS.md#rb-3--settlement-verification-mismatch-04-18"
+
+      - alert: OracleExactAfterAvailabilityLow
+        expr: syndicate_pyth_exact_after_success_ratio < 0.999
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Pyth exact-after update availability below launch SLO"
+          runbook: "docs/RUNBOOKS.md#rb-1--pyth-update-degradation--outage-risk-s1"
+
+      - alert: SettlementLatencyHigh
+        expr: histogram_quantile(0.99, rate(syndicate_settlement_latency_seconds_bucket[10m])) > 30
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Settlement p99 latency above SLO"
+
+      - alert: VoidRateHigh
+        expr: increase(syndicate_matches_void_total[30m]) / clamp_min(increase(syndicate_matches_finished_total[30m]), 1) > 0.005
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "VOID rate above launch target"
+
+      - alert: SettlementQueueBacklog
+        expr: syndicate_settlement_outbox_backlog > 10
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Settlement outbox backlog is growing"
+          runbook: "docs/RUNBOOKS.md#rb-8--settlement-queue-backlog"
+
+      - alert: SettlementAttemptDeadLetters
+        expr: increase(syndicate_settlement_attempt_dead_letter_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Settlement attempts entered dead-letter state"
+          runbook: "docs/RUNBOOKS.md#rb-9--settlement-dead-letter-recovery"
+
+      - alert: SettlementConfirmLatencyHigh
+        expr: syndicate_settlement_submit_confirm_latency_ms_total / clamp_min(syndicate_settlement_submit_confirm_latency_samples_total, 1) > 30000
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Average settlement submit/confirm latency above 30s"
+
+      - alert: TrustSafetyFlagSurge
+        expr: increase(syndicate_trust_safety_actions_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Trust-safety enforcement actions surged"
+
+      - alert: DepositVerifyLatencyHigh
+        expr: histogram_quantile(0.99, rate(syndicate_deposit_verify_latency_ms_bucket[10m])) > 5000
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Deposit RPC verify p99 above 5s"
+
+      - alert: FillWindowVoidRateHigh
+        expr: increase(syndicate_matchmaking_fill_void_total[30m]) / clamp_min(increase(syndicate_matchmaking_fill_tick_total[30m]), 1) > 0.2
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Public queue fill-window void rate elevated"
+
+      - alert: GatewayRelayErrors
+        expr: increase(syndicate_gateway_relay_errors_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Gateway gameplay relay errors spiking"
+
+      - alert: MatchEngineLeaseContention
+        expr: increase(syndicate_match_engine_lease_rejected_total[10m]) > 5
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Match-engine Postgres lease contention detected"

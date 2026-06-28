@@ -23,10 +23,10 @@ Guiding rule from the canon: **capital safety and determinism gate everything.**
 - **Depends-on:** Phase 1.
 - **Exit:** localnet (litesvm/bankrun) integration of every instruction + every VOID/refund path; program settlement == `shared` golden vectors (byte-identical); fuzz + overflow checks pass.
 
-### Phase 3 — Oracle adapter (`oracle-adapter`)
-- **Deliverables:** provider trait; **Switchboard On-Demand** default (pull) + Pyth stub; fixed-cadence sampling + dense settlement-window sampling; `S` finalization via `shared`; confidence/staleness guards → VOID; recorded samples for replay.
+### Phase 3 — Pyth bounded exact-after oracle (`shared::oracle`)
+- **Deliverables:** `OracleValidation` rules bound at match creation; `validate_oracle_update` + `first_valid_oracle_update` for the first valid Pyth update in `[scheduled_end_ts, scheduled_end_ts + oracle_delay_window_sec]`; confidence/exponent/feed-id guards → VOID.
 - **Depends-on:** Phase 1.
-- **Exit:** adapter-conformance tests; guard tests (stale/low-confidence/<min → VOID); recorded samples replay to identical `S` in `shared`.
+- **Exit:** oracle validation tests (wrong feed, stale/future update, confidence bound); settlement consumes `VerifiedOraclePrice` only — no sampling or window median.
 
 ### Phase 4 — Time-lock (`timelock`)
 - **Deliverables:** **drand `tlock`** seal-verify + decrypt; round mapping for `timelock_target`; pre-LIVE binding; beacon client + liveness; grace → VOID.
@@ -119,12 +119,12 @@ Executed at the **critical path head** — Phase 0 (partial) + **Phase 1 complet
 
 **Phases 3–5 (cores DONE, tested) — the off-chain critical path off the stable core:**
 - **Phase 5 `match-engine` (`syndicate-engine`):** pure betting state machine — blinds-posted-once, action legality (fold/check/call/bet/raise/all-in) with min-raise + reopen rules, turn order incl. heads-up, contribution tracking across streets, all-in run-out, uncontested detection (`04 §16`), and pre-signed/auto timeout actions (`04 §8`). Emits `PlayerState`s for `shared` and **never holds a prediction**. Tests: blinds/first-to-act, illegal check, sub-min raise rejected, uncontested fold, limped hand → showdown, all-in side-pot, timeout defaults.
-- **Phase 3 `oracle-adapter` (`syndicate-oracle`):** provider trait + `MockProvider`; window sampler; confidence/staleness/min-sample guards; `S = median` via `shared` or `Degraded`→VOID (`04 §11`). Switchboard On-Demand is a thin feature-gated impl. Tests: median, stale/low-confidence filtering, insufficient→VOID, provider pull.
+- **Phase 3 Pyth oracle (`shared::oracle`):** `OracleValidation` + `validate_oracle_update` + `first_valid_oracle_update`; bounded exact-after window; confidence/exponent/feed-id guards → VOID. Tests: first-valid selection, wrong feed/confidence/exponent/window rejection.
 - **Phase 4 `timelock` (`syndicate-timelock`):** scheme trait + `MockScheme`; seal registry with **pre-LIVE binding** (late seals rejected); `decrypt_all` at match end; missing/wrong-round key → VOID (`04 §12`). drand `tlock` is a thin feature-gated impl. Tests: seal→decrypt round-trip, seal-after-lock rejected, missing-key VOID, wrong-round key can't open.
 - **Engine → settlement integration:** the engine's outputs feed `shared::settle` directly inside the engine tests (limped hand, all-in side pot, uncontested) — the full off-chain path is demonstrated end-to-end.
-- **Build/test:** `cargo test --workspace` → **28 passed, 0 failed** (shared 12 incl. 100k property + 3 verify; engine 7; oracle 4; timelock 4; settlement 1).
+- **Build/test:** `cargo test --workspace` → **28 passed, 0 failed** (shared 12 incl. 100k property + 3 verify; engine 7; timelock 4; settlement 1).
 
-**Remaining for Phase 3/4/5 exit:** real provider impls (Switchboard On-Demand pull; drand `tlock`) behind the traits; the service shells (tokio, WS, the signed hash-chained log, single-writer lease, server-clock timers) wrapping these pure cores.
+**Remaining for Phase 3/4/5 exit:** drand `tlock` production wiring behind the trait; the service shells (tokio, WS, the signed hash-chained log, single-writer lease, server-clock timers) wrapping these pure cores.
 
 **Phase 6 (DONE, tested) — `settlement` convergence:**
 - `settle_match(engine, sampler, seal_registry, scheme, round_key, params)` wires all four cores: checks the match is complete, finalizes the oracle window (guards → VOID), auto-decrypts predictions via the time-lock (missing/bad key → VOID), merges them into the engine's contributions, computes via `shared::settle`, and packages a **`SettlementBundle`** = exactly what is submitted on-chain `(players, samples, params, result)`.
@@ -187,17 +187,16 @@ The deferred seams have been replaced with real implementations. **Done and veri
 - **Persistence (`services/store`):** real append-only, sha256 **hash-chained** event store — `FileStore` (fsync'd) + `InMemoryStore` — with load-and-verify, replay, and **tamper detection** (4 tests).
 - **Real IBE time-lock cipher (`timelock/scheme_drand.rs`):** the production `DrandTlockScheme` using `tlock_age` (BLS12-381 IBE), behind the `tlock` feature. **Verified live against the real drand quicknet beacon** — encrypt a prediction toward a round, fetch that round's genuine BLS signature from `api.drand.sh`, decrypt — passing in-sandbox (`live_drand_quicknet_round_trip`).
 - **drand beacon client (`timelock/beacon.rs`):** real HTTP API structs, URL builders, round↔time math, round→`RoundKey` mapping (3 offline tests); live `HttpBeaconClient` (ureq) behind `--features net` and exercised by the live round-trip above.
-- **Switchboard Crossbar client (`oracle/crossbar.rs`):** real response structs + **float-free** decimal→fixed-point parser → `Sample` (2 tests); live `HttpCrossbarClient` (ureq) behind `--features net`, **compiles**.
 - **WebSocket gateway (`gateway/src/server.ts`):** real `ws` server (challenge/auth handshake, sessions, broadcast, geofence-at-connect) tested over loopback (3 tests), plus a **real ed25519 verifier** (Node `crypto` + base58) tested against generated keypairs (2 tests).
 - **On-chain submission seam + service daemon:** idempotent `ChainSubmitter` + `finalize()` in `settlement` (1 test); a runnable **tokio worker** (`services/worker`) that consumes finished matches, settles, finalizes, and **persists each settlement to the hash-chained store** (async test + `cargo run` demo).
-- **Runnable pipeline:** `cargo run -p syndicate-settlement --example full_match` executes engine→oracle→time-lock→settlement→submit end-to-end.
+- **Runnable pipeline:** `cargo run -p syndicate-settlement --example full_match` executes engine→verified Pyth oracle price→time-lock→settlement→submit end-to-end.
 - **Suite:** `./scripts/test-all.sh` → **81 tests (48 Rust + 33 TS), 0 failures**; plus the live-drand round-trip and `net`/`tlock` feature builds.
 
 **What genuinely remains — and why it can't be finished from here:**
 
-1. **Live Switchboard + Solana RPC execution.** The Crossbar client and the Solana-RPC `ChainSubmitter` impl are written against the traits, but exercising them needs those live networks/a funded RPC + on-chain program — CI/staging, not this sandbox. (drand is now done, live.)
+1. **Live Solana RPC execution.** The Solana-RPC `ChainSubmitter` impl is written against the trait, but exercising it needs a funded RPC + on-chain program — CI/staging, not this sandbox. (drand is now done, live.)
 2. **On-chain program build + audit + deploy.** `anchor build && anchor test` requires the Solana platform toolchain (a large external build); then the independent **audit**; then mainnet deploy. None are doable in this environment.
 3. **Full production service fleet.** The worker daemon demonstrates the runtime pattern; still to build: the gateway↔engine wire transport at scale, the single-writer lease via a real lock service, the production DB behind the `Store` trait, and key management.
 4. **Frontend** — out of backend scope, but required to ship.
 
-Net: every backend seam that can be made real and verified offline now is — including the real IBE cipher proven against live drand and a running service daemon. The irreducible remainder is external by necessity: the Solana toolchain build + audit + deploy, live Switchboard/RPC execution, the production service fleet at scale, and the frontend.
+Net: every backend seam that can be made real and verified offline now is — including the real IBE cipher proven against live drand and a running service daemon. The irreducible remainder is external by necessity: the Solana toolchain build + audit + deploy, live RPC execution, the production service fleet at scale, and the frontend.

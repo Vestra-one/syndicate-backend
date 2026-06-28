@@ -5,6 +5,7 @@
   "private": true,
   "description": "Public match event projection (with strict redaction) + live-games dashboard ranking/sort.",
   "scripts": {
+    "start": "node --experimental-strip-types src/main.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   }
 }

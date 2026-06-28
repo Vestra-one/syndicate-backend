@@ -66,8 +66,13 @@ export type GatewayErrorReason =
 export interface TableTerms {
   tableId: string;
   priceFeedId: string;     // e.g. "BTC/USD" — the instrument predicted
+  supportedFeeds: string[]; // launch defaults: BTC/USD, ETH/USD, SOL/USD
   chipsToken: string;      // e.g. "USDC" — what you stake/win (decoupled from feed)
   decimals: number;        // fixed-point precision for prices on this feed
+  oracleAdapter: 'pyth';
+  settlementMode: 'bounded-exact-after';
+  oracleDelayWindowSec: number; // default 5; first valid Pyth update after match end
+  oracleUnavailableMessage: string;
   buyIn: Chips;
   entryFee: Chips;         // taken at deposit; refunded on VOID/leave-before-LIVE
   rakeBps: number;         // pot rake at settlement
@@ -81,8 +86,36 @@ export interface TableTerms {
   actionTimerSec: number;
   timeBankSec: number;
   settlementWindowSec: number;
+  geofenceBlocklist: string[]; // server-driven; launch default includes "IN"
+  allowDuplicateWalletPerMatch: false;
+  fillWindowSec?: number;
+  practiceMode?: boolean;
   /** drand round the prediction must be sealed toward (match end). */
   timelockTargetRound: number;
+}
+
+/** Public matchmaking queue snapshot (matchmaking REST + gateway WS). */
+export interface QueueStatus {
+  active: boolean;
+  playersWaiting: number;
+  seated: number;
+  minPlayers: number;
+  maxPlayers: number;
+  fillDeadline: number | null;
+  matchId?: string;
+}
+
+/** Private room lobby snapshot. */
+export interface RoomLobby {
+  roomCode: string;
+  matchId: string;
+  seated: number;
+  minPlayers: number;
+  maxPlayers: number;
+  canHostStart: boolean;
+  fillDeadline: number;
+  isHost: boolean;
+  phase: MatchPhase;
 }
 
 export interface SeatView {
@@ -134,8 +167,26 @@ export interface SettlementView {
   awards: { seat: SeatIndex; amount: Chips }[];
   uncalledReturns: { seat: SeatIndex; amount: Chips }[];
   rakeCollected: Chips;
+  oracleProof?: PythOracleProofView;
   /** opened post-match for everyone (incl. folders) — the emotional/audit reveal. */
   revealedPredictions: { seat: SeatIndex; prediction: FixedPrice }[];
+}
+
+export interface PythOracleProofView {
+  adapter: 'pyth';
+  mode: 'pull-receiver-full-verification';
+  feedIdHex: string;
+  price: FixedPrice;
+  publishTime: number;
+  confidence: string; // u64 as a decimal string
+  exponent: number;
+  priceUpdateAccount: string;
+  atomicSettlementTxSignature: string;
+  receiverProgramId: string;
+  wormholeProgramId: string;
+  pushOracleProgramId: string;
+  hermesResponseHash: string; // sha256 hex
+  binaryUpdateHash: string;   // sha256 hex over selected binary update data
 }
 
 export type VoidReason =
@@ -156,6 +207,77 @@ export interface LiveGame {
   startedAt: number;
 }
 export type DashboardSortKey = 'gameTime' | 'potSize' | 'buyIn' | 'feed';
+
+export interface MatchHistorySummary {
+  matchId: string;
+  status: 'live' | 'settled' | 'voided';
+  feed: string;
+  buyIn: Chips;
+  startedAt: number;
+  lastEventTs: number;
+  settlementPrice?: FixedPrice;
+  oracleProof?: PythOracleProofView;
+  replayBundleUri?: string;
+  summary: { finalPot: Chips; awardTotal: Chips; actionCount: number; revealCount: number };
+}
+
+export interface HistoricalGamesResponse {
+  /** Default REST response excludes `live`; pass status=all to include it. */
+  matches: MatchHistorySummary[];
+  /** Opaque cursor from the last returned item; omit when there is no next page. */
+  nextCursor?: string;
+}
+
+export interface MatchHistoryResponse {
+  match: MatchHistorySummary;
+}
+
+export interface MatchActionsResponse {
+  matchId: string;
+  /** Chronological, public, redacted events for rendering a historical-game timeline. */
+  events: PublicEvent[];
+}
+
+export interface MatchReplayBundle {
+  matchId: string;
+  fromSeq: number;
+  toSeq: number;
+  events: PublicEvent[];
+  oracleProof?: PythOracleProofView;
+  contentHash: string;
+  objectUri: string;
+}
+
+export interface MatchReplayResponse {
+  bundle: MatchReplayBundle;
+}
+
+export interface PublicProfile {
+  userId: string;
+  handle: string;
+  avatarUri?: string;
+  house?: string;
+  chamber?: string;
+  rank?: string;
+  stats: {
+    matchesPlayed: number;
+    matchesWon: number;
+    totalBuyIn: Chips;
+    totalPayout: Chips;
+    showdownCount: number;
+    foldCount: number;
+    achievementCount: number;
+  };
+}
+
+export interface LeaderboardEntry {
+  userId: string;
+  handle: string;
+  matchesPlayed: number;
+  roi: number;
+  totalPayout: Chips;
+  achievements: number;
+}
 
 // ---------------------------------------------------------------------------
 // Client → server  (after auth)  🟡
@@ -179,8 +301,15 @@ export type ServerMessage =
   | { type: 'matchState'; state: MatchStateView }        // 🟡
   | { type: 'yourTurn'; matchId: string; toCall: Chips; minRaiseTo: Chips; deadline: number } // 🟡
   | { type: 'event'; event: PublicEvent }                // 🟡 (broadcast path 🟢)
+  | { type: 'activeGames'; games: LiveGame[] }           // 🟡
+  | { type: 'matchHistory'; matches: MatchHistorySummary[] } // 🟡
+  | { type: 'profile'; profile: PublicProfile }          // 🟡
+  | { type: 'leaderboard'; entries: LeaderboardEntry[] } // 🟡
   | { type: 'settled'; result: SettlementView }          // 🟡
-  | { type: 'void'; matchId: string; reason: VoidReason }; // 🟡
+  | { type: 'void'; matchId: string; reason: VoidReason } // 🟡
+  | { type: 'lobbyState'; lobby: RoomLobby }             // 🟡
+  | { type: 'queueStatus'; status: QueueStatus }         // 🟡
+  | { type: 'pong' };
 
 // ---------------------------------------------------------------------------
 // On-chain DTOs (Anchor program)  🟡🔵
@@ -197,6 +326,55 @@ export const PDA_SEEDS = {
   vault: (matchPda: string) => ['vault', matchPda],
   seat: (matchPda: string, player: Wallet) => ['seat', matchPda, player],
 } as const;
+
+// ---------------------------------------------------------------------------
+// Signed action intents (wallet ed25519)  🟢
+// Message bytes MUST match `services/shared/src/intent.rs` and
+// `services/settlement-chain/src/intent.ts`.
+// ---------------------------------------------------------------------------
+
+/** Sign with the wallet key: `signMessage(bytes)` → base64 signature. */
+export interface SignedActionIntentWire {
+  matchId: string;
+  onchainMatchId: number;
+  seatIndex: SeatIndex;
+  wallet: Wallet;
+  nonce: number;
+  /** 32-byte hex hash-chain head the player signed over (from gateway `head`). */
+  prevHeadHex: string;
+  action: BettingAction;
+  /** base64 ed25519 signature over the canonical action-intent message. */
+  signature: string;
+}
+
+export interface SignedDefaultPolicyWire {
+  matchId: string;
+  onchainMatchId: number;
+  seatIndex: SeatIndex;
+  wallet: Wallet;
+  defaultAction: DefaultAction;
+  signature: string;
+}
+
+export interface SignedPredictionCommitmentWire {
+  matchId: string;
+  onchainMatchId: number;
+  seatIndex: SeatIndex;
+  wallet: Wallet;
+  sealSeq: number;
+  /** H(prediction || blinding) — 32-byte hex. */
+  commitmentHex: string;
+  /** 32-byte hex blinding factor (stored server-side; revealed at settlement). */
+  blindingHex: string;
+  signature: string;
+}
+
+/** Revealed at settlement (after drand open); blinding is 32-byte hex. */
+export interface RevealedPredictionWire {
+  seatIndex: SeatIndex;
+  prediction: FixedPrice;
+  blindingHex: string;
+}
 
 // ---------------------------------------------------------------------------
 // drand quicknet (client-side time-lock)  🔵
