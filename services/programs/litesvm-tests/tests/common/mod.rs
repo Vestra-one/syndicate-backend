@@ -22,7 +22,7 @@ use types::{BeginLiveArgs, CreateParams, ProtocolRoles};
 pub use types::DEFAULT_TAG_CHECK_FOLD;
 pub use syndicate_engine_core::GENESIS_HEAD;
 
-pub const PROGRAM_ID: Pubkey = pubkey!("GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo");
+pub const PROGRAM_ID: Pubkey = pubkey!("8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX");
 pub const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 

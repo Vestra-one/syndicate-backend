@@ -54,3 +54,16 @@ export DEPLOYER_KEYPAIR=$HOME/.config/solana/id.json
 node init-protocol.mjs
 PROTOCOL_STATE_PDA=6WGM9hepP99uzvRmcdkpYFm3fRx2Lp1KPHbxnfUigzM2
 initialize_protocol tx: pXRLJDR4piJbL3o9Sjw9aFqmpxtWLVsHSH4zjqEchthVmKSJDMTMaocqrxdUWUwseisUFdeDUtjWmjhuc7XVXY8
+
+
+-----------------devnet (v1 — Phase 03 rotation 2026-06-29)-------------
+# The old program GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo had a pre-Task-6 protocol_state
+# (no price_signer) that could not be re-initialized in place. Rotated to a fresh program id so
+# all PDAs (incl. protocol_state) re-derive under the new layout. declare_id!, Anchor.toml, and the
+# litesvm harness PROGRAM_ID were updated in lockstep.
+Program Id: 8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX
+Upgrade Authority / Deployer: 2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt
+Protocol State PDA: EDwcfo4UjFp3kEwz9CqEAv2iojKinzaAmPLNLeZiAkXS  (initialized, new layout)
+# roles: all = deployer (devnet test); price_signer = a7BaE7da3E4950700BE9f107EB186e89a474d180 (placeholder)
+# Verified: initialize_protocol + create_and_deposit smoke PASS (match Filling, seat deposit ok).
+# SYNDICATE_PROGRAM_ID env for backend services must be set to 8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX.

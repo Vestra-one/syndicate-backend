@@ -2,7 +2,7 @@
 
 **Goal:** the committed IDL matches the finalized program, and the new layout is live on devnet.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified (devnet program id ROTATED — see note)
 - **Depends on:** 01 (for the create smoke)
 - **Parallel-safe with:** 02, 05, 09, 10
 - **Checklist ref:** §1c
@@ -42,6 +42,15 @@ The new program layout also needs to be deployed (greenfield — no migration). 
 3. Deploy to devnet with the existing deploy keypair: `solana program deploy target/deploy/syndicate_program.so --program-id target/deploy/syndicate_program-keypair.json --url devnet` (or the project's deploy script). Greenfield — no state migration.
 4. `initialize_protocol` on devnet with the role keys + `price_signer` (the signed-price-server's Ethereum address). Confirm distinct role keys (full enforcement is Phase 12).
 5. **Smoke:** run Phase 01's `create_and_deposit` against devnet; confirm the match PDA + creator seat exist (use Phase 02 `verifyCreateTx`).
+
+**OUTCOME (2026-06-29):** the existing `Gwzr…` program carried a stale **pre-Task-6 `protocol_state`**
+(no `price_signer`; stored bump read 0 → `ConstraintSeeds` on every instruction) that cannot be
+re-initialized in place (no close ix). Per the user decision, the **devnet program id was rotated**
+to `8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX` (fresh keypair → all PDAs re-derive clean).
+`declare_id!`, `Anchor.toml` (devnet/localnet/mainnet), and the litesvm harness `PROGRAM_ID` were
+updated in lockstep; contract LOGIC unchanged. Protocol re-initialized at
+`EDwcfo4UjFp3kEwz9CqEAv2iojKinzaAmPLNLeZiAkXS`; `create_and_deposit` smoke PASSED. Backend services
+must set `SYNDICATE_PROGRAM_ID=8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX`.
 
 ## Acceptance criteria
 
