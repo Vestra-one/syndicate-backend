@@ -31,7 +31,7 @@ const SOCIALS: Array<{
     key: 'x',
     label: 'X',
     handle: 'Follow along',
-    href: 'https://x.com/satoshistable',
+    href: 'https://x.com/SatoshiTableHQ',
     icon: <XIcon />,
   },
 ]
