@@ -22,10 +22,18 @@ import {
   submitVoidBeforeStart,
   submitVoidLiveAfterDeadline,
   submitWithdrawFees,
+  deriveMatchPdas,
   type CustodyConfig,
   type CreateMatchInput,
   hashMatchId,
 } from './custody.ts';
+import {
+  connectionVerifyRpc,
+  verifyDepositTx,
+  verifyCreateTx,
+  enumerateSeatPdas,
+} from './verify.ts';
+import { templateAllowlist } from '../../config/src/index.ts';
 
 type Config = {
   host: string;
@@ -152,10 +160,17 @@ export function createServer(config: Config) {
       }
       if (req.url === '/internal/solana/begin-live') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
-        const seatWallets = body.seatWallets ?? body.seat_wallets ?? body.match?.seatWallets ?? [];
+        let seatWallets = ((body.seatWallets ?? body.seat_wallets ?? body.match?.seatWallets ?? []) as unknown[]).map((w) => String(w));
+        // Authoritative seat set comes from chain (never the registry) — enumerate if not supplied.
+        if (seatWallets.length === 0) {
+          const { rpc, programId } = await verifyRpcFor(config);
+          const pdas = deriveMatchPdas(programId, BigInt(String(onchain)));
+          const seats = await enumerateSeatPdas(rpc, pdas.match);
+          seatWallets = seats.map((s) => s.player);
+        }
         return sendJson(res, 200, await submitBeginLive(custodyConfig(config), {
           onchainMatchId: BigInt(String(onchain)),
-          seatWallets: (seatWallets as unknown[]).map((w) => String(w)),
+          seatWallets,
           buttonRandomnessHex: body.buttonRandomnessHex ?? body.button_randomness_hex,
         }));
       }
@@ -166,6 +181,37 @@ export function createServer(config: Config) {
       if (req.url === '/internal/solana/void-live-after-deadline') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
         return sendJson(res, 200, await submitVoidLiveAfterDeadline(custodyConfig(config), BigInt(String(onchain))));
+      }
+      if (req.url === '/internal/solana/verify-deposit') {
+        const { rpc, programId } = await verifyRpcFor(config);
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        const seatIdx = body.seatIndex ?? body.seat_index;
+        return sendJson(res, 200, await verifyDepositTx(rpc, programId, {
+          sig: requiredString(body.txSig ?? body.tx_sig ?? body.signature, 'txSig'),
+          onchainMatchId: BigInt(String(onchain)),
+          expectedPlayer: requiredString(body.wallet, 'wallet'),
+          expectedSeatIndex: seatIdx === undefined ? undefined : numberArg(seatIdx, 'seatIndex'),
+          allowlist: templateAllowlist(),
+        }));
+      }
+      if (req.url === '/internal/solana/verify-create') {
+        const { rpc, programId } = await verifyRpcFor(config);
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        const seatIdx = body.seatIndex ?? body.seat_index;
+        return sendJson(res, 200, await verifyCreateTx(rpc, programId, {
+          sig: requiredString(body.txSig ?? body.tx_sig ?? body.signature, 'txSig'),
+          onchainMatchId: BigInt(String(onchain)),
+          expectedAuthority: requiredString(body.wallet, 'wallet'),
+          expectedSeatIndex: seatIdx === undefined ? undefined : numberArg(seatIdx, 'seatIndex'),
+          allowlist: templateAllowlist(),
+        }));
+      }
+      if (req.url === '/internal/solana/enumerate-seats') {
+        const { rpc, programId } = await verifyRpcFor(config);
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        const pdas = deriveMatchPdas(programId, BigInt(String(onchain)));
+        const seats = await enumerateSeatPdas(rpc, pdas.match);
+        return sendJson(res, 200, { ok: true, matchPda: pdas.match.toBase58(), seats });
       }
       if (req.url === '/internal/solana/withdraw-fees') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
@@ -642,6 +688,14 @@ function custodyConfig(config: Config): CustodyConfig {
 
 function custodyChainEnabled(config: Config): boolean {
   return Boolean(config.chipsTokenMint);
+}
+
+/** A `finalized` Connection-backed verifier RPC + the resolved program id. */
+async function verifyRpcFor(config: Config) {
+  const { Connection, PublicKey } = await import('@solana/web3.js');
+  const connection = new Connection(config.primaryRpcUrl, 'finalized');
+  const programId = new PublicKey(config.programId);
+  return { rpc: connectionVerifyRpc(connection, programId), programId };
 }
 
 function statusFromError(err: unknown): number {

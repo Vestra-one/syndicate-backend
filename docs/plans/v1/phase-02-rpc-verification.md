@@ -2,7 +2,7 @@
 
 **Goal:** verify a client-reported create/deposit txhash at `finalized`, and enumerate seat PDAs from chain.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified
 - **Depends on:** — (devnet not required for unit tests; integration needs Phase 03)
 - **Parallel-safe with:** 01, 05, 09, 10
 - **Checklist ref:** §1a, §2 (the no-indexer model's core)
