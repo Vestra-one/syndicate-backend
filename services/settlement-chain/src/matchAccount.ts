@@ -48,6 +48,9 @@ export interface DecodedMatch {
   sealedCount: number;
   deadMoney: bigint;
   settledPayout: bigint;
+  /** Dealer button (engine-seat index) derived on-chain at begin_live. */
+  button: number;
+  buttonSet: boolean;
   voidKind: VoidKind;
 }
 
@@ -86,7 +89,10 @@ export function decodeMatchAccount(data: Buffer): DecodedMatch {
     // next_seal_seq (317), total_deposited (325), total_fees (333), forfeited_fees (341) skipped.
     deadMoney: data.readBigUInt64LE(349),
     settledPayout: data.readBigUInt64LE(357),
-    // button_randomness (365), button (397), button_set (398), bumps (399..402) skipped.
+    // button_randomness (365) skipped.
+    button: data.readUInt8(397),
+    buttonSet: data.readUInt8(398) !== 0,
+    // bumps (399..402) skipped.
     voidKind: voidKindFrom(data.readUInt8(402)),
   };
 }

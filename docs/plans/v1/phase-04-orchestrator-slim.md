@@ -2,7 +2,7 @@
 
 **Goal:** `lock → begin_live(randomness + seats) → engine start` runs end-to-end; dead steps removed.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified
 - **Depends on:** 01 (begin-live route), 02 (seat enumeration)
 - **Parallel-safe with:** 05, 09, 10
 - **Checklist ref:** §1b

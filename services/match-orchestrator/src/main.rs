@@ -3,42 +3,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FormationBootstrap {
-    match_id: String,
-    tier_id: String,
-    feed_id: String,
-    token: String,
-    max_players: u16,
-    min_players: u16,
-    mode: String,
-    #[serde(default)]
-    practice_mode: bool,
-    #[serde(default)]
-    buy_in: Option<u64>,
-    #[serde(default)]
-    entry_fee: Option<u64>,
-    #[serde(default)]
-    rake_bps: Option<u32>,
-    #[serde(default)]
-    rake_cap: Option<u64>,
-    #[serde(default)]
-    config_hash_hex: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BootstrapResponse {
-    match_id: String,
-    onchain_match_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    match_pda: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +35,14 @@ struct StartPolicyRequest {
     round_count: Option<u8>,
     #[serde(default)]
     action_timeout_ms: Option<u64>,
+    /// Per-street betting durations from the bound template (matchmaking sources these from config).
+    #[serde(default)]
+    round_durations_sec: Option<Vec<u64>>,
+    /// Per-street observation windows from the bound template.
+    #[serde(default)]
+    observation_windows_sec: Option<Vec<u64>>,
+    #[serde(default)]
+    time_bank_sec: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,79 +122,6 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
         return ("200 OK", r#"{"ok":true}"#.into());
     }
 
-    if path == "/internal/formations/bootstrap" {
-        let input: FormationBootstrap = match serde_json::from_str(body) {
-            Ok(v) => v,
-            Err(e) => return ("400 Bad Request", format!(r#"{{"error":"{e}"}}"#)),
-        };
-        let onchain_match_id = hash_match_id(&input.match_id);
-        let mut match_pda: Option<String> = None;
-        if !input.practice_mode {
-            let create_body = serde_json::json!({
-                "matchId": input.match_id,
-                "onchainMatchId": onchain_match_id.to_string(),
-                "maxPlayers": input.max_players,
-                "minPlayers": input.min_players,
-                "tierId": input.tier_id,
-                "feedId": input.feed_id,
-                "buyIn": input.buy_in,
-                "entryFee": input.entry_fee,
-                "rakeBps": input.rake_bps,
-                "rakeCap": input.rake_cap,
-                "configHashHex": input.config_hash_hex,
-            });
-            match post_json(
-                &cfg.settlement_chain,
-                "/internal/solana/create-match",
-                &cfg.auth,
-                create_body,
-            )
-            .await
-            {
-                Ok(resp) if (200..300).contains(&resp.status) => {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp.body) {
-                        match_pda = json
-                            .get("matchPda")
-                            .or_else(|| json.get("match_pda"))
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                    }
-                }
-                Ok(resp) if cfg.stub_mode => {
-                    eprintln!(
-                        "orchestrator stub: create-match returned HTTP {}",
-                        resp.status
-                    );
-                }
-                Ok(resp) => {
-                    return (
-                        "502 Bad Gateway",
-                        format!(
-                            r#"{{"error":"create-match failed with HTTP {}","detail":{}}}"#,
-                            resp.status,
-                            serde_json::to_string(&resp.body).unwrap_or_else(|_| "\"\"".into())
-                        ),
-                    );
-                }
-                Err(err) if cfg.stub_mode => {
-                    eprintln!("orchestrator stub: create-match transport error: {err}");
-                }
-                Err(err) => {
-                    return (
-                        "503 Service Unavailable",
-                        format!(r#"{{"error":"create-match unavailable","detail":"{err}"}}"#),
-                    );
-                }
-            }
-        }
-        let resp = BootstrapResponse {
-            match_id: input.match_id,
-            onchain_match_id: onchain_match_id.to_string(),
-            match_pda,
-        };
-        return ("200 OK", serde_json::to_string(&resp).unwrap_or_default());
-    }
-
     if path == "/internal/start-policy" {
         let input: StartPolicyRequest = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -250,21 +152,41 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 return resp;
             }
-            let seed_body = serde_json::json!({
+            // begin_live: settlement-chain generates the backend-native button_randomness, enumerates
+            // the authoritative seat set from chain (getProgramAccounts), derives the button on-chain,
+            // and returns it plus the stamped live_start_ts / scheduled_end_ts. No set_button_seed step.
+            let live_body = serde_json::json!({
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id.to_string(),
             });
-            let seed_resp = match post_json(
+            let live_resp = match post_json(
                 &cfg.settlement_chain,
-                "/internal/solana/set-button-seed",
+                "/internal/solana/begin-live",
                 &cfg.auth,
-                seed_body,
+                live_body,
             )
             .await
             {
-                Ok(resp) => resp,
+                Ok(resp) if (200..300).contains(&resp.status) => resp,
+                Ok(resp) if cfg.stub_mode => {
+                    eprintln!("orchestrator stub: begin-live returned HTTP {}", resp.status);
+                    PostResult {
+                        status: 200,
+                        body: String::new(),
+                    }
+                }
+                Ok(resp) => {
+                    return (
+                        "502 Bad Gateway",
+                        format!(
+                            r#"{{"error":"begin-live failed with HTTP {}","detail":{}}}"#,
+                            resp.status,
+                            serde_json::to_string(&resp.body).unwrap_or_else(|_| "\"\"".into())
+                        ),
+                    );
+                }
                 Err(err) if cfg.stub_mode => {
-                    eprintln!("orchestrator stub: set-button-seed transport error: {err}");
+                    eprintln!("orchestrator stub: begin-live transport error: {err}");
                     PostResult {
                         status: 200,
                         body: String::new(),
@@ -273,48 +195,16 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                 Err(err) => {
                     return (
                         "503 Service Unavailable",
-                        format!(r#"{{"error":"set-button-seed unavailable","detail":"{err}"}}"#),
+                        format!(r#"{{"error":"begin-live unavailable","detail":"{err}"}}"#),
                     );
                 }
             };
-            if !(200..300).contains(&seed_resp.status) {
-                if cfg.stub_mode {
-                    eprintln!(
-                        "orchestrator stub: set-button-seed returned HTTP {}",
-                        seed_resp.status
-                    );
-                } else {
-                    return (
-                        "502 Bad Gateway",
-                        format!(
-                            r#"{{"error":"set-button-seed failed with HTTP {}","detail":{}}}"#,
-                            seed_resp.status,
-                            serde_json::to_string(&seed_resp.body).unwrap_or_else(|_| "\"\"".into())
-                        ),
-                    );
-                }
-            }
-            let button = parse_button_from_seed_response(&seed_resp.body, input.button);
-            let live_body = serde_json::json!({
-                "matchId": input.match_id,
-                "onchainMatchId": onchain_match_id.to_string(),
-            });
-            if let Err(resp) = require_downstream(
-                cfg,
-                post_json(
-                    &cfg.settlement_chain,
-                    "/internal/solana/begin-live",
-                    &cfg.auth,
-                    live_body,
-                )
-                .await,
-                "begin-live",
-            )
-            .await
-            {
-                return resp;
-            }
-            let start_body = serde_json::json!({
+            let (button, live_start_ts, scheduled_end_ts) =
+                parse_begin_live_response(&live_resp.body, input.button);
+
+            // engine start — forward the on-chain button + template wall-clock timing so every client
+            // renders identical street deadlines anchored on live_start_ts.
+            let mut start_body = serde_json::json!({
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id,
                 "button": button,
@@ -329,6 +219,18 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                     "wallet": p.wallet,
                 })).collect::<Vec<_>>(),
             });
+            if let Some(r) = &input.round_durations_sec {
+                start_body["roundDurationsSec"] = serde_json::json!(r);
+            }
+            if let Some(o) = &input.observation_windows_sec {
+                start_body["observationWindowsSec"] = serde_json::json!(o);
+            }
+            if let Some(t) = input.time_bank_sec {
+                start_body["timeBankSec"] = serde_json::json!(t);
+            }
+            if let Some(ls) = live_start_ts {
+                start_body["liveStartTs"] = serde_json::json!(ls);
+            }
             if let Err(resp) = require_downstream(
                 cfg,
                 post_json(
@@ -344,6 +246,16 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 return resp;
             }
+            return (
+                "200 OK",
+                serde_json::json!({
+                    "ok": true,
+                    "button": button,
+                    "liveStartTs": live_start_ts,
+                    "scheduledEndTs": scheduled_end_ts,
+                })
+                .to_string(),
+            );
         } else if input.result.action == "void" {
             let void_body = serde_json::json!({
                 "matchId": input.match_id,
@@ -380,16 +292,23 @@ pub fn hash_match_id(match_id: &str) -> u64 {
     hash
 }
 
-fn parse_button_from_seed_response(body: &str, fallback: Option<u8>) -> u8 {
-    if body.is_empty() {
-        return fallback.unwrap_or(0);
-    }
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(b) = v.get("button").and_then(|x| x.as_u64()) {
-            return b as u8;
+/// Parse the begin-live response into `(button, live_start_ts, scheduled_end_ts)`. The button is
+/// the on-chain-derived dealer seat; timing fields arrive as numeric strings (or null in stub mode).
+fn parse_begin_live_response(body: &str, fallback: Option<u8>) -> (u8, Option<u64>, Option<u64>) {
+    if !body.is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            let button = v.get("button").and_then(|x| x.as_u64()).map(|b| b as u8);
+            let live = v.get("liveStartTs").and_then(json_u64);
+            let end = v.get("scheduledEndTs").and_then(json_u64);
+            return (button.or(fallback).unwrap_or(0), live, end);
         }
     }
-    fallback.unwrap_or(0)
+    (fallback.unwrap_or(0), None, None)
+}
+
+/// Accept a u64 from either a JSON number or a numeric string (settlement-chain stringifies u64s).
+fn json_u64(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 struct PostResult {
@@ -461,9 +380,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_button_from_set_button_seed_response() {
-        let body = r#"{"ok":true,"button":2,"vrfSeedHex":"ab"}"#;
-        assert_eq!(parse_button_from_seed_response(body, None), 2);
-        assert_eq!(parse_button_from_seed_response("", Some(1)), 1);
+    fn parse_begin_live_response_extracts_button_and_timing() {
+        let body = r#"{"ok":true,"button":2,"liveStartTs":"1782744656","scheduledEndTs":"1782745256"}"#;
+        let (button, live, end) = parse_begin_live_response(body, None);
+        assert_eq!(button, 2);
+        assert_eq!(live, Some(1_782_744_656));
+        assert_eq!(end, Some(1_782_745_256));
+        // empty body (stub mode) falls back to the provided button, no timing.
+        assert_eq!(parse_begin_live_response("", Some(1)), (1, None, None));
     }
 }

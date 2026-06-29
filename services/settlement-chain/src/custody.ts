@@ -18,6 +18,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { anchorDiscriminator } from './actionLog.ts';
+import { decodeMatchAccount } from './matchAccount.ts';
 
 export const DEFAULT_PRICE_FEEDS = Object.freeze({
   'BTC/USD': '0xa7BaE7da3E4950700BE9f107EB186e89a474d180',
@@ -448,12 +449,20 @@ export async function submitBeginLive(cfg: CustodyConfig, input: BeginLiveInput)
     buildBeginLiveInstruction(programId, signer.publicKey, pdas.protocol, pdas.match, seatPdas, buttonRandomness),
   );
   const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
+  // Read back the on-chain outcome: the button (engine-seat index) the contract derived, plus the
+  // stamped live_start_ts / scheduled_end_ts the engine + caller (DB persistence) need.
+  const info = await connection.getAccountInfo(pdas.match, 'confirmed');
+  const m = info?.data ? decodeMatchAccount(info.data as Buffer) : undefined;
   return {
     ok: true as const,
     txSig,
     tx_sig: txSig,
     buttonRandomnessHex: buttonRandomness.toString('hex'),
     seatCount: seatPdas.length,
+    button: m?.button ?? null,
+    status: m?.status ?? null,
+    liveStartTs: m ? m.liveStartTs.toString() : null,
+    scheduledEndTs: m ? m.scheduledEndTs.toString() : null,
   };
 }
 
