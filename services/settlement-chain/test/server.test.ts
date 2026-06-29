@@ -14,16 +14,9 @@ function testConfig(overrides: Record<string, unknown> = {}) {
     primaryRpcUrl: 'http://127.0.0.1:8899',
     programId: '11111111111111111111111111111111',
     chipsTokenMint: '',
-    hermesUrl: 'https://hermes.pyth.network',
-    pythApiKey: 'pyth-secret',
-    receiverProgramId: 'rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ',
-    wormholeProgramId: 'HDwcJBJXjL9FpJ7UBsYBtaDjsBUhuLCUYoz3zr8SWWaQ',
-    pushOracleProgramId: 'pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT',
-    pythStack: 'legacy',
     signedPriceServerUrl: 'http://127.0.0.1:8080',
     confirmationTimeoutMs: 60_000,
     computeUnitPriceMicroLamports: 100_000,
-    allowTwoStepFallback: true,
     ...overrides,
   };
 }

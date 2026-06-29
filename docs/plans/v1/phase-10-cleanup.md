@@ -2,7 +2,21 @@
 
 **Goal:** remove dead/misleading code and reconcile constants before audit. Correctness-neutral.
 
-- **Status:** ✅ done & verified — Phase-10 edits clean (settlement-chain `npm test` 41/41 green; no new Rust errors/warnings). NOTE: `cargo check --workspace` is blocked by **pre-existing** breakage in `syndicate-settlement` (`SettleInput.dead_money`, `OracleValidation.oracle_delay_window_sec`) that exists on clean HEAD with all Phase-10 changes stashed — unrelated to this phase.
+- **Status:** ✅ done & verified — all five acceptance criteria met and re-verified on the running code.
+  Final gap closed this pass: the dead Pyth **receiver-stack** scaffolding still wired into the
+  production `settlement-chain` service (which settles via signed-price, not Pyth Hermes). Removed
+  `src/pythStack.ts` + `test/pythStack.test.ts`, the `resolvePythStackFromEnv` import, the
+  `hermesUrl`/`pythApiKey`/`receiverProgramId`/`wormholeProgramId`/`pushOracleProgramId`/`pythStack`/
+  `allowTwoStepFallback` `Config` fields, their `/health` echo, and the now-orphaned `envBool` helper.
+  `pythApiKey` removal is observably a no-op (always `''` in v1; `redactSecrets` already filters empty
+  strings). KEPT `pyth-stack.json` (shared infra — `devnet-harness` reads it and a `deployment` test
+  enforces it) and `src/pyth.ts` (live oracle-agnostic helpers `normalizeFeedIdHex`/`redactSecrets`).
+  Already-complete on entry: dead Rust scaffolding gone (`ops.rs`), timelock grace reconciled
+  (`ONCHAIN_SETTLE_VOID_GRACE_SEC = 300`, `.max()`-clamped), `buttonRandomness.ts`/`auditLog.ts`/
+  `buildSetButtonSeedInstruction` removed, canon-doc deprecation banners present (04/05/06/08).
+  Verified: `cargo check --workspace` finishes clean (warnings only — the previously-noted
+  `syndicate-settlement` breakage has since been fixed); `settlement-chain` `npm test` 36/36 green
+  (was 41, minus the 5 deleted `pythStack` tests).
 - **Depends on:** — (independent)
 - **Parallel-safe with:** everything (coordinate with 01/04 which also delete button-seed/Pyth bits)
 - **Checklist ref:** §8
@@ -47,11 +61,11 @@ signed-price adapter despite the name).
 
 ## Acceptance criteria
 
-- [ ] No `PythUpdateClient`/`HermesHttpPythClient`/`MockPythClient`/`fetch_and_post_first_valid_pyth_update` remain.
-- [ ] Timelock grace is sourced consistently (no ad-hoc 30s that races the on-chain grace).
-- [ ] Dead settlement-chain Pyth/button files removed or justified.
-- [ ] Stale canon docs deprecated/moved.
-- [ ] `cargo check --workspace` + per-service `npm test` green.
+- [x] No `PythUpdateClient`/`HermesHttpPythClient`/`MockPythClient`/`fetch_and_post_first_valid_pyth_update` remain.
+- [x] Timelock grace is sourced consistently (no ad-hoc 30s that races the on-chain grace).
+- [x] Dead settlement-chain Pyth/button files removed or justified.
+- [x] Stale canon docs deprecated/moved.
+- [x] `cargo check --workspace` + per-service `npm test` green.
 
 ## Verification
 

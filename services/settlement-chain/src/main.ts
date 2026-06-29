@@ -5,7 +5,6 @@ import {
   normalizeFeedIdHex,
   redactSecrets,
 } from './pyth.ts';
-import { resolvePythStackFromEnv } from './pythStack.ts';
 import {
   buildClaimPreview,
   buildCreateMatchPreview,
@@ -45,16 +44,9 @@ type Config = {
   secondaryRpcUrl?: string;
   programId: string;
   chipsTokenMint: string;
-  hermesUrl: string;
-  pythApiKey: string;
-  receiverProgramId: string;
-  wormholeProgramId: string;
-  pushOracleProgramId: string;
-  pythStack: string;
   signedPriceServerUrl: string;
   confirmationTimeoutMs: number;
   computeUnitPriceMicroLamports: number;
-  allowTwoStepFallback: boolean;
 };
 
 const metrics = {
@@ -80,11 +72,6 @@ export function createServer(config: Config) {
           ok: true,
           signer: config.signerPubkey ?? null,
           programId: config.programId,
-          receiverProgramId: config.receiverProgramId,
-          wormholeProgramId: config.wormholeProgramId,
-          pushOracleProgramId: config.pushOracleProgramId,
-          pythStack: config.pythStack,
-          hermesUrl: config.hermesUrl,
           signedPriceServerUrl: config.signedPriceServerUrl,
         });
       }
@@ -246,7 +233,6 @@ export function createServer(config: Config) {
       metrics.errorsTotal += 1;
       const message = redactSecrets(err instanceof Error ? err.message : String(err), [
         config.authToken,
-        config.pythApiKey,
         config.signerKeypairPath,
       ]);
       return sendJson(res, statusFromError(err), { error: message });
@@ -258,7 +244,6 @@ export function loadConfigFromEnv(): Config {
   const tokenPath = requiredEnv('SETTLEMENT_CHAIN_AUTH_TOKEN_FILE');
   const signerKeypairPath = requiredEnv('SETTLEMENT_SIGNER_KEYPAIR_PATH');
   const authToken = readSecret(tokenPath, 'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE');
-  const pythStack = resolvePythStackFromEnv(process.env);
   return {
     host: process.env.SETTLEMENT_CHAIN_HOST ?? '127.0.0.1',
     port: envInt('SETTLEMENT_CHAIN_PORT', 8790),
@@ -268,16 +253,9 @@ export function loadConfigFromEnv(): Config {
     secondaryRpcUrl: process.env.SOLANA_RPC_URL_SECONDARY || undefined,
     programId: requiredEnv('SYNDICATE_PROGRAM_ID'),
     chipsTokenMint: process.env.CHIPS_TOKEN_MINT ?? '',
-    hermesUrl: pythStack.hermesUrl,
-    pythApiKey: process.env.PYTH_API_KEY ?? '',
-    receiverProgramId: pythStack.receiverProgramId,
-    wormholeProgramId: pythStack.wormholeProgramId,
-    pushOracleProgramId: pythStack.pushOracleProgramId,
-    pythStack: pythStack.stack,
     signedPriceServerUrl: process.env.SIGNED_PRICE_SERVER_URL ?? 'http://127.0.0.1:8080',
     confirmationTimeoutMs: envInt('SETTLEMENT_CONFIRMATION_TIMEOUT_MS', 60_000),
     computeUnitPriceMicroLamports: envInt('SETTLEMENT_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS', 100_000),
-    allowTwoStepFallback: envBool('PYTH_ALLOW_TWO_STEP_FALLBACK', true),
   };
 }
 
@@ -490,12 +468,6 @@ function envInt(name: string, fallback: number): number {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isInteger(parsed)) throw new Error(`${name} must be an integer`);
   return parsed;
-}
-
-function envBool(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.toLowerCase());
 }
 
 function field(obj: any, camel: string, snake?: string): any {
