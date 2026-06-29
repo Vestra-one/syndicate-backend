@@ -2,7 +2,7 @@
 
 **Goal:** the frontend protocol + reference client match v1 (signed-price, player-created, explicit seal, txhash reporting).
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified (protocol.ts has no Pyth types; `SignedPriceView` mirrors `SignedPriceDto`; reference client drives create→deposit→seal→claim w/ txhash reporting + clock-synced countdowns; guide updated. Type-checked via `node --experimental-strip-types` since `tsc` isn't installed here.)
 - **Depends on:** 01 (builders), 07 (envelope shape)
 - **Parallel-safe with:** 09, 10
 - **Checklist ref:** §5

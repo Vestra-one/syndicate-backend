@@ -44,6 +44,10 @@ export class RedisClient {
     await this.command(['ZREM', key, member]);
   }
 
+  async publish(channel: string, message: string): Promise<void> {
+    await this.command(['PUBLISH', channel, message]);
+  }
+
   async zrangebyscore(key: string, min: number, max: number): Promise<string[]> {
     const reply = await this.command(['ZRANGEBYSCORE', key, String(min), String(max)]);
     if (Array.isArray(reply)) return reply;

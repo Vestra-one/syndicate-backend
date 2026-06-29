@@ -2,7 +2,7 @@
 
 **Goal:** clients get real server time and engine absolute deadlines (not a synthesized 25s); lobby is pushed.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified (gateway is TypeScript — verify with `npm test`, not `cargo test`; `serverTime`+forwarded deadlines+room-push covered by `test/relay.test.ts`. Pre-existing `server.test.ts`/`e2e-act-loop.test.ts` fail only because `ws` isn't `npm install`ed here.)
 - **Depends on:** 06 (registry for room-push)
 - **Parallel-safe with:** 09, 10
 - **Checklist ref:** §4

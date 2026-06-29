@@ -1,0 +1,171 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { MemoryMatchmakingStore } from '../src/index.ts';
+import { MatchmakingRuntime } from '../src/formation.ts';
+import type { ChainVerifier, ChainVerifyResult } from '../src/chain-verify.ts';
+import type { MatchPersistence } from '../src/persistence.ts';
+import { buildTemplates } from '../../config/src/index.ts';
+
+const TEMPLATE = buildTemplates()[0];
+const CONFIG_HASH = TEMPLATE.configHash;
+
+function recordingPersistence() {
+  const matches: unknown[] = [];
+  const seats: unknown[] = [];
+  const port: MatchPersistence = {
+    async insertMatch(row) {
+      matches.push(row);
+    },
+    async insertMatchSeat(row) {
+      seats.push(row);
+    },
+  };
+  return { port, matches, seats };
+}
+
+/** Verifier that approves a fixed set of sigs and assigns the requested/sequential seat index. */
+function fakeVerifier(approve: Set<string>): ChainVerifier {
+  const ok = (matchPda: string, player: string, seatIndex: number): ChainVerifyResult => ({
+    ok: true,
+    matchPda,
+    player,
+    seatIndex,
+    buyIn: '1000',
+  });
+  return {
+    async verifyCreate(input) {
+      if (!approve.has(input.txSig)) return { ok: false, reason: 'not finalized' };
+      return ok('PDA_' + input.onchainMatchId, input.wallet, input.seatIndex ?? 0);
+    },
+    async verifyDeposit(input) {
+      if (!approve.has(input.txSig)) return { ok: false, reason: 'not finalized' };
+      return ok('PDA_' + input.onchainMatchId, input.wallet, input.seatIndex ?? 1);
+    },
+  };
+}
+
+const noopOrch = { triggerStartPolicy: async () => {} };
+
+function runtime(opts: { approve: Set<string>; persistence?: MatchPersistence; cap?: number }) {
+  return new MatchmakingRuntime({
+    store: new MemoryMatchmakingStore(),
+    orchestrator: noopOrch,
+    chainVerifier: fakeVerifier(opts.approve),
+    persistence: opts.persistence,
+    walletRoomCap: opts.cap ?? 3,
+  });
+}
+
+test('verified create registers a room and persists match + creator seat', async () => {
+  const { port, matches, seats } = recordingPersistence();
+  const rt = runtime({ approve: new Set(['sig-create']), persistence: port });
+  const out = await rt.createRoom({
+    createTxSig: 'sig-create',
+    matchPda: 'PDA1',
+    onchainMatchId: '111',
+    configHash: CONFIG_HASH,
+    wallet: 'HOST',
+    seatIndex: 0,
+  });
+  assert.equal(out.ok, true);
+  assert.equal(matches.length, 1);
+  assert.equal(seats.length, 1);
+  assert.deepEqual((matches[0] as { onchainMatchId: string }).onchainMatchId, '111');
+  const rooms = await rt.listRooms({});
+  assert.equal(rooms.length, 1);
+  assert.equal(rooms[0].seated, 1);
+  assert.equal(rooms[0].configHash, CONFIG_HASH);
+});
+
+test('non-allowlisted config_hash is rejected before any verify/persist', async () => {
+  const { port, matches } = recordingPersistence();
+  const rt = runtime({ approve: new Set(['sig-create']), persistence: port });
+  const out = await rt.createRoom({
+    createTxSig: 'sig-create',
+    matchPda: 'PDA1',
+    onchainMatchId: '111',
+    configHash: 'deadbeef-not-allowlisted',
+    wallet: 'HOST',
+  });
+  assert.equal(out.ok, false);
+  assert.match((out as { reason: string }).reason, /allowlist/);
+  assert.equal(matches.length, 0);
+});
+
+test('unverified create txhash is rejected', async () => {
+  const rt = runtime({ approve: new Set() });
+  const out = await rt.createRoom({
+    createTxSig: 'sig-bad',
+    matchPda: 'PDA1',
+    onchainMatchId: '111',
+    configHash: CONFIG_HASH,
+    wallet: 'HOST',
+  });
+  assert.equal(out.ok, false);
+});
+
+test('re-reported create txhash is idempotent (no double room/persist)', async () => {
+  const { port, matches } = recordingPersistence();
+  const rt = runtime({ approve: new Set(['sig-create']), persistence: port });
+  const base = {
+    createTxSig: 'sig-create',
+    matchPda: 'PDA1',
+    onchainMatchId: '111',
+    configHash: CONFIG_HASH,
+    wallet: 'HOST',
+    seatIndex: 0,
+  };
+  const a = await rt.createRoom(base);
+  const b = await rt.createRoom(base);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.deepEqual(a, b);
+  assert.equal(matches.length, 1); // not persisted twice
+  const rooms = await rt.listRooms({});
+  assert.equal(rooms.length, 1);
+});
+
+test('per-wallet active-room cap is enforced', async () => {
+  const rt = runtime({ approve: new Set(['s1', 's2', 's3']), cap: 2 });
+  const mk = (sig: string, pda: string, id: string) =>
+    rt.createRoom({ createTxSig: sig, matchPda: pda, onchainMatchId: id, configHash: CONFIG_HASH, wallet: 'HOST', seatIndex: 0 });
+  assert.equal((await mk('s1', 'PDA1', '1')).ok, true);
+  assert.equal((await mk('s2', 'PDA2', '2')).ok, true);
+  const third = await mk('s3', 'PDA3', '3');
+  assert.equal(third.ok, false);
+  assert.match((third as { reason: string }).reason, /cap/);
+});
+
+test('verified deposit seats a joiner and bumps the registry count', async () => {
+  const { port, seats } = recordingPersistence();
+  const rt = runtime({ approve: new Set(['sig-create', 'sig-deposit']), persistence: port });
+  const created = await rt.createRoom({
+    createTxSig: 'sig-create',
+    matchPda: 'PDA1',
+    onchainMatchId: '111',
+    configHash: CONFIG_HASH,
+    wallet: 'HOST',
+    seatIndex: 0,
+  });
+  assert.equal(created.ok, true);
+  const dep = await rt.verifyDeposit({
+    matchId: 'PDA1', // matchId == matchPda
+    wallet: 'JOINER',
+    txSignature: 'sig-deposit',
+    seatIndex: 1,
+  });
+  assert.equal(dep.ok, true);
+  assert.equal((dep as { seat: number }).seat, 1);
+  // creator seat + joiner seat persisted
+  assert.equal(seats.length, 2);
+  const rooms = await rt.listRooms({});
+  assert.equal(rooms[0].seated, 2);
+});
+
+test('deposit against a match with no reported create is rejected', async () => {
+  const rt = runtime({ approve: new Set(['sig-deposit']) });
+  // seed a bare table without a registry record/onchain id
+  await rt['store'].saveTable({ tableId: 'PDAX', minPlayers: 2, maxPlayers: 5, seats: [] });
+  const dep = await rt.verifyDeposit({ matchId: 'PDAX', wallet: 'J', txSignature: 'sig-deposit' });
+  assert.equal(dep.ok, false);
+});

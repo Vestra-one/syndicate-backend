@@ -2,7 +2,7 @@
 
 **Goal:** the backend persists the match lifecycle to Postgres (no indexer to do it).
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified
 - **Depends on:** —
 - **Parallel-safe with:** 01, 02, 09, 10
 - **Checklist ref:** §6

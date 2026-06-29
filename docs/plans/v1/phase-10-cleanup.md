@@ -2,7 +2,7 @@
 
 **Goal:** remove dead/misleading code and reconcile constants before audit. Correctness-neutral.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified — Phase-10 edits clean (settlement-chain `npm test` 41/41 green; no new Rust errors/warnings). NOTE: `cargo check --workspace` is blocked by **pre-existing** breakage in `syndicate-settlement` (`SettleInput.dead_money`, `OracleValidation.oracle_delay_window_sec`) that exists on clean HEAD with all Phase-10 changes stashed — unrelated to this phase.
 - **Depends on:** — (independent)
 - **Parallel-safe with:** everything (coordinate with 01/04 which also delete button-seed/Pyth bits)
 - **Checklist ref:** §8

@@ -1,18 +1,19 @@
 //! Production settlement operations seam.
 //!
 //! This module owns liveness mechanics around the pure settlement bundle:
-//! Pyth-update fetching/posting contracts, Solana transaction build/send/confirm,
-//! idempotent attempts, retry/refund fallback, dead-letter inspection, and vault
+//! signed-price resolution (`PythResolveClient`, despite the legacy name, proxies
+//! the signed-price-server), Solana transaction build/send/confirm, idempotent
+//! attempts, retry/refund fallback, dead-letter inspection, and vault
 //! reconciliation. Concrete network clients plug in behind these traits.
 
 use std::collections::{HashMap, VecDeque};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use syndicate_shared::{
-    first_valid_oracle_update, CoreError, FeedId, OraclePriceUpdate, OracleValidation,
-    VerifiedOraclePrice,
-};
+use syndicate_shared::{FeedId, VerifiedOraclePrice};
+// Only the signed-price resolve path (behind `net`) validates raw oracle updates.
+#[cfg(feature = "net")]
+use syndicate_shared::{first_valid_oracle_update, OraclePriceUpdate, OracleValidation};
 
 use crate::{Outcome, SettlementBundle, SubmitError, SubmitReceipt, VoidReason};
 
@@ -106,64 +107,9 @@ pub trait PythResolveClient {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PythPostReceipt {
-    pub price_update_account: String,
-    pub vaa_digest: Option<[u8; 32]>,
-    pub receiver_program_id: String,
-    pub wormhole_program_id: String,
-    pub push_oracle_program_id: String,
-    pub hermes_response_hash: Option<[u8; 32]>,
-    pub binary_update_hash: Option<[u8; 32]>,
-    pub atomic_settlement_tx_signature: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PythError {
     Unavailable(String),
     InvalidUpdate(String),
-}
-
-pub trait PythUpdateClient {
-    fn fetch_updates(
-        &mut self,
-        request: &PythFetchRequest,
-    ) -> Result<Vec<OraclePriceUpdate>, PythError>;
-
-    fn post_update(
-        &mut self,
-        request: &PythFetchRequest,
-        update: &OraclePriceUpdate,
-    ) -> Result<PythPostReceipt, PythError>;
-}
-
-pub fn fetch_and_post_first_valid_pyth_update<C: PythUpdateClient>(
-    client: &mut C,
-    request: &PythFetchRequest,
-) -> Result<Option<(VerifiedOraclePrice, PythPostReceipt)>, PythError> {
-    let updates = client.fetch_updates(request)?;
-    let rules = OracleValidation {
-        expected_feed_id: request.feed_id,
-        scheduled_end_ts: request.scheduled_end_ts,
-        max_confidence: request.max_confidence,
-        expected_exponent: request.expected_exponent,
-    };
-    let price = match first_valid_oracle_update(&updates, &rules) {
-        Ok(price) => price,
-        Err(CoreError::OracleUnavailable) => return Ok(None),
-        Err(e) => return Err(PythError::InvalidUpdate(format!("{e:?}"))),
-    };
-    let update = updates
-        .iter()
-        .find(|u| {
-            u.feed_id == price.feed_id
-                && u.publish_time == price.publish_time
-                && u.price == price.price
-                && u.confidence == price.confidence
-                && u.exponent == price.exponent
-        })
-        .ok_or_else(|| PythError::InvalidUpdate("validated update not found".into()))?;
-    let receipt = client.post_update(request, update)?;
-    Ok(Some((price, receipt)))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -783,39 +729,6 @@ pub fn reconcile_vault(input: &VaultReconciliationInput) -> VaultReconciliationR
 }
 
 #[derive(Default)]
-pub struct MockPythClient {
-    pub updates: Vec<OraclePriceUpdate>,
-    pub posted: Vec<OraclePriceUpdate>,
-}
-
-impl PythUpdateClient for MockPythClient {
-    fn fetch_updates(
-        &mut self,
-        _request: &PythFetchRequest,
-    ) -> Result<Vec<OraclePriceUpdate>, PythError> {
-        Ok(self.updates.clone())
-    }
-
-    fn post_update(
-        &mut self,
-        _request: &PythFetchRequest,
-        update: &OraclePriceUpdate,
-    ) -> Result<PythPostReceipt, PythError> {
-        self.posted.push(*update);
-        Ok(PythPostReceipt {
-            price_update_account: "pyth-update-account".into(),
-            vaa_digest: Some([9u8; 32]),
-            receiver_program_id: "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp".into(),
-            wormhole_program_id: "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL".into(),
-            push_oracle_program_id: "pyt2F414BA6dPttK6RddPZUdHfapoBN24GL5wbrPCou".into(),
-            hermes_response_hash: Some([7u8; 32]),
-            binary_update_hash: Some([8u8; 32]),
-            atomic_settlement_tx_signature: Some("atomic-tx".into()),
-        })
-    }
-}
-
-#[derive(Default)]
 pub struct MockSolanaClient {
     pub send_failures: VecDeque<SubmitError>,
     pub confirmations: VecDeque<ConfirmationStatus>,
@@ -936,158 +849,6 @@ fn parse_feed_id_hex(input: &str) -> Result<FeedId, String> {
 pub mod net {
     use super::*;
     use serde::{Deserialize, Serialize};
-    use sha2::{Digest, Sha256};
-    use std::collections::HashMap;
-
-    pub const PRO_COMPATIBLE_RECEIVER_PROGRAM_ID: &str =
-        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp";
-    pub const PRO_COMPATIBLE_WORMHOLE_PROGRAM_ID: &str =
-        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL";
-    pub const PRO_COMPATIBLE_PUSH_ORACLE_PROGRAM_ID: &str =
-        "pyt2F414BA6dPttK6RddPZUdHfapoBN24GL5wbrPCou";
-
-    #[derive(Clone, Debug)]
-    pub struct HermesHttpPythClient {
-        /// URL template for one publish-time lookup. Supported tokens:
-        /// `{publish_time}`, `{feed_id}`, `{window_end}`.
-        pub fetch_url_template: String,
-        /// Optional Hermes API access token. It is sent as an Authorization bearer
-        /// header and must never be logged.
-        pub access_token: Option<String>,
-        /// Optional Receiver-posting relayer endpoint. It receives the selected update
-        /// plus the raw Hermes response and returns a posted Receiver account.
-        pub post_url: Option<String>,
-        pub receiver_program_id: String,
-        pub wormhole_program_id: String,
-        pub push_oracle_program_id: String,
-        pub timeout_ms: u64,
-        raw_by_key: HashMap<(FeedId, u64), HermesProofPayload>,
-    }
-
-    impl HermesHttpPythClient {
-        pub fn benchmarks(fetch_base_url: impl Into<String>) -> Self {
-            let base = fetch_base_url.into().trim_end_matches('/').to_string();
-            Self {
-                fetch_url_template: format!(
-                    "{base}/v2/updates/price/{{publish_time}}?ids[]={{feed_id}}&encoding=hex&parsed=true"
-                ),
-                access_token: None,
-                post_url: None,
-                receiver_program_id: PRO_COMPATIBLE_RECEIVER_PROGRAM_ID.into(),
-                wormhole_program_id: PRO_COMPATIBLE_WORMHOLE_PROGRAM_ID.into(),
-                push_oracle_program_id: PRO_COMPATIBLE_PUSH_ORACLE_PROGRAM_ID.into(),
-                timeout_ms: 5_000,
-                raw_by_key: HashMap::new(),
-            }
-        }
-
-        pub fn with_access_token(mut self, access_token: impl Into<String>) -> Self {
-            self.access_token = Some(access_token.into());
-            self
-        }
-
-        pub fn with_post_url(mut self, post_url: impl Into<String>) -> Self {
-            self.post_url = Some(post_url.into());
-            self
-        }
-
-        fn url_for(&self, request: &PythFetchRequest, publish_time: u64) -> String {
-            request_url(
-                &self.fetch_url_template,
-                request,
-                publish_time,
-                &feed_id_hex(&request.feed_id),
-            )
-        }
-    }
-
-    impl PythUpdateClient for HermesHttpPythClient {
-        fn fetch_updates(
-            &mut self,
-            request: &PythFetchRequest,
-        ) -> Result<Vec<OraclePriceUpdate>, PythError> {
-            let publish_time = request.scheduled_end_ts;
-            let url = self.url_for(request, publish_time);
-            let mut http =
-                ureq::get(&url).timeout(std::time::Duration::from_millis(self.timeout_ms));
-            if let Some(access_token) = &self.access_token {
-                http = http.set("Authorization", &format!("Bearer {access_token}"));
-            }
-            let body = http
-                .call()
-                .map_err(|e| PythError::Unavailable(format!("Hermes fetch failed: {e}")))?
-                .into_string()
-                .map_err(|e| PythError::InvalidUpdate(format!("Hermes body invalid: {e}")))?;
-            let hermes_response_hash = sha256_32(body.as_bytes());
-            let response: HermesPriceResponse = serde_json::from_str(&body)
-                .map_err(|e| PythError::InvalidUpdate(format!("Hermes JSON invalid: {e}")))?;
-            let binary_update_hash = response.binary_update_hash()?;
-            let proof = HermesProofPayload {
-                response: response.clone(),
-                hermes_response_hash,
-                binary_update_hash,
-            };
-            let mut out = Vec::new();
-            for parsed in &response.parsed {
-                if let Some(update) = parsed.to_update()? {
-                    self.raw_by_key
-                        .insert((update.feed_id, update.publish_time), proof.clone());
-                    out.push(update);
-                }
-            }
-            Ok(out)
-        }
-
-        fn post_update(
-            &mut self,
-            request: &PythFetchRequest,
-            update: &OraclePriceUpdate,
-        ) -> Result<PythPostReceipt, PythError> {
-            let post_url = self.post_url.as_ref().ok_or_else(|| {
-                PythError::Unavailable("Pyth Receiver post URL not configured".into())
-            })?;
-            let raw = self
-                .raw_by_key
-                .get(&(update.feed_id, update.publish_time))
-                .cloned()
-                .ok_or_else(|| {
-                    PythError::InvalidUpdate("selected update has no raw Hermes payload".into())
-                })?;
-            let body = PythPostRequest {
-                feed_id: feed_id_hex(&request.feed_id),
-                scheduled_end_ts: request.scheduled_end_ts,
-                update: update_wire(update),
-                hermes_response: raw.response.clone(),
-                hermes_response_hash: hex_32(raw.hermes_response_hash),
-                binary_update_hash: raw.binary_update_hash.map(hex_32),
-            };
-            ureq::post(post_url)
-                .timeout(std::time::Duration::from_millis(self.timeout_ms))
-                .send_json(
-                    serde_json::to_value(body)
-                        .map_err(|e| PythError::InvalidUpdate(e.to_string()))?,
-                )
-                .map_err(|e| PythError::Unavailable(format!("Pyth Receiver post failed: {e}")))?
-                .into_json::<PythPostReceiptWire>()
-                .map(|r| PythPostReceipt {
-                    price_update_account: r.price_update_account,
-                    vaa_digest: r.vaa_digest.and_then(|hex| parse_32_byte_hex(&hex).ok()),
-                    receiver_program_id: r
-                        .receiver_program_id
-                        .unwrap_or_else(|| self.receiver_program_id.clone()),
-                    wormhole_program_id: r
-                        .wormhole_program_id
-                        .unwrap_or_else(|| self.wormhole_program_id.clone()),
-                    push_oracle_program_id: r
-                        .push_oracle_program_id
-                        .unwrap_or_else(|| self.push_oracle_program_id.clone()),
-                    hermes_response_hash: Some(raw.hermes_response_hash),
-                    binary_update_hash: raw.binary_update_hash,
-                    atomic_settlement_tx_signature: r.atomic_settlement_tx_signature,
-                })
-                .map_err(|e| PythError::InvalidUpdate(format!("post response JSON invalid: {e}")))
-        }
-    }
 
     #[derive(Clone, Debug)]
     pub struct SettlementChainHttpClient {
@@ -1515,158 +1276,12 @@ pub mod net {
         amount: u64,
     }
 
-    fn request_url(
-        template: &str,
-        request: &PythFetchRequest,
-        publish_time: u64,
-        feed_hex: &str,
-    ) -> String {
-        template
-            .replace("{publish_time}", &publish_time.to_string())
-            .replace("{window_end}", &request.scheduled_end_ts.to_string())
-            .replace("{feed_id}", feed_hex)
-    }
-
-    fn update_wire(update: &OraclePriceUpdate) -> OracleUpdateWire {
-        OracleUpdateWire {
-            feed_id: feed_id_hex(&update.feed_id),
-            price: update.price.to_string(),
-            publish_time: update.publish_time,
-            confidence: update.confidence,
-            exponent: update.exponent,
-        }
-    }
-
-    fn parse_32_byte_hex(input: &str) -> Result<[u8; 32], String> {
-        let hex = input.strip_prefix("0x").unwrap_or(input);
-        if hex.len() != 64 {
-            return Err("expected 32-byte hex".into());
-        }
-        let mut out = [0u8; 32];
-        for i in 0..32 {
-            out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
-        }
-        Ok(out)
-    }
-
-    fn parse_even_hex(input: &str) -> Result<Vec<u8>, String> {
-        let hex = input.strip_prefix("0x").unwrap_or(input);
-        if hex.len() % 2 != 0 {
-            return Err("hex length must be even".into());
-        }
-        let mut out = Vec::with_capacity(hex.len() / 2);
-        for i in 0..hex.len() / 2 {
-            out.push(u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?);
-        }
-        Ok(out)
-    }
-
-    fn sha256_32(bytes: &[u8]) -> [u8; 32] {
-        let digest = Sha256::digest(bytes);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        out
-    }
-
     fn hex_32(bytes: [u8; 32]) -> String {
         let mut out = String::with_capacity(64);
         for b in bytes {
             out.push_str(&format!("{b:02x}"));
         }
         out
-    }
-
-    #[derive(Clone, Debug)]
-    struct HermesProofPayload {
-        response: HermesPriceResponse,
-        hermes_response_hash: [u8; 32],
-        binary_update_hash: Option<[u8; 32]>,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct HermesPriceResponse {
-        #[serde(default)]
-        pub binary: Option<HermesBinaryUpdate>,
-        #[serde(default)]
-        pub parsed: Vec<HermesParsedPrice>,
-    }
-
-    impl HermesPriceResponse {
-        fn binary_update_hash(&self) -> Result<Option<[u8; 32]>, PythError> {
-            let Some(binary) = &self.binary else {
-                return Ok(None);
-            };
-            if binary.encoding != "hex" {
-                return Err(PythError::InvalidUpdate(format!(
-                    "unsupported Hermes binary encoding: {}",
-                    binary.encoding
-                )));
-            }
-            let mut hash = Sha256::new();
-            for item in &binary.data {
-                let bytes = parse_even_hex(item)
-                    .map_err(|e| PythError::InvalidUpdate(format!("bad binary update hex: {e}")))?;
-                hash.update((bytes.len() as u32).to_be_bytes());
-                hash.update(bytes);
-            }
-            let digest = hash.finalize();
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&digest);
-            Ok(Some(out))
-        }
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct HermesBinaryUpdate {
-        pub data: Vec<String>,
-        pub encoding: String,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct HermesParsedPrice {
-        pub id: String,
-        pub price: HermesPriceInfo,
-    }
-
-    impl HermesParsedPrice {
-        fn to_update(&self) -> Result<Option<OraclePriceUpdate>, PythError> {
-            let feed_id = parse_32_byte_hex(&self.id)
-                .map_err(|e| PythError::InvalidUpdate(format!("bad feed id: {e}")))?;
-            if self.price.publish_time < 0 {
-                return Ok(None);
-            }
-            Ok(Some(OraclePriceUpdate {
-                feed_id,
-                price: self
-                    .price
-                    .price
-                    .parse()
-                    .map_err(|e| PythError::InvalidUpdate(format!("bad price integer: {e}")))?,
-                publish_time: self.price.publish_time as u64,
-                confidence: self.price.conf.parse().map_err(|e| {
-                    PythError::InvalidUpdate(format!("bad confidence integer: {e}"))
-                })?,
-                exponent: self.price.expo,
-            }))
-        }
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct HermesPriceInfo {
-        pub price: String,
-        pub conf: String,
-        pub expo: i32,
-        pub publish_time: i64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct PythPostRequest {
-        feed_id: String,
-        scheduled_end_ts: u64,
-        update: OracleUpdateWire,
-        hermes_response: HermesPriceResponse,
-        hermes_response_hash: String,
-        binary_update_hash: Option<String>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1678,67 +1293,9 @@ pub mod net {
         exponent: i32,
     }
 
-    #[derive(Clone, Debug, Deserialize)]
-    struct PythPostReceiptWire {
-        price_update_account: String,
-        vaa_digest: Option<String>,
-        receiver_program_id: Option<String>,
-        wormhole_program_id: Option<String>,
-        push_oracle_program_id: Option<String>,
-        atomic_settlement_tx_signature: Option<String>,
-    }
-
     #[cfg(test)]
     mod net_tests {
         use super::*;
-
-        #[test]
-        fn hermes_url_uses_v2_timestamp_endpoint_without_secret() {
-            let client = HermesHttpPythClient::benchmarks("https://pyth.dourolabs.app/hermes")
-                .with_access_token("secret-token");
-            let request = PythFetchRequest {
-                symbol: "BTCUSD".into(),
-                feed_id: [0xff; 32],
-                scheduled_end_ts: 1_715_000_000,
-                max_confidence: 50,
-                expected_exponent: -8,
-            };
-            let url = client.url_for(&request, request.scheduled_end_ts);
-            assert!(url.contains("/v2/updates/price/1715000000"));
-            assert!(url.contains("encoding=hex"));
-            assert!(!url.contains("secret-token"));
-        }
-
-        #[test]
-        fn hermes_binary_hash_is_available_for_audit() {
-            let response = HermesPriceResponse {
-                binary: Some(HermesBinaryUpdate {
-                    data: vec!["01020304".into()],
-                    encoding: "hex".into(),
-                }),
-                parsed: Vec::new(),
-            };
-            assert!(response.binary_update_hash().unwrap().is_some());
-        }
-
-        #[test]
-        fn hermes_parsed_price_maps_to_oracle_update() {
-            let parsed = HermesParsedPrice {
-                id: format!("0x{}", "07".repeat(32)),
-                price: HermesPriceInfo {
-                    price: "100000".into(),
-                    conf: "12".into(),
-                    expo: -8,
-                    publish_time: 1_000,
-                },
-            };
-            let update = parsed.to_update().unwrap().unwrap();
-            assert_eq!(update.feed_id, [7u8; 32]);
-            assert_eq!(update.price, 100_000);
-            assert_eq!(update.confidence, 12);
-            assert_eq!(update.exponent, -8);
-            assert_eq!(update.publish_time, 1_000);
-        }
 
         #[test]
         fn settlement_chain_client_builds_runtime_void_payload() {
@@ -1789,18 +1346,8 @@ mod tests {
     use super::*;
     use crate::{settle_match, SettleParams};
     use syndicate_engine::{Action, Engine};
-    use syndicate_shared::{OraclePriceUpdate, PlayerId, VerifiedOraclePrice};
+    use syndicate_shared::{PlayerId, VerifiedOraclePrice};
     use syndicate_timelock::{MockScheme, RoundKey, SealRegistry, TimelockScheme};
-
-    fn update(ts: u64, price: i128) -> OraclePriceUpdate {
-        OraclePriceUpdate {
-            feed_id: [7u8; 32],
-            price,
-            publish_time: ts,
-            confidence: 10,
-            exponent: -8,
-        }
-    }
 
     fn bundle() -> SettlementBundle {
         let mut engine = Engine::new(
@@ -1915,28 +1462,6 @@ mod tests {
             },
             outcome,
         }
-    }
-
-    #[test]
-    fn pyth_client_posts_first_valid_update_only() {
-        let mut client = MockPythClient {
-            updates: vec![update(999, 99), update(1_000, 100), update(1_001, 101)],
-            posted: Vec::new(),
-        };
-        let request = PythFetchRequest {
-            symbol: "BTCUSD".into(),
-            feed_id: [7u8; 32],
-            scheduled_end_ts: 1_000,
-            max_confidence: 50,
-            expected_exponent: -8,
-        };
-        let (price, receipt) = fetch_and_post_first_valid_pyth_update(&mut client, &request)
-            .unwrap()
-            .expect("valid update");
-        assert_eq!(price.price, 100);
-        assert_eq!(price.publish_time, 1_000);
-        assert_eq!(receipt.price_update_account, "pyth-update-account");
-        assert_eq!(client.posted, vec![update(1_000, 100)]);
     }
 
     #[tokio::test]

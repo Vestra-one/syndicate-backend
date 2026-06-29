@@ -21,6 +21,17 @@ hex = "0.4"
 syndicate-shared = { path = "../../shared" }
 syndicate-engine-core = { path = "../../engine-core" }
 
+[dev-dependencies]
+# Host-side secp256k1 signing to produce a real recoverable EIP-191 signature for the
+# settlement signed-price path (recovered on-chain by solana-secp256k1-recover). Same
+# crate the contract uses transitively, so wire-compatible.
+libsecp256k1 = "0.6"
+solana-keccak-hasher = "2"
+
+[[test]]
+name = "funds_exit_matrix"
+path = "tests/funds_exit_matrix.rs"
+
 [[test]]
 name = "golden_parity"
 path = "tests/golden_parity.rs"

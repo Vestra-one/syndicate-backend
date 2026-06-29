@@ -1,3 +1,5 @@
+> **⚠️ DEPRECATED / STALE — not authoritative for current behavior.** This predates the v1 implementation and may describe a different game (e.g. Switchboard/Pyth oracle, median-60s, session-keys). Trust the **code** and `docs/V1_COMPLETION_CHECKLIST.md` instead.
+
 # Syndicate — End-to-End Player Experience (Canonical Requirements)
 
 **Status:** Canonical `SYNDICATE_GAME_REQUIREMENTS.md`, v1.0. Describes the complete player experience, every flow, and every failure path, from the player's point of view. Rules referenced here are defined authoritatively in `GAME_MECHANICS.md`; this document governs experience, UX guarantees, and flow completeness.

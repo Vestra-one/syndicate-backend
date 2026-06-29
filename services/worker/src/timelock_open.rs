@@ -64,6 +64,14 @@ pub trait TimelockOpenClient {
     fn open(&mut self, request: &TimelockOpenRequest) -> TimelockOpenStatus;
 }
 
+/// On-chain permissionless-void grace for a stuck LIVE match, measured from
+/// `scheduled_end_ts`. Mirrors `syndicate_program::SETTLE_VOID_GRACE_SEC` (300s).
+/// The off-chain timelock grace must never be shorter than this, or the worker
+/// could declare `UnavailableAfterGrace` (and VOID) before the chain's
+/// permissionless void becomes callable — racing on-chain state. Kept in sync
+/// with the contract constant; both are post-`scheduled_end_ts` settle-side graces.
+pub const ONCHAIN_SETTLE_VOID_GRACE_SEC: u64 = 300;
+
 #[derive(Clone, Debug)]
 pub struct DrandTimelockConfig {
     pub api: String,
@@ -82,7 +90,10 @@ impl DrandTimelockConfig {
             }),
             expected_scheme_id: std::env::var("DRAND_EXPECTED_SCHEME_ID")
                 .unwrap_or_else(|_| "bls-unchained-g1-rfc9380".into()),
-            grace_sec: env_u64("TIMELOCK_GRACE_SEC", 30),
+            // Default to the on-chain settle-side void grace; a TIMELOCK_GRACE_SEC
+            // override is clamped up so the off-chain VOID can never beat the chain.
+            grace_sec: env_u64("TIMELOCK_GRACE_SEC", ONCHAIN_SETTLE_VOID_GRACE_SEC)
+                .max(ONCHAIN_SETTLE_VOID_GRACE_SEC),
             timeout_ms: env_u64("TIMELOCK_HTTP_TIMEOUT_MS", 5_000),
         }
     }
@@ -270,7 +281,7 @@ mod tests {
             api: "https://api.drand.sh".into(),
             chain_hash: "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971".into(),
             expected_scheme_id: "bls-unchained-g1-rfc9380".into(),
-            grace_sec: 30,
+            grace_sec: ONCHAIN_SETTLE_VOID_GRACE_SEC,
             timeout_ms: 5_000,
         }
     }

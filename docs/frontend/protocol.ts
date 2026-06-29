@@ -69,7 +69,7 @@ export interface TableTerms {
   supportedFeeds: string[]; // launch defaults: BTC/USD, ETH/USD, SOL/USD
   chipsToken: string;      // e.g. "USDC" — what you stake/win (decoupled from feed)
   decimals: number;        // fixed-point precision for prices on this feed
-  oracleAdapter: 'pyth';
+  oracleAdapter: 'signed-price'; // v1: company-signed price (secp256k1/EIP-191), not a push oracle
   settlementMode: 'exact-timestamp';
   oracleUnavailableMessage: string;
   buyIn: Chips;
@@ -172,31 +172,35 @@ export interface SettlementView {
   awards: { seat: SeatIndex; amount: Chips }[];
   uncalledReturns: { seat: SeatIndex; amount: Chips }[];
   rakeCollected: Chips;
-  oracleProof?: PythOracleProofView;
+  oracleProof?: SignedPriceView;
   /** opened post-match for everyone (incl. folders) — the emotional/audit reveal. */
   revealedPredictions: { seat: SeatIndex; prediction: FixedPrice }[];
 }
 
-export interface PythOracleProofView {
-  adapter: 'pyth';
-  mode: 'pull-receiver-full-verification';
-  /** `atomic` when Pyth post + settlement fit one tx; `two_step` when posting and submit_settlement are split. */
-  settlementMode?: 'atomic' | 'two_step';
-  feedIdHex: string;
+/**
+ * v1 oracle proof: the company-signed settlement price. Mirrors the on-chain `SignedPriceDto`
+ * (`services/programs/.../settle_args.rs`): `token(20) || price_in_wad(32, uint256 BE) ||
+ * timestamp_ms(u64) || v(1) || r(32) || s(32)`, verified on-chain by secp256k1 recovery to
+ * `ProtocolState.price_signer` (EIP-191). There is no push-oracle/Hermes/receiver/wormhole.
+ */
+export interface SignedPriceView {
+  adapter: 'signed-price';
+  /** 20-byte ERC-20 token address the price server signs over, hex (`0x…`). */
+  tokenHex: string;
+  /** uint256 BE price in WAD (1e18 fixed-point), 32-byte hex (`0x…`). */
+  priceInWadHex: string;
+  /** Signed-price timestamp, ms since epoch. */
+  timestampMs: number;
+  /** secp256k1 recovery id (the contract accepts 27/28 or 0/1). */
+  v: number;
+  rHex: string; // 32-byte hex
+  sHex: string; // 32-byte hex
+  /** Recovered Ethereum signer (20-byte hex); MUST equal `ProtocolState.price_signer`. */
+  signerHex: string;
+  /** Settlement tx signature(s) that carried this signed price + payouts. */
+  settlementTxSignatures: string[];
+  /** Display price at the feed's `decimals`, derived from `priceInWad` (convenience only). */
   price: FixedPrice;
-  publishTime: number;
-  confidence: string; // u64 as a decimal string
-  exponent: number;
-  priceUpdateAccount: string;
-  atomicSettlementTxSignature: string;
-  /** All tx signatures when settlementMode is two_step (Pyth posts + submit_settlement). */
-  settlementTxSignatures?: string[];
-  receiverProgramId: string;
-  wormholeProgramId: string;
-  pushOracleProgramId: string;
-  hermesUrl?: string;
-  hermesResponseHash: string; // sha256 hex
-  binaryUpdateHash: string;   // sha256 hex over selected binary update data
 }
 
 export type VoidReason =
@@ -226,7 +230,7 @@ export interface MatchHistorySummary {
   startedAt: number;
   lastEventTs: number;
   settlementPrice?: FixedPrice;
-  oracleProof?: PythOracleProofView;
+  oracleProof?: SignedPriceView;
   replayBundleUri?: string;
   summary: { finalPot: Chips; awardTotal: Chips; actionCount: number; revealCount: number };
 }
@@ -253,7 +257,7 @@ export interface MatchReplayBundle {
   fromSeq: number;
   toSeq: number;
   events: PublicEvent[];
-  oracleProof?: PythOracleProofView;
+  oracleProof?: SignedPriceView;
   contentHash: string;
   objectUri: string;
 }
@@ -296,20 +300,31 @@ export interface LeaderboardEntry {
 export type ClientMessage =
   | AuthMsg
   | { type: 'subscribe'; matchId: string }                 // spectate
-  | { type: 'sealPrediction'; matchId: string; ciphertext: string } // tlock ciphertext, base64 🔵
+  // Explicit seal during SEALING: one wallet popup signs register_prediction_commitment
+  // (no session key). `commitmentHex` = the on-chain prediction commitment; the gateway also
+  // stores the tlock `ciphertext` + `blindingHex` for the worker's settlement-time reveal.
+  | { type: 'sealPrediction'; matchId: string; seatIndex: SeatIndex; ciphertext: string;
+      commitmentHex: string; targetRound: number; blindingHex: string; signature: string } // 🔵
   | { type: 'act'; matchId: string; action: BettingAction; signature: string } // signed intent 🔵
   | { type: 'setDefault'; matchId: string; default: DefaultAction }
+  | { type: 'subscribeLobby'; feed?: string; template?: string; buyIn?: Chips } // global lobby push
+  | { type: 'unsubscribeLobby' }
   | { type: 'ping' };
 
 // ---------------------------------------------------------------------------
 // Server → client
+//
+// Every server envelope carries `serverTime` (gateway clock, ms). Clients sync their clock to
+// it and render countdowns as `deadline - serverTime + localOffset` against the ABSOLUTE engine
+// deadlines below — the gateway never fabricates a deadline, so an absent one means "unknown".
 // ---------------------------------------------------------------------------
 
 export type ServerMessage =
   | ChallengeMsg | AuthenticatedMsg | ErrorMsg            // 🟢
   | { type: 'tableTerms'; terms: TableTerms }            // 🟡
-  | { type: 'matchState'; state: MatchStateView }        // 🟡
-  | { type: 'yourTurn'; matchId: string; toCall: Chips; minRaiseTo: Chips; deadline: number } // 🟡
+  | { type: 'matchState'; state: MatchStateView; sealEndsAt?: number; bettingEndsAt?: number; matchEndsAt?: number } // 🟡
+  | { type: 'yourTurn'; matchId: string; toCall: Chips; minRaiseTo: Chips;
+      yourTurnDeadline?: number; sealEndsAt?: number; bettingEndsAt?: number; matchEndsAt?: number } // 🟡 absolute deadlines
   | { type: 'event'; event: PublicEvent }                // 🟡 (broadcast path 🟢)
   | { type: 'activeGames'; games: LiveGame[] }           // 🟡
   | { type: 'matchHistory'; matches: MatchHistorySummary[] } // 🟡
@@ -318,15 +333,101 @@ export type ServerMessage =
   | { type: 'settled'; result: SettlementView }          // 🟡
   | { type: 'void'; matchId: string; reason: VoidReason } // 🟡
   | { type: 'lobbyState'; lobby: RoomLobby }             // 🟡
+  | { type: 'lobbyList'; rooms: RoomListing[] }          // 🟡 pull/initial lobby snapshot
+  | { type: 'roomsUpdated'; update: RoomsUpdate }        // 🟡 pushed on registry mutation
   | { type: 'queueStatus'; status: QueueStatus }         // 🟡
   | { type: 'pong' };
+
+/** Every server envelope is stamped with the gateway clock for client clock-sync. */
+export type ServerEnvelope = ServerMessage & { serverTime: number };
+
+/** Compute remaining ms on an absolute deadline using the synced server clock. */
+export function remainingMs(deadline: number, serverTime: number, localNow: number): number {
+  const localOffset = localNow - serverTime; // local clock minus server clock at receipt
+  return Math.max(0, deadline - (Date.now() - localOffset));
+}
+
+// ---------------------------------------------------------------------------
+// Player-created lifecycle — matchmaking REST + txhash reporting  🔵🟡
+//
+// v1 is player-created: the backend NEVER creates matches on-chain. The host submits
+// `create_and_deposit`, joiners submit `deposit`, and each REPORTS its txhash; the backend
+// verifies it on-chain (finalized) before registering the room. `config_hash` must be an
+// allowlisted template hash (`GET /config/templates`).
+// ---------------------------------------------------------------------------
+
+/** Lobby card from `GET /rooms` (matchmaking registry; UX-only, never authoritative). */
+export interface RoomListing {
+  roomCode: string;
+  matchId: string;          // == matchPda
+  onchainMatchId?: string;
+  feedId: string;
+  tierId: string;
+  configHash?: string;
+  buyIn?: Chips;
+  seated: number;
+  minPlayers: number;
+  maxPlayers: number;
+  fillDeadline: number;
+}
+
+/** Pushed payload of `roomsUpdated`; `version` lets the client drop stale/out-of-order updates. */
+export interface RoomsUpdate {
+  kind: 'upsert' | 'started';
+  roomCode?: string;
+  matchId: string;
+  feedId?: string;
+  tierId?: string;
+  configHash?: string;
+  buyIn?: Chips;
+  seated: number;
+  maxPlayers?: number;
+  fillDeadline?: number;
+  version: number;
+}
+
+/** `POST /rooms` — host reports a verified `create_and_deposit` txhash. */
+export interface CreateRoomReport {
+  createTxSig: string;
+  matchPda: string;
+  onchainMatchId: string;
+  configHash: string;
+  wallet: Wallet;
+  seatIndex?: SeatIndex;
+  maxPlayers?: number;
+}
+
+/** `POST /matches/:matchId/deposits` — joiner reports a verified `deposit` txhash. */
+export interface DepositReport {
+  depositTxSig: string;
+  wallet: Wallet;
+  seatIndex?: SeatIndex;
+}
 
 // ---------------------------------------------------------------------------
 // On-chain DTOs (Anchor program)  🟡🔵
 // The client builds these via @solana/web3.js + the Anchor IDL; the wallet signs.
 // ---------------------------------------------------------------------------
 
+/** Host create: opens the match AND seats the creator in one tx; report `createTxSig`. */
+export interface CreateAndDepositArgs {
+  onchainMatchId: string;
+  configHash: string;        // 32-byte hex; must match an allowlisted template
+  priceTokenHex: string;     // 20-byte ERC-20 token address the price server signs
+  seatIndex: SeatIndex;
+}
 export interface DepositArgs { matchId: string; seatIndex: SeatIndex; } // transfers buyIn + entryFee
+/**
+ * Explicit seal during SEALING — one wallet popup, no session key. `commitment = H(prediction
+ * || blinding)` (must match the contract's `prediction_commitment` semantics); `timelockTargetRound`
+ * must satisfy the on-chain two-sided bound `(latest_match_end, latest_match_end + 20s]` — derive
+ * it from `TableTerms.timelockTargetRound`, never a placeholder.
+ */
+export interface RegisterPredictionCommitmentArgs {
+  onchainMatchId: string;
+  commitmentHex: string;
+  timelockTargetRound: number;
+}
 export interface ClaimArgs { matchId: string; }   // pull payout after SETTLED (idempotent)
 export interface RefundArgs { matchId: string; }  // reclaim deposit + entry fee after VOID
 

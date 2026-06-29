@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { RedisClient } from '../../gateway/src/redis.ts';
-import { getTierForFeed } from '../../config/src/index.ts';
+import { getTierForFeed, getTemplateByHash, templateAllowlist } from '../../config/src/index.ts';
 import { tableTermsForTier } from '../../config/src/table-terms.ts';
 import { bucketFor, Table, type MatchmakingStore, type TableSnapshot } from './index.ts';
 import {
@@ -10,13 +10,16 @@ import {
   formationLockKey,
   queueKey,
   roomKey,
+  roomsIndexKey,
+  walletRoomsKey,
+  ROOMS_CHANNEL,
 } from './redis-keys.ts';
 import { evaluateStartPolicy } from './start-policy.ts';
-import {
-  createSolanaRpc,
-  SolanaDepositVerifier,
-  type DepositVerifyResult,
-} from './deposit-verify.ts';
+import { type ChainVerifier } from './chain-verify.ts';
+import { NOOP_PERSISTENCE, type MatchPersistence } from './persistence.ts';
+
+/** Default per-wallet active-room cap (anti-spam on player-created rooms). */
+export const DEFAULT_WALLET_ROOM_CAP = 3;
 
 export interface FormationRecord {
   matchId: string;
@@ -32,10 +35,18 @@ export interface FormationRecord {
   host?: string;
   onchainMatchId?: string;
   matchPda?: string;
+  configHash?: string;
+  buyIn?: number;
+  entryFee?: number;
+  seatCount?: number;
+  createdAtMs?: number;
 }
 
+/**
+ * Orchestrator seam. v1 is player-created: matchmaking NEVER creates matches on-chain, so the
+ * old `bootstrapFormation` is gone. The only call left is the start trigger (lock → begin_live).
+ */
 export interface OrchestratorClient {
-  bootstrapFormation(input: FormationRecord): Promise<{ matchId: string; onchainMatchId: string; matchPda?: string }>;
   triggerStartPolicy(
     matchId: string,
     result: ReturnType<typeof evaluateStartPolicy>,
@@ -43,91 +54,187 @@ export interface OrchestratorClient {
   ): Promise<void>;
 }
 
+export type CreateRoomResult =
+  | {
+      ok: true;
+      roomCode: string;
+      matchId: string;
+      onchainMatchId: string;
+      matchPda: string;
+      fillDeadline: number;
+      tableTerms: unknown;
+    }
+  | { ok: false; reason: string };
+
+export type DepositResult =
+  | { ok: true; wallet: string; seat: number; matchPda: string; onchainMatchId?: string }
+  | { ok: false; reason: string };
+
+export interface RoomListing {
+  roomCode: string;
+  matchId: string;
+  onchainMatchId?: string;
+  feedId: string;
+  tierId: string;
+  configHash?: string;
+  buyIn?: number;
+  seated: number;
+  minPlayers: number;
+  maxPlayers: number;
+  fillDeadline: number;
+}
+
 export class MatchmakingRuntime {
   private store: MatchmakingStore;
   private redis?: RedisClient;
   private orchestrator: OrchestratorClient;
-  private depositVerifier?: SolanaDepositVerifier;
-  private programId: string;
+  private chainVerifier?: ChainVerifier;
+  private persistence: MatchPersistence;
+  private walletRoomCap: number;
   private rooms = new Map<string, FormationRecord>();
+  // In-memory fallbacks when Redis is absent (tests / single-process dev).
+  private seenSigs = new Map<string, unknown>();
+  private walletRooms = new Map<string, number>();
 
   constructor(opts: {
     store: MatchmakingStore;
     redis?: RedisClient;
     orchestrator: OrchestratorClient;
-    rpcUrl?: string;
-    programId?: string;
+    chainVerifier?: ChainVerifier;
+    persistence?: MatchPersistence;
+    walletRoomCap?: number;
     admissionGuard?: import('./index.ts').AdmissionGuard;
   }) {
     this.store = opts.store;
     this.redis = opts.redis;
     this.orchestrator = opts.orchestrator;
-    this.programId = opts.programId ?? 'FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS';
-    if (opts.rpcUrl) {
-      this.depositVerifier = new SolanaDepositVerifier(createSolanaRpc(opts.rpcUrl));
-    }
+    this.chainVerifier = opts.chainVerifier;
+    this.persistence = opts.persistence ?? NOOP_PERSISTENCE;
+    this.walletRoomCap = opts.walletRoomCap ?? DEFAULT_WALLET_ROOM_CAP;
   }
 
+  /**
+   * Host create report. The host already submitted `create_and_deposit` on-chain and reports the
+   * txhash; the backend verifies it (settlement-chain, Phase 02) before registering the room.
+   * Matchmaking creates nothing on-chain. The match/seat rows + registry are UX-only — capital
+   * safety reads chain, never this registry.
+   */
   async createRoom(input: {
-    host: string;
-    tierId: string;
-    feedId: string;
-    token: string;
-    maxPlayers: number;
-  }): Promise<{ roomCode: string; matchId: string; fillDeadline: number; tableTerms: unknown }> {
-    const tier = getTierForFeed(input.tierId, input.feedId);
-    if (!tier) throw new Error('unknown tier');
+    createTxSig: string;
+    matchPda: string;
+    onchainMatchId: string;
+    configHash: string;
+    wallet: string;
+    seatIndex?: number;
+    maxPlayers?: number;
+  }): Promise<CreateRoomResult> {
+    // Idempotency: a re-reported create txhash is a no-op (reuses the pending-deposit key).
+    const prior = await this.lookupReportedSig(input.createTxSig);
+    if (prior && (prior as CreateRoomResult).ok) return prior as CreateRoomResult;
+
+    // Allowlist gate (also enforced on-chain inside verifyCreate; checked here to fail fast).
+    if (!templateAllowlist().has(input.configHash)) {
+      return { ok: false, reason: 'config_hash is not allowlisted' };
+    }
+    const template = getTemplateByHash(input.configHash);
+    if (!template) return { ok: false, reason: 'unknown template for config_hash' };
+    const tier = getTierForFeed(template.tierId, template.feed);
+    if (!tier) return { ok: false, reason: 'unknown tier' };
+
+    // Per-wallet cap (anti-spam). Counted only for genuinely new rooms; never blocks capital.
+    if ((await this.walletRoomCount(input.wallet)) >= this.walletRoomCap) {
+      return { ok: false, reason: 'per-wallet active room cap reached' };
+    }
+
+    // Authoritative on-chain verification (no indexer): finalized tx + seat == buy_in + Filling.
+    if (!this.chainVerifier) return { ok: false, reason: 'chain verifier not configured' };
+    const verified = await this.chainVerifier.verifyCreate({
+      txSig: input.createTxSig,
+      onchainMatchId: input.onchainMatchId,
+      wallet: input.wallet,
+      seatIndex: input.seatIndex,
+    });
+    if (!verified.ok) return { ok: false, reason: verified.reason };
+
+    const matchId = input.matchPda;
     const roomCode = randomBytes(4).toString('hex');
-    const matchId = randomUUID();
-    const fillDeadlineMs = Date.now() + tier.fillWindowSec * 1000;
+    const now = Date.now();
+    const fillDeadlineMs = now + tier.fillWindowSec * 1000;
+    const buyIn = tier.config.buyIn;
+    const entryFee = tier.config.entryFee;
+    const seatIndex = verified.seatIndex;
+
     const record: FormationRecord = {
       matchId,
-      tierId: input.tierId,
-      feedId: input.feedId,
-      token: input.token,
+      tierId: template.tierId,
+      feedId: template.feed,
+      token: tier.config.chipsToken,
       bucket: 'private',
       fillDeadlineMs,
-      maxPlayers: input.maxPlayers,
+      maxPlayers: input.maxPlayers ?? tier.config.maxPlayers,
       minPlayers: tier.config.minPlayers,
       mode: 'private_host',
       roomCode,
-      host: input.host,
+      host: input.wallet,
+      onchainMatchId: input.onchainMatchId,
+      matchPda: input.matchPda,
+      configHash: input.configHash,
+      buyIn,
+      entryFee,
+      seatCount: 1,
+      createdAtMs: now,
     };
-    await this.orchestrator.bootstrapFormation(record).then((boot) => {
-      record.onchainMatchId = boot.onchainMatchId;
-      record.matchPda = boot.matchPda;
+
+    // Persist canonical match + creator seat (Phase 05). Best-effort: registry is UX-only.
+    await this.persistence.insertMatch({
+      matchKey: matchId,
+      onchainMatchId: input.onchainMatchId,
+      configHash: input.configHash,
+      fillDeadlineMs,
     });
+    await this.persistence.insertMatchSeat({
+      matchKey: matchId,
+      seatIndex,
+      wallet: input.wallet,
+      depositSignature: input.createTxSig,
+      buyInChips: buyIn,
+      entryFeeChips: entryFee,
+    });
+
     const snapshot: TableSnapshot = {
       tableId: matchId,
-      minPlayers: tier.config.minPlayers,
-      maxPlayers: input.maxPlayers,
-      seats: [],
+      minPlayers: record.minPlayers,
+      maxPlayers: record.maxPlayers,
+      seats: [{ wallet: input.wallet, finalityTs: now, depositSignature: input.createTxSig }],
       version: 0,
       mode: 'private_host',
       fillDeadlineMs,
-      host: input.host,
-      tierId: input.tierId,
-      feedId: input.feedId,
-      token: input.token,
+      host: input.wallet,
+      tierId: record.tierId,
+      feedId: record.feedId,
+      token: record.token,
       status: 'open',
     };
     await this.store.saveTable(snapshot);
-    this.rooms.set(roomCode, record);
-    if (this.redis) {
-      await this.redis.setex(roomKey(roomCode), 86400, JSON.stringify(record));
-      await this.redis.zadd(deadlineKey(), fillDeadlineMs, matchId);
-    }
-    return {
+
+    await this.registerRoom(record);
+    await this.bumpWalletRooms(input.wallet, 1);
+
+    const result: CreateRoomResult = {
+      ok: true,
       roomCode,
       matchId,
-      onchainMatchId: record.onchainMatchId,
-      matchPda: record.matchPda,
+      onchainMatchId: input.onchainMatchId,
+      matchPda: input.matchPda,
       fillDeadline: fillDeadlineMs,
-      tableTerms: tableTermsForTier(matchId, input.tierId, input.feedId, {
-        onchainMatchId: record.onchainMatchId,
-        matchPda: record.matchPda,
-      }) ?? tier.config,
+      tableTerms:
+        tableTermsForTier(matchId, record.tierId, record.feedId, {
+          onchainMatchId: record.onchainMatchId,
+          matchPda: record.matchPda,
+        }) ?? tier.config,
     };
+    await this.markReportedSig(input.createTxSig, result);
+    return result;
   }
 
   getRoom(code: string): FormationRecord | undefined {
@@ -151,7 +258,7 @@ export class MatchmakingRuntime {
     const rec = await this.loadRoom(code);
     if (!rec) throw new Error('room not found');
     const table = await this.store.loadTable(rec.matchId);
-    const seated = table?.seats.length ?? 0;
+    const seated = table?.seats.length ?? rec.seatCount ?? 0;
     return {
       roomCode: code,
       matchId: rec.matchId,
@@ -165,6 +272,42 @@ export class MatchmakingRuntime {
       isHost: wallet === rec.host,
       phase: 'FILLING',
     };
+  }
+
+  /**
+   * Lobby feed served entirely from the registry. Filters by feed/template/buyIn and ranks so
+   * fuller, closer-to-start rooms surface first; new/single-occupant rooms are buried.
+   */
+  async listRooms(filter: { feed?: string; template?: string; buyIn?: number } = {}): Promise<RoomListing[]> {
+    const records = await this.allOpenRecords();
+    const now = Date.now();
+    const listings: RoomListing[] = [];
+    for (const rec of records) {
+      if (!rec.roomCode) continue;
+      if (rec.fillDeadlineMs <= now) continue;
+      if (filter.feed && rec.feedId !== filter.feed) continue;
+      if (filter.template && rec.configHash !== filter.template) continue;
+      if (filter.buyIn !== undefined && rec.buyIn !== filter.buyIn) continue;
+      const table = await this.store.loadTable(rec.matchId);
+      const seated = table?.seats.length ?? rec.seatCount ?? 0;
+      if (seated >= rec.maxPlayers) continue; // full rooms are not joinable
+      listings.push({
+        roomCode: rec.roomCode,
+        matchId: rec.matchId,
+        onchainMatchId: rec.onchainMatchId,
+        feedId: rec.feedId,
+        tierId: rec.tierId,
+        configHash: rec.configHash,
+        buyIn: rec.buyIn,
+        seated,
+        minPlayers: rec.minPlayers,
+        maxPlayers: rec.maxPlayers,
+        fillDeadline: rec.fillDeadlineMs,
+      });
+    }
+    // Rank: more-seated first (bury single-occupant), then soonest fill deadline.
+    listings.sort((a, b) => b.seated - a.seated || a.fillDeadline - b.fillDeadline);
+    return listings;
   }
 
   async hostStart(code: string, host: string): Promise<{ ok: boolean; reason?: string }> {
@@ -211,6 +354,7 @@ export class MatchmakingRuntime {
       actionTimeoutMs: tier.config.actionTimerSec * 1000,
     };
     await this.orchestrator.triggerStartPolicy(rec.matchId, policy, ctx);
+    await this.publishRoomsUpdate(rec, 'started');
   }
 
   async joinQueue(input: {
@@ -221,6 +365,8 @@ export class MatchmakingRuntime {
     rating?: number;
   }): Promise<{
     matchId: string;
+    onchainMatchId?: string;
+    matchPda?: string;
     fillDeadline: number;
     playersWaiting: number;
     status: 'forming' | 'idle';
@@ -250,6 +396,8 @@ export class MatchmakingRuntime {
       if (!record) {
         const matchId = randomUUID();
         const fillDeadlineMs = Date.now() + tier.fillWindowSec * 1000;
+        // No on-chain create here: matchmaking never creates matches. The on-chain match is
+        // established when the first player reports a verified create_and_deposit txhash.
         record = {
           matchId,
           tierId: input.tierId,
@@ -261,10 +409,6 @@ export class MatchmakingRuntime {
           minPlayers: tier.config.minPlayers,
           mode: 'public_formation',
         };
-        await this.orchestrator.bootstrapFormation(record).then((boot) => {
-      record.onchainMatchId = boot.onchainMatchId;
-      record.matchPda = boot.matchPda;
-    });
         const snapshot: TableSnapshot = {
           tableId: matchId,
           minPlayers: tier.config.minPlayers,
@@ -325,6 +469,11 @@ export class MatchmakingRuntime {
     };
   }
 
+  /**
+   * Joiner deposit report. The joiner submitted `deposit` on-chain and reports the txhash; the
+   * backend verifies it on-chain (settlement-chain), seats the player, persists the seat row, and
+   * bumps the registry seat count.
+   */
   async verifyDeposit(input: {
     matchId: string;
     wallet: string;
@@ -332,37 +481,32 @@ export class MatchmakingRuntime {
     seatIndex?: number;
     tierId?: string;
     feedId?: string;
-  }): Promise<DepositVerifyResult & { seat?: number }> {
-    if (this.redis) {
-      const cached = await this.redis.get(depositCacheKey(input.txSignature));
-      if (cached) return JSON.parse(cached) as DepositVerifyResult;
-    }
+  }): Promise<DepositResult> {
+    // Idempotency: a re-reported deposit txhash is a no-op.
+    const prior = await this.lookupReportedSig(input.txSignature);
+    if (prior && (prior as DepositResult).ok) return prior as DepositResult;
+
     const table = await this.store.loadTable(input.matchId);
     if (!table) return { ok: false, reason: 'unknown match' };
-    const tier = getTierForFeed(input.tierId ?? table.tierId ?? 'tier-low', input.feedId ?? table.feedId ?? 'BTC/USD');
-    const buyIn = tier?.config.buyIn ?? 0;
-    const entryFee = tier?.config.entryFee ?? 0;
-    let result: DepositVerifyResult;
-    if (!this.depositVerifier || buyIn === 0) {
-      result = { ok: true, wallet: input.wallet, seatIndex: input.seatIndex ?? table.seats.length, finalityTs: Date.now(), slot: 0 };
-    } else {
-      result = await this.depositVerifier.verify({
-        matchId: input.matchId,
-        wallet: input.wallet,
-        txSignature: input.txSignature,
-        seatIndex: input.seatIndex,
-        expectedBuyIn: buyIn,
-        expectedEntryFee: entryFee,
-        programId: this.programId,
-      });
-    }
-    if (!result.ok) return result;
+    const rec = await this.loadRoom(input.matchId);
+    const onchainMatchId = rec?.onchainMatchId;
+    if (!onchainMatchId) return { ok: false, reason: 'match has no on-chain id (create not reported)' };
+
+    if (!this.chainVerifier) return { ok: false, reason: 'chain verifier not configured' };
+    const verified = await this.chainVerifier.verifyDeposit({
+      txSig: input.txSignature,
+      onchainMatchId,
+      wallet: input.wallet,
+      seatIndex: input.seatIndex,
+    });
+    if (!verified.ok) return { ok: false, reason: verified.reason };
+
     const version = table.version ?? 0;
     const t = Table.fromSnapshot(table);
     const seatResult = t.requestSeat({
       wallet: input.wallet,
       depositFinalized: true,
-      finalityTs: result.finalityTs,
+      finalityTs: Date.now(),
     });
     if (!seatResult.ok) return { ok: false, reason: seatResult.reason };
     const next = t.snapshot(input.matchId);
@@ -380,9 +524,22 @@ export class MatchmakingRuntime {
     next.status = table.status;
     const saved = await this.store.saveTableCas(next, version);
     if (!saved) return { ok: false, reason: 'seat race lost' };
-    if (this.redis) {
-      await this.redis.setex(depositCacheKey(input.txSignature), 3600, JSON.stringify({ ...result, seat: seatResult.seatIndex }));
+
+    // Persist seat row (Phase 05). Use the on-chain-verified seat index for array correctness.
+    if (rec) {
+      const tier = getTierForFeed(rec.tierId, rec.feedId);
+      await this.persistence.insertMatchSeat({
+        matchKey: rec.matchId,
+        seatIndex: verified.seatIndex,
+        wallet: input.wallet,
+        depositSignature: input.txSignature,
+        buyInChips: rec.buyIn ?? tier?.config.buyIn ?? 0,
+        entryFeeChips: rec.entryFee ?? tier?.config.entryFee ?? 0,
+      });
+      rec.seatCount = next.seats.length;
+      await this.registerRoom(rec); // refresh seat count in the registry
     }
+
     if (table.mode === 'public_formation') {
       const policy = evaluateStartPolicy({
         mode: 'public_formation',
@@ -391,29 +548,129 @@ export class MatchmakingRuntime {
         maxPlayers: next.maxPlayers,
         fillDeadlineReached: false,
       });
-      if (policy.action === 'start') {
-        const loaded = await this.loadRoom(record.matchId);
-        const recForStart = loaded ?? record;
-        await this.triggerStart(recForStart, next, policy);
+      if (policy.action === 'start' && rec) {
+        // Bug fix (was `record`, undefined here): start from the in-scope, verified room record.
+        await this.triggerStart(rec, next, policy);
         if (this.redis) await this.redis.zrem(deadlineKey(), input.matchId);
       }
     }
-    const rec = [...this.rooms.values()].find((r) => r.matchId === input.matchId);
-    return {
-      ...result,
+
+    const result: DepositResult = {
+      ok: true,
+      wallet: input.wallet,
       seat: seatResult.seatIndex,
-      onchainMatchId: rec?.onchainMatchId,
-      matchPda: rec?.matchPda,
+      matchPda: rec?.matchPda ?? input.matchId,
+      onchainMatchId,
     };
+    await this.markReportedSig(input.txSignature, result);
+    return result;
   }
 
   async matchTerms(matchId: string): Promise<unknown> {
     const table = await this.store.loadTable(matchId);
     if (!table?.tierId || !table.feedId) return undefined;
-    const rec = [...this.rooms.values()].find((r) => r.matchId === matchId);
+    const rec = await this.loadRoom(matchId);
     return tableTermsForTier(matchId, table.tierId, table.feedId, {
       onchainMatchId: rec?.onchainMatchId,
       matchPda: rec?.matchPda,
     });
+  }
+
+  // ---------------- registry helpers ----------------
+
+  /** Store a room under its code (and matchId alias) + index it for the lobby feed. */
+  private async registerRoom(rec: FormationRecord): Promise<void> {
+    if (rec.roomCode) this.rooms.set(rec.roomCode, rec);
+    this.rooms.set(rec.matchId, rec);
+    if (this.redis) {
+      const ttl = Math.max(60, Math.ceil((rec.fillDeadlineMs - Date.now()) / 1000) + 300);
+      const payload = JSON.stringify(rec);
+      if (rec.roomCode) {
+        await this.redis.setex(roomKey(rec.roomCode), ttl, payload);
+        await this.redis.zadd(roomsIndexKey(), rec.createdAtMs ?? Date.now(), rec.roomCode);
+        await this.redis.zadd(deadlineKey(), rec.fillDeadlineMs, rec.matchId);
+      }
+      await this.redis.setex(roomKey(rec.matchId), ttl, payload); // matchId alias for deposit lookups
+      await this.publishRoomsUpdate(rec, 'upsert');
+    }
+  }
+
+  /**
+   * Publish a lobby mutation so the gateway can push `roomsUpdated` to lobby subscribers. The
+   * `version` lets the client discard out-of-order updates (last-writer-wins). UX-only; a missed
+   * publish just means clients fall back to the `GET /rooms` pull.
+   */
+  private async publishRoomsUpdate(rec: FormationRecord, kind: 'upsert' | 'started'): Promise<void> {
+    if (!this.redis) return;
+    try {
+      await this.redis.publish(
+        ROOMS_CHANNEL,
+        JSON.stringify({
+          kind,
+          roomCode: rec.roomCode,
+          matchId: rec.matchId,
+          feedId: rec.feedId,
+          tierId: rec.tierId,
+          configHash: rec.configHash,
+          buyIn: rec.buyIn,
+          seated: rec.seatCount ?? 0,
+          maxPlayers: rec.maxPlayers,
+          fillDeadline: rec.fillDeadlineMs,
+          version: (rec.createdAtMs ?? 0) + (rec.seatCount ?? 0),
+        }),
+      );
+    } catch {
+      // best-effort; pull fallback covers a dropped publish
+    }
+  }
+
+  private async allOpenRecords(): Promise<FormationRecord[]> {
+    if (!this.redis) {
+      // De-dupe the in-memory map (rooms are stored under both code and matchId alias).
+      const byCode = new Map<string, FormationRecord>();
+      for (const rec of this.rooms.values()) if (rec.roomCode) byCode.set(rec.roomCode, rec);
+      return [...byCode.values()];
+    }
+    const codes = await this.redis.zrangebyscore(roomsIndexKey(), 0, Number.MAX_SAFE_INTEGER);
+    const out: FormationRecord[] = [];
+    for (const code of codes) {
+      const rec = await this.loadRoom(code);
+      if (rec) out.push(rec);
+    }
+    return out;
+  }
+
+  private async lookupReportedSig(sig: string): Promise<unknown | null> {
+    if (this.redis) {
+      const c = await this.redis.get(depositCacheKey(sig));
+      return c ? JSON.parse(c) : null;
+    }
+    return this.seenSigs.get(sig) ?? null;
+  }
+
+  private async markReportedSig(sig: string, payload: unknown): Promise<void> {
+    if (this.redis) await this.redis.setex(depositCacheKey(sig), 3600, JSON.stringify(payload));
+    else this.seenSigs.set(sig, payload);
+  }
+
+  private async walletRoomCount(wallet: string): Promise<number> {
+    if (this.redis) {
+      const v = await this.redis.get(walletRoomsKey(wallet));
+      return v ? Number(v) : 0;
+    }
+    return this.walletRooms.get(wallet) ?? 0;
+  }
+
+  private async bumpWalletRooms(wallet: string, delta: number): Promise<void> {
+    if (this.redis) {
+      // Minimal Redis client has no DECR; the cap is a soft anti-spam gate, so increment + a
+      // 24h TTL is sufficient (stale counters self-expire).
+      if (delta > 0) {
+        await this.redis.incr(walletRoomsKey(wallet));
+        await this.redis.expire(walletRoomsKey(wallet), 86_400);
+      }
+    } else {
+      this.walletRooms.set(wallet, Math.max(0, (this.walletRooms.get(wallet) ?? 0) + delta));
+    }
   }
 }

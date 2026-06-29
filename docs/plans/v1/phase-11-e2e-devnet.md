@@ -2,7 +2,7 @@
 
 **Goal:** prove the whole lifecycle works on devnet across the live services, not just unit-wise.
 
-- **Status:** ⬜ not started
+- **Status:** 🟡 harness + runbook delivered (`services/e2e/test/devnet-lifecycle.test.ts` env-gated, skips without `SYNDICATE_E2E_DEVNET=1`; `services/e2e/README.md` runbook). Final green requires a live devnet deploy + operator signing client (`E2E_PAYER_KEYPAIR` + IDL) — cannot be executed in this environment.
 - **Depends on:** 01–08
 - **Parallel-safe with:** —
 - **Checklist ref:** §1c (e2e)

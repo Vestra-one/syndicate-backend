@@ -2,7 +2,16 @@
 
 **Goal:** prove the vault drains to exactly zero on every terminal path (the pre-audit capital-safety gate).
 
-- **Status:** ⬜ not started
+- **Status:** 🔴 blocked — code complete & host-compiled, but cannot RUN/verify: the
+  Solana SBF toolchain is not installed on this machine, so `target/deploy/syndicate_program.so`
+  cannot be produced and the harness's `add_program_from_file` fails at load. Concretely:
+  `cargo build-sbf` → `error: no such command: build-sbf`; no `solana`/`anchor`/`avm`/
+  `cargo-build-sbf` anywhere on PATH or in `~/.local/share/solana`; no `.so` on disk.
+  All helpers, the two previously-`#[ignore]` tests (un-ignored + fleshed out), the full
+  funds-exit matrix (`funds_exit_matrix.rs`), golden-parity-through-`.so`, and the
+  auto-check fairness assertion are written and compile cleanly on the host target
+  (`cargo test --no-run` green). To unblock: install platform-tools v1.53, run
+  `cargo build-sbf --tools-version v1.53 -p syndicate-program`, then `cargo test`.
 - **Depends on:** — (contract final; independent of TS work)
 - **Parallel-safe with:** everything
 - **Checklist ref:** §7

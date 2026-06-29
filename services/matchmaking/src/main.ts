@@ -8,6 +8,8 @@ import { RedisMatchmakingStore } from './redis-store.ts';
 import { MatchmakingRuntime } from './formation.ts';
 import { createOrchestratorClient } from './orchestrator-client.ts';
 import { DeadlineWorker } from './deadline-worker.ts';
+import { createChainVerifier } from './chain-verify.ts';
+import { createHttpPersistence, NOOP_PERSISTENCE } from './persistence.ts';
 
 export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void>; port: number }> {
   const port = parsePort(process.env.MATCHMAKING_PORT ?? process.env.PORT ?? '8082');
@@ -20,12 +22,21 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
     { stub: process.env.SYNDICATE_ORCHESTRATOR_STUB === '1' },
   );
   const enforcement = new EnforcementRegistry();
+  // Authoritative on-chain verification lives in settlement-chain (Phase 02); matchmaking
+  // delegates over HTTP so it stays zero-dependency and the predicate never forks.
+  const verifyBaseUrl = process.env.SETTLEMENT_CHAIN_URL ?? 'http://127.0.0.1:8085';
+  const chainVerifier = createChainVerifier(verifyBaseUrl, process.env.SETTLEMENT_CHAIN_AUTH_TOKEN);
+  // Postgres match-row writer (Phase 05). Registry is UX-only, so this is best-effort.
+  const persistence = process.env.MATCH_PERSISTENCE_URL
+    ? createHttpPersistence(process.env.MATCH_PERSISTENCE_URL, process.env.MATCH_PERSISTENCE_AUTH_TOKEN)
+    : NOOP_PERSISTENCE;
   const runtime = new MatchmakingRuntime({
     store,
     redis,
     orchestrator,
-    rpcUrl: process.env.SOLANA_RPC_URL,
-    programId: process.env.PROGRAM_ID,
+    chainVerifier,
+    persistence,
+    walletRoomCap: process.env.WALLET_ROOM_CAP ? Number(process.env.WALLET_ROOM_CAP) : undefined,
     admissionGuard: {
       canJoinTable: (wallet, now) => enforcement.canJoinTable(wallet, now),
     },
@@ -43,16 +54,30 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
         return;
       }
 
+      // Lobby feed served from the registry (UX-only). Filter by feed/template/buyIn.
+      if (req.method === 'GET' && url.pathname === '/rooms') {
+        const rooms = await runtime.listRooms({
+          feed: url.searchParams.get('feed') ?? undefined,
+          template: url.searchParams.get('template') ?? undefined,
+          buyIn: url.searchParams.has('buyIn') ? Number(url.searchParams.get('buyIn')) : undefined,
+        });
+        return json(res, 200, { rooms });
+      }
+
+      // Host create report: the host already ran create_and_deposit on-chain and reports the
+      // txhash. Matchmaking verifies it (settlement-chain) — it never creates matches itself.
       if (req.method === 'POST' && url.pathname === '/rooms') {
         const body = await readJson(req);
         const out = await runtime.createRoom({
-          host: String(body.host),
-          tierId: String(body.tierId ?? 'tier-low'),
-          feedId: String(body.feedId ?? 'BTC/USD'),
-          token: String(body.token ?? 'USDC'),
-          maxPlayers: Number(body.maxPlayers ?? 5),
+          createTxSig: String(body.createTxSig ?? body.txSignature ?? body.txSig),
+          matchPda: String(body.matchPda),
+          onchainMatchId: String(body.onchainMatchId),
+          configHash: String(body.configHash),
+          wallet: String(body.wallet ?? body.host),
+          seatIndex: body.seatIndex === undefined ? undefined : Number(body.seatIndex),
+          maxPlayers: body.maxPlayers === undefined ? undefined : Number(body.maxPlayers),
         });
-        return json(res, 201, out);
+        return json(res, out.ok ? 201 : 409, out);
       }
 
       const roomGet = url.pathname.match(/^\/rooms\/([^/]+)$/);
@@ -103,7 +128,7 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
         const result = await runtime.verifyDeposit({
           matchId: decodeURIComponent(depositMatch[1]),
           wallet: String(body.wallet),
-          txSignature: String(body.txSignature),
+          txSignature: String(body.depositTxSig ?? body.txSignature ?? body.txSig),
           seatIndex: body.seatIndex === undefined ? undefined : Number(body.seatIndex),
           tierId: body.tierId === undefined ? undefined : String(body.tierId),
           feedId: body.feedId === undefined ? undefined : String(body.feedId),

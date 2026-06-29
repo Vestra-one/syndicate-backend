@@ -2,7 +2,7 @@
 
 **Goal:** the deployment owner's pre-mainnet checklist. No application code; process + infra + governance.
 
-- **Status:** ⬜ not started
+- **Status:** 🟡 gate tracker delivered (`docs/deployment/V1_MAINNET_GATES.md` — each gate has Owner/Status/Evidence/Sign-off columns). Sign-off is the deployment owner's; cannot be completed here (process/governance, and gated on 01–11 green on devnet).
 - **Depends on:** 01–11 (code complete + verified)
 - **Parallel-safe with:** —
 - **Checklist ref:** §9

@@ -33,6 +33,7 @@ export async function startGatewayFromEnv(): Promise<GatewayServer> {
     configUrl: process.env.CONFIG_URL ?? 'http://127.0.0.1:8084',
     authToken: process.env.ORCHESTRATOR_AUTH_TOKEN,
     subscriber: process.env.REDIS_URL ? new MatchSubscriber(process.env.REDIS_URL) : undefined,
+    now: () => Date.now(),
   };
 
   let server!: GatewayServer;

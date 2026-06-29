@@ -1,3 +1,5 @@
+> **⚠️ DEPRECATED / STALE — not authoritative for current behavior.** This predates the v1 implementation and may describe a different architecture (e.g. Switchboard/Pyth oracle, median-60s, session-keys). Trust the **code** and `docs/V1_COMPLETION_CHECKLIST.md` instead.
+
 # Syndicate — Architecture Implications
 
 **Status:** Canonical foundation, v1.0. For each major mechanic, this document states the **backend**, **smart-contract**, **real-time infrastructure**, and **operational** consequences. It is descriptive of constraints the mechanics impose, not a final system design; it defines the boundaries any design must respect.

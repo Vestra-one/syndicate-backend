@@ -1,3 +1,5 @@
+> **⚠️ DEPRECATED / STALE — not authoritative for current behavior.** This predates the v1 implementation and may describe a different design (e.g. Switchboard/Pyth oracle, median-60s, session-keys). Trust the **code** and `docs/V1_COMPLETION_CHECKLIST.md` instead.
+
 # Syndicate — Decision Log (resolved Open Questions)
 
 **Status:** Canonical foundation, v1.1. Every question from the prior `OPEN_QUESTIONS` has been answered by the founder. This file is now a **decision log**: each item is **✅ LOCKED** (decided and propagated into the canonical docs) or **⏭ DEFERRED** (intentionally pushed to post-PFM). Tags: **[BUSINESS] [DESIGN] [TECH] [LEGAL]**.

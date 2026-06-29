@@ -12,24 +12,40 @@ export interface RelayDeps {
   configUrl: string;
   authToken?: string;
   subscriber?: MatchSubscriber;
+  /** Server-authoritative clock; clients compute countdowns relative to this. */
+  now?: () => number;
 }
 
 export type RelayPush = (wallet: string, msg: unknown) => void;
 
+/** Redis pub/sub channel matchmaking publishes lobby mutations on (create/deposit/start). */
+export const ROOMS_CHANNEL = 'rooms';
+
 export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (deps.authToken) headers.authorization = `Bearer ${deps.authToken}`;
+  const now = deps.now ?? (() => Date.now());
 
   /** matchId → wallets spectating/playing */
   const matchWatchers = new Map<string, Set<string>>();
+  /** wallets subscribed to the global lobby feed (pushed on registry mutation). */
+  const lobbySubscribers = new Set<string>();
+
+  /** Stamp every outbound envelope with server time so clients can sync their clock. */
+  const send = (wallet: string, msg: Record<string, unknown>) => push(wallet, { ...msg, serverTime: now() });
 
   if (deps.subscriber) {
-    deps.subscriber.onMessage((matchId, payload) => {
-      const watchers = matchWatchers.get(matchId);
+    deps.subscriber.onMessage((channel, payload) => {
+      if (channel === ROOMS_CHANNEL) {
+        // Last-writer-wins on the client via the included version; pull is the fallback.
+        for (const wallet of lobbySubscribers) send(wallet, { type: 'roomsUpdated', update: payload });
+        return;
+      }
+      const watchers = matchWatchers.get(channel);
       if (!watchers) return;
-      const msg = normalizeEnginePayload(matchId, payload);
+      const msg = normalizeEnginePayload(channel, payload);
       if (!msg) return;
-      for (const wallet of watchers) push(wallet, msg);
+      for (const wallet of watchers) send(wallet, msg);
     });
   }
 
@@ -37,7 +53,7 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
     const type = String(msg.type ?? '');
 
     if (type === 'ping') {
-      push(wallet, { type: 'pong' });
+      send(wallet, { type: 'pong' });
       return;
     }
 
@@ -52,12 +68,27 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
       watchers.add(wallet);
       if (deps.subscriber) await deps.subscriber.ensureSubscribed(matchId);
       const terms = await fetchTableTerms(deps, matchId);
-      if (terms) push(wallet, { type: 'tableTerms', terms });
+      if (terms) send(wallet, { type: 'tableTerms', terms });
       const stateRes = await fetch(`${deps.matchEngineUrl}/internal/matches/${encodeURIComponent(matchId)}/state`, { headers });
       if (stateRes.ok) {
         const state = await stateRes.json() as Record<string, unknown>;
-        push(wallet, { type: 'matchState', state: buildMatchStateView(matchId, state) });
+        send(wallet, { type: 'matchState', state: buildMatchStateView(matchId, state), ...forwardDeadlines(state) });
       }
+      return;
+    }
+
+    // Lobby push: subscribe to the global rooms feed + send the current list. Updates arrive
+    // via the ROOMS_CHANNEL fan-out above; `fetchLobby` remains the pull fallback.
+    if (type === 'subscribeLobby') {
+      lobbySubscribers.add(wallet);
+      if (deps.subscriber) await deps.subscriber.ensureChannelSubscribed(ROOMS_CHANNEL);
+      const rooms = await fetchRoomsList(deps, msg);
+      send(wallet, { type: 'lobbyList', rooms });
+      return;
+    }
+
+    if (type === 'unsubscribeLobby') {
+      lobbySubscribers.delete(wallet);
       return;
     }
 
@@ -115,7 +146,7 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
       const roomCode = String(msg.roomCode ?? '');
       const res = await fetch(`${deps.matchmakingUrl}/rooms/${encodeURIComponent(roomCode)}?wallet=${encodeURIComponent(wallet)}`);
       const json = await res.json() as { lobby?: unknown };
-      push(wallet, { type: 'lobbyState', lobby: json.lobby });
+      send(wallet, { type: 'lobbyState', lobby: json.lobby });
       return;
     }
 
@@ -125,9 +156,26 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
       const token = String(msg.token ?? 'USDC');
       const res = await fetch(`${deps.matchmakingUrl}/queue/status?tier=${tier}&feed=${feed}&token=${token}`);
       const json = await res.json() as { status?: unknown };
-      push(wallet, { type: 'queueStatus', status: json.status });
+      send(wallet, { type: 'queueStatus', status: json.status });
     }
   };
+}
+
+/** Query the matchmaking registry lobby feed (`GET /rooms`), passing through any filters. */
+async function fetchRoomsList(deps: RelayDeps, msg: Record<string, unknown>): Promise<unknown[]> {
+  try {
+    const params = new URLSearchParams();
+    if (msg.feed) params.set('feed', String(msg.feed));
+    if (msg.template) params.set('template', String(msg.template));
+    if (msg.buyIn !== undefined) params.set('buyIn', String(msg.buyIn));
+    const qs = params.toString();
+    const res = await fetch(`${deps.matchmakingUrl}/rooms${qs ? `?${qs}` : ''}`);
+    if (!res.ok) return [];
+    const json = await res.json() as { rooms?: unknown[] };
+    return json.rooms ?? [];
+  } catch {
+    return [];
+  }
 }
 
 async function fetchTableTerms(deps: RelayDeps, matchId: string): Promise<unknown | undefined> {
@@ -162,20 +210,46 @@ function buildMatchStateView(matchId: string, raw: Record<string, unknown>) {
   };
 }
 
-function normalizeEnginePayload(matchId: string, payload: unknown): unknown | undefined {
+/**
+ * Copy only the engine-provided ABSOLUTE deadlines that are present. The gateway never
+ * fabricates a deadline (a fabricated one makes a client's `deadline - serverTime` countdown
+ * wrong and can time a player out unfairly) — an omitted deadline is surfaced as absent.
+ */
+function forwardDeadlines(p: Record<string, unknown>): Record<string, number> {
+  const out: Record<string, number> = {};
+  const pick = (...keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = p[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    }
+    return undefined;
+  };
+  const seal = pick('sealEndsAt', 'seal_ends_at');
+  const betting = pick('bettingEndsAt', 'betting_ends_at', 'streetEndsAt', 'street_ends_at');
+  const matchEnd = pick('matchEndsAt', 'match_ends_at', 'scheduledEndTs', 'scheduled_end_ts');
+  const turn = pick('yourTurnDeadline', 'your_turn_deadline', 'deadline');
+  if (seal !== undefined) out.sealEndsAt = seal;
+  if (betting !== undefined) out.bettingEndsAt = betting;
+  if (matchEnd !== undefined) out.matchEndsAt = matchEnd;
+  if (turn !== undefined) out.yourTurnDeadline = turn;
+  return out;
+}
+
+function normalizeEnginePayload(matchId: string, payload: unknown): Record<string, unknown> | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
   const p = payload as Record<string, unknown>;
   const kind = String(p.type ?? '');
   if (kind === 'matchState' && p.state && typeof p.state === 'object') {
-    return { type: 'matchState', state: buildMatchStateView(matchId, p.state as Record<string, unknown>) };
+    return { type: 'matchState', state: buildMatchStateView(matchId, p.state as Record<string, unknown>), ...forwardDeadlines(p) };
   }
   if (kind === 'yourTurn') {
+    // Forward the engine's absolute deadlines verbatim; never synthesize one.
     return {
       type: 'yourTurn',
       matchId,
       toCall: Number(p.toCall ?? 0),
       minRaiseTo: Number(p.minRaiseTo ?? 0),
-      deadline: Number(p.deadline ?? Date.now() + 25_000),
+      ...forwardDeadlines(p),
     };
   }
   if (kind === 'settled') return { type: 'settled', result: p.result ?? p };

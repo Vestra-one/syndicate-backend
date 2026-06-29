@@ -2,7 +2,7 @@
 
 **Goal:** player-created rooms; the backend registry is fed by verified create/deposit txhashes; no operator-create.
 
-- **Status:** ⬜ not started
+- **Status:** ✅ done & verified (note: Postgres match-row write delegated over HTTP via an injectable persistence port — `MATCH_PERSISTENCE_URL`; default no-op keeps the registry UX-only since matchmaking is zero-dep and only Rust services hold `tokio-postgres`)
 - **Depends on:** 02 (RPC verify), 05 (match-row persistence)
 - **Parallel-safe with:** 09, 10
 - **Checklist ref:** §3

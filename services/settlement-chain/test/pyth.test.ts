@@ -1,58 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  buildHermesTimestampUrl,
-  extractHermesCandidates,
-  redactSecrets,
-  selectEarliestValidPythUpdate,
-} from '../src/pyth.ts';
+import { normalizeFeedIdHex, redactSecrets } from '../src/pyth.ts';
 
 const feed = `0x${'07'.repeat(32)}`;
 
-test('Hermes timestamp URL uses ids array and never includes API key', () => {
-  const url = buildHermesTimestampUrl('https://pyth.dourolabs.app/hermes', 1715000000, feed);
-  assert.match(url, /\/v2\/updates\/price\/1715000000/);
-  assert.match(url, /encoding=hex/);
-  assert.match(url, /parsed=true/);
-  assert.doesNotMatch(url, /secret-api-key/);
+test('normalizeFeedIdHex lowercases and 0x-prefixes 32-byte hex', () => {
+  assert.equal(normalizeFeedIdHex(`0X${'AB'.repeat(32)}`), `0x${'ab'.repeat(32)}`);
+  assert.equal(normalizeFeedIdHex('07'.repeat(32)), feed);
 });
 
-test('exact timestamp candidate wins', () => {
-  const response = (publishTime: number, conf = '10', expo = -8) => ({
-    binary: { encoding: 'hex', data: ['01020304'] },
-    parsed: [{ id: feed, price: { price: '100000', conf, expo, publish_time: publishTime } }],
-  });
-  const candidates = [
-    ...extractHermesCandidates(response(1002), 1002),
-    ...extractHermesCandidates(response(1000), 1000),
-    ...extractHermesCandidates(response(999), 999),
-  ];
-  const selected = selectEarliestValidPythUpdate(candidates, {
-    feedIdHex: feed,
-    scheduledEndTs: 1000,
-    maxConfidence: 50,
-    expectedExponent: -8,
-  });
-  assert.equal(selected?.publishTime, 1000);
-});
-
-test('invalid feed exponent confidence and timestamp are rejected', () => {
-  const good = extractHermesCandidates({
-    binary: { encoding: 'hex', data: ['01020304'] },
-    parsed: [
-      { id: `0x${'08'.repeat(32)}`, price: { price: '1', conf: '10', expo: -8, publish_time: 1000 } },
-      { id: feed, price: { price: '1', conf: '10', expo: -9, publish_time: 1000 } },
-      { id: feed, price: { price: '1', conf: '51', expo: -8, publish_time: 1000 } },
-      { id: feed, price: { price: '1', conf: '10', expo: -8, publish_time: 1006 } },
-    ],
-  }, 1000);
-  const selected = selectEarliestValidPythUpdate(good, {
-    feedIdHex: feed,
-    scheduledEndTs: 1000,
-    maxConfidence: 50,
-    expectedExponent: -8,
-  });
-  assert.equal(selected, null);
+test('normalizeFeedIdHex rejects non-32-byte or non-hex input', () => {
+  assert.throws(() => normalizeFeedIdHex('ab'), /32-byte hex/);
+  assert.throws(() => normalizeFeedIdHex(123 as unknown), /must be a string/);
 });
 
 test('redaction removes secrets and keypair byte arrays', () => {

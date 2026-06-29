@@ -1,3 +1,5 @@
+> **⚠️ DEPRECATED / STALE — not authoritative for current behavior.** This predates the v1 implementation and may describe a different game (e.g. Switchboard/Pyth oracle, median-60s, session-keys). Trust the **code** and `docs/V1_COMPLETION_CHECKLIST.md` instead.
+
 # Syndicate — Canonical Game Mechanics
 
 **Status:** Canonical `GAME_MECHANICS.md`, v1.0. This document is the single source of truth for rules and settlement. It is written to be **deterministic and complete**: every state has a defined transition, every action a defined legality, every pot a defined owner. If an implementation question is not answered here, it is an `OPEN_QUESTION`, not an implementation choice.

@@ -11,19 +11,27 @@ Canon for player experience: `05_GAME_REQUIREMENTS_CANONICAL.md`. This doc is th
 
 ## 1. System shape
 
-The client talks to four surfaces:
+The client talks to five surfaces:
 
 | Surface | Role | Status |
 |---------|------|--------|
-| **Gateway (WebSocket)** | Auth, lobby, turns, signed actions, defaults, prediction seal | 🟢 |
-| **Config (REST)** | Table terms, tiers, feed catalog | 🟢 |
+| **Gateway (WebSocket)** | Auth, lobby push, turns, signed actions, defaults, prediction seal | 🟢 |
+| **Matchmaking (REST)** | Create/join rooms by **reporting txhashes**, lobby feed (`GET /rooms`) | 🟡 |
+| **Config (REST)** | Table terms, tiers, feed catalog, template allowlist | 🟢 |
 | **Action-feed (REST)** | Live games, history, public timeline, replay export | 🟢 |
-| **Solana (wallet)** | `deposit`, `claim`, `refund` against the Syndicate program | 🟢 on devnet |
+| **Solana (wallet)** | `create_and_deposit`, `deposit`, `register_prediction_commitment`, `claim`, `refund` | 🟢 on devnet |
+
+**v1 model — player-created, no indexer:** the backend NEVER creates matches. A host runs
+`create_and_deposit` and **reports the txhash** (`POST /rooms`); joiners run `deposit` and report
+theirs (`POST /matches/:matchId/deposits`). The backend verifies each finalized tx on-chain before
+registering it. Settlement uses a **company-signed price** (secp256k1/EIP-191), not Pyth.
 
 **Client-owned (non-negotiable):**
 
-- 🔵 Wallet signing — gateway auth nonce, every gameplay intent, prediction commitment messages.
+- 🔵 Wallet signing — gateway auth nonce, every gameplay intent, and the on-chain `create_and_deposit` /
+  `deposit` / `register_prediction_commitment` / `claim` / `refund` instructions.
 - 🔵 Time-lock sealing — drand `tlock` encrypts the prediction in-browser; plaintext never leaves the client.
+- 🔵 Txhash reporting — after each on-chain tx finalizes, report its signature to matchmaking.
 
 **Golden rule:** never surprise the user financially. Before any chip commitment, show wager, max risk, remaining stack, and total exposure. Every match has a refund/VOID path.
 
@@ -44,9 +52,9 @@ Per environment (devnet staging / mainnet):
 | `DRAND_API` | `https://api.drand.sh` | Time-lock beacon |
 | `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` | quicknet chain |
 
-**Do not hard-code:** blinds, timers, fees, geofence, Pyth feed ids, oracle window — these come from `TableTerms` / config service.
+**Do not hard-code:** blinds, timers, fees, geofence, the price-feed token, `config_hash` — these come from `TableTerms` / config templates (`GET /config/templates`).
 
-**Pyth:** settlement is **backend-only**. The frontend never calls Hermes and never sees `PYTH_API_KEY`. History may include a public `PythOracleProofView` audit block after settlement.
+**Oracle:** settlement uses a **company-signed price** (secp256k1/EIP-191), produced backend-side by the signed-price-server. The frontend never fetches or signs prices. History may include a public `SignedPriceView` audit block after settlement. There is no Pyth/Hermes.
 
 Refresh IDL after program upgrades (operator runs on build host):
 
@@ -77,12 +85,12 @@ server → { "type": "authenticated", "wallet": "<base58>" }
 
 | Step | Surface | Client |
 |------|---------|--------|
-| Discover games | Action-feed REST 🟢 | `GET /active-games` |
+| Discover games | Matchmaking REST / gateway 🟡 | `GET /rooms` or `subscribeLobby` (pushed `roomsUpdated`) |
 | Connect | Gateway 🟢 | §3 handshake |
-| Queue / join room | Gateway 🟢 | `queueStatus` / `lobbyState` |
-| **Deposit** | Solana 🟢🔵 | Build + sign `deposit` (buy-in + entry fee) → wait **finality** |
+| **Host create** | Solana + Matchmaking 🟢🔵 | `create_and_deposit` → **report** `createTxSig` via `POST /rooms` |
+| **Join (deposit)** | Solana + Matchmaking 🟢🔵 | `deposit` → **report** `depositTxSig` via `POST /matches/:id/deposits` → wait **finality** |
 | Lobby | Gateway 🟢 | `tableTerms` + `matchState` |
-| **Seal prediction** | Client + Gateway 🟢 | tlock encrypt (§6) + signed `sealPrediction` / commitment |
+| **Seal prediction** | Client + Solana + Gateway 🟢🔵 | tlock encrypt (§6) + **one popup** `register_prediction_commitment` + `sealPrediction` |
 | Betting | Gateway 🟢 | On `yourTurn`, send signed `act`; optional `setDefault` |
 | Watch market | Gateway 🟢 | `event` feed + chart |
 | Resolution | Gateway 🟡 | `settled` / `void` ceremonies |
@@ -97,13 +105,21 @@ Lifecycle UI: `FILLING → SEALING → LIVE → SETTLEMENT_WINDOW → DECRYPT �
 
 Full shapes in [`protocol.ts`](./protocol.ts).
 
-**Server → client:** `tableTerms`, `matchState`, `yourTurn`, `event`, `settled`, `void`, `queueStatus`, `lobbyState`
+Every server envelope carries **`serverTime`** (gateway clock, ms). Sync your local clock to it and
+render countdowns as `deadline - serverTime + localOffset` (`remainingMs` helper in protocol.ts)
+against the **absolute** engine deadlines — the gateway never synthesizes a deadline, so an absent
+one means "unknown", not "now + 25s".
+
+**Server → client:** `tableTerms`, `matchState`, `yourTurn` (+ `yourTurnDeadline`/`sealEndsAt`/
+`bettingEndsAt`/`matchEndsAt`), `event`, `settled`, `void`, `queueStatus`, `lobbyState`, `lobbyList`,
+`roomsUpdated`.
 
 **Client → server:**
 
 - `act` — `{ matchId, action, signature }` with signed intent (see `SignedActionIntentWire` in protocol.ts). Amounts are **integer chip base units**.
 - `setDefault` — pre-signed timeout policy (`check_fold` | `check_call_any`).
-- `sealPrediction` — `{ matchId, ciphertext }` before LIVE.
+- `sealPrediction` — `{ matchId, seatIndex, ciphertext, commitmentHex, targetRound, blindingHex, signature }` during SEALING (after the on-chain commitment, §6).
+- `subscribeLobby` / `unsubscribeLobby` — opt into pushed `roomsUpdated` lobby updates (discard stale ones by `update.version`).
 
 Intent message bytes must match `services/shared/src/intent.rs` and `services/settlement-chain/src/intent.ts`.
 
@@ -114,13 +130,17 @@ Intent message bytes must match `services/shared/src/intent.rs` and `services/se
 Prediction sealed with **drand tlock** — unreadable until match end.
 
 1. `GET ${DRAND_API}/${DRAND_CHAIN_HASH}/info` → `{ public_key, period, genesis_time }`
-2. Use `timelockTargetRound` from `TableTerms` (or compute from match end time).
-3. Encrypt fixed-point price (16-byte LE i128 at feed `decimals`) toward that round.
-4. Send `{ type: 'sealPrediction', matchId, ciphertext: base64 }` before LIVE.
+2. Use `timelockTargetRound` from `TableTerms` — it satisfies the on-chain two-sided bound
+   `(latest_match_end, latest_match_end + 20s]`. Never use a placeholder round.
+3. Encrypt fixed-point price (16-byte LE i128 at feed `decimals`) toward that round → `ciphertext`.
+4. Compute `commitmentHex = H(prediction || blinding)` — **must** match the contract's
+   `prediction_commitment` semantics (verify against `services/programs` + `services/timelock`).
+5. **One wallet popup:** sign + submit `register_prediction_commitment({ onchainMatchId, commitmentHex, timelockTargetRound })`. No session key / delegate.
+6. Send `{ type: 'sealPrediction', matchId, seatIndex, ciphertext, commitmentHex, targetRound, blindingHex, signature }` so the gateway stores the ciphertext + blinding.
 
-Backend opens at match end via drand; user never manually reveals.
-
-Also register an on-chain **prediction commitment** (hash + blinding) via the backend orchestration path — the gateway/engine records `SignedPredictionCommitmentWire` for settlement replay.
+**Store contract:** the ciphertext you upload here is EXACTLY what the worker reads at settlement
+(same store, same key derivation) to decrypt + binding-check against the on-chain commitment. The
+backend opens at match end via drand; the user never manually reveals.
 
 ---
 
@@ -130,10 +150,11 @@ Program id (devnet staging): **`FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS`**.
 
 | Instruction | Who signs | Frontend builds? |
 |-------------|-----------|------------------|
-| `create_match` | operator | no |
-| `deposit` | player | **yes** |
-| `lock` / sealing / action-log | operator/backend | no |
-| `submit_settlement` | settlement admin + Pyth | no |
+| `create_and_deposit` | host (player) | **yes** — then report `createTxSig` |
+| `deposit` | player | **yes** — then report `depositTxSig` |
+| `register_prediction_commitment` | player | **yes** (one popup, during SEALING) |
+| `lock` / `begin_live` | operator/backend | no |
+| `submit_settlement` | settlement admin (carries the signed price) | no |
 | `claim` | player | **yes** (after SETTLED) |
 | `refund` | player | **yes** (after VOID) |
 
@@ -155,14 +176,14 @@ Seeds: match `["match", u64_le(onchainMatchId)]`, vault `["vault", matchPda]`, s
 ### Integration options
 
 1. **Anchor TS client** — IDL at `docs/frontend/idl/syndicate_program.json`
-2. **Reference builders** — `services/settlement-chain/src/custody.ts` (operator path); mirror discriminators + Borsh for player ix
+2. **Reference builders** — `services/settlement-chain/src/custody.ts`; mirror discriminators + Borsh for player ix
 
 ### Flow notes
 
-- Seat granted only after deposit **finalizes** — show confirming state.
-- `claim` is idempotent (safe retry).
-- Entry fee refunded on VOID / leave-before-LIVE; disclosed in `TableTerms`.
-- Match bootstrap returns `{ matchId, onchainMatchId, matchPda }` from matchmaking/orchestrator — propagate to deposit + gateway.
+- The host derives `onchainMatchId` + `matchPda` client-side, runs `create_and_deposit`, then reports `createTxSig` to `POST /rooms`. The backend verifies the finalized tx before the room appears.
+- Joiners run `deposit` then report `depositTxSig`; the seat is granted only after the backend verifies the **finalized** tx — show a confirming state.
+- `claim` is idempotent (safe retry). Entry fee refunded on VOID / leave-before-LIVE; disclosed in `TableTerms`.
+- The registry is **UX-only**: even a room the backend never heard about can still be refunded on-chain permissionlessly. Capital safety never depends on reporting succeeding.
 
 ---
 
@@ -182,16 +203,17 @@ Base: **action-feed** service.
 
 Redaction: public endpoints never expose wallets, sealed ciphertexts, or pre-signed intents before time-lock open. Identity in timelines = **seat index** only.
 
-### Pyth audit block
+### Signed-price audit block
 
-When present, render `oracleProof` (`PythOracleProofView`):
+When present, render `oracleProof` (`SignedPriceView`):
 
-- Feed id, price, publish time, confidence, exponent
-- `priceUpdateAccount`, settlement tx signature(s)
-- `settlementMode`: `atomic` or `two_step`
-- Receiver / wormhole / push program ids, Hermes/binary hashes
+- `tokenHex` (20-byte price token), `price` (display) + `priceInWadHex`, `timestampMs`
+- `signerHex` — the recovered signer; equals `ProtocolState.price_signer`
+- `v` / `rHex` / `sHex` — the secp256k1/EIP-191 signature
+- `settlementTxSignatures` — the settle tx that carried this price + payouts
 
-Canonical VOID when oracle unavailable: **`Pyth Oracle price for settlement is unavailable.`**
+Canonical VOID when the oracle is unavailable: **`Pyth Oracle price for settlement is unavailable.`**
+(message string preserved for client compatibility; the underlying oracle is the signed-price-server).
 
 ---
 
@@ -224,12 +246,14 @@ Every VOID = **full refund** including entry fee.
 ## 11. Checklist
 
 - [ ] WS auth handshake (§3) with wallet adapter
-- [ ] `tlock-js` prediction sealing (§6)
-- [ ] Anchor IDL integration for `deposit` / `claim` / `refund` (§7)
-- [ ] Signed intents for `act` / `setDefault` / prediction commitment
+- [ ] `tlock-js` prediction sealing + on-chain `register_prediction_commitment` (one popup, §6)
+- [ ] Anchor IDL integration for `create_and_deposit` / `deposit` / `claim` / `refund` (§7)
+- [ ] Txhash reporting: `POST /rooms` (host) + `POST /matches/:id/deposits` (joiner)
+- [ ] Signed intents for `act` / `setDefault`
+- [ ] Clock-sync: track `serverTime`, render countdowns from forwarded absolute deadlines (`remainingMs`)
 - [ ] Use `onchainMatchId` string + `PDA_SEEDS` for all PDAs
-- [ ] Table/lobby UI from `protocol.ts` types
-- [ ] History + oracle proof display (§8)
+- [ ] Lobby UI from `GET /rooms` + pushed `roomsUpdated`
+- [ ] History + `SignedPriceView` proof display (§8)
 - [ ] All VOID/error paths (§9)
 - [ ] Reference flow in [`example-client.ts`](./example-client.ts)
 

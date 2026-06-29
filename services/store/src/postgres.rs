@@ -576,6 +576,111 @@ WHERE match_id = $1::uuid
 ORDER BY seat_index ASC
 "#;
 
+// ---------------- Match lifecycle writers (Phase 05) ----------------
+//
+// With no indexer, the backend writes match rows itself: matchmaking on a verified
+// create, the orchestrator on begin_live. These mirror the lifecycle columns added
+// in migration `0006_match_lifecycle_columns.sql`. The registry these feed is
+// UX-only — capital safety reads PDAs, never these rows.
+
+/// Insert a match row on a verified create (host `create_and_deposit`).
+///
+/// Parameters:
+/// 1. match_key text
+/// 2. onchain_match_id bigint
+/// 3. config_id uuid
+/// 4. fill_deadline_ts timestamptz
+///
+/// `scheduled_end_ts` stays NULL until begin_live (the seal round pins it on-chain);
+/// `room_status` starts at `Filling`. `ON CONFLICT (match_key) DO NOTHING` makes a
+/// re-reported create txhash a no-op (idempotency).
+pub const INSERT_MATCH_SQL: &str = r#"
+INSERT INTO matches (
+    match_key,
+    onchain_match_id,
+    config_id,
+    status,
+    fill_deadline_ts,
+    room_status
+)
+VALUES ($1, $2, $3::uuid, 'created', $4::timestamptz, 'Filling')
+ON CONFLICT (match_key) DO NOTHING
+RETURNING id::text, match_key, onchain_match_id, status::text, room_status
+"#;
+
+/// Insert a seat row on a verified deposit (host or joiner).
+///
+/// Parameters:
+/// 1. match_id uuid
+/// 2. seat_index smallint
+/// 3. wallet_address text
+/// 4. deposit_signature text
+/// 5. buy_in_chips bigint
+/// 6. entry_fee_chips bigint
+///
+/// `ON CONFLICT (match_id, seat_index) DO NOTHING` makes a re-reported deposit
+/// txhash a no-op (idempotency); the unique `(match_id, wallet_address)` also
+/// rejects the same wallet taking two seats.
+pub const INSERT_MATCH_SEAT_SQL: &str = r#"
+INSERT INTO match_seats (
+    match_id,
+    seat_index,
+    wallet_address,
+    deposit_signature,
+    buy_in_chips,
+    entry_fee_chips
+)
+VALUES ($1::uuid, $2, $3, $4, $5, $6)
+ON CONFLICT (match_id, seat_index) DO NOTHING
+RETURNING match_id::text, seat_index, wallet_address, deposit_signature
+"#;
+
+/// Transition a match to Live at begin_live: pin the timing the seal round fixed,
+/// record the sealed cohort, and advance the room/status projections.
+///
+/// Parameters:
+/// 1. match_id uuid
+/// 2. live_start_ts timestamptz
+/// 3. scheduled_end_ts timestamptz
+/// 4. lock_ts timestamptz
+/// 5. seal_deadline_ts timestamptz
+/// 6. sealed_count smallint
+/// 7. nonseal_penalty_bps integer
+pub const UPDATE_MATCH_ON_BEGIN_LIVE_SQL: &str = r#"
+UPDATE matches
+SET live_start_ts = $2::timestamptz,
+    scheduled_end_ts = $3::timestamptz,
+    lock_ts = $4::timestamptz,
+    seal_deadline_ts = $5::timestamptz,
+    sealed_count = $6,
+    nonseal_penalty_bps = $7,
+    locked_at = COALESCE(locked_at, $4::timestamptz),
+    status = 'active',
+    room_status = 'Live'
+WHERE id = $1::uuid
+RETURNING id::text, status::text, room_status, scheduled_end_ts
+"#;
+
+/// Mark a match terminal — settled or voided. For a settle, pass
+/// `('Settled', 'settled', NULL)`; for a void, `('Void', 'voided', <VoidKind>)`.
+/// The matching `*_at` timestamp is stamped from the chosen `match_status`.
+///
+/// Parameters:
+/// 1. match_id uuid
+/// 2. room_status text ('Settled' | 'Void')
+/// 3. status match_status ('settled' | 'voided')
+/// 4. void_kind text (NULL when settled; 'FillingVoid'|'UnderMinSealed'|'Emergency' when voided)
+pub const MARK_MATCH_TERMINAL_SQL: &str = r#"
+UPDATE matches
+SET room_status = $2,
+    status = $3::match_status,
+    void_kind = $4,
+    settled_at = CASE WHEN $3::match_status = 'settled' THEN now() ELSE settled_at END,
+    voided_at  = CASE WHEN $3::match_status = 'voided'  THEN now() ELSE voided_at END
+WHERE id = $1::uuid
+RETURNING id::text, status::text, room_status, void_kind
+"#;
+
 /// Persist one explainable trust-safety signal.
 pub const INSERT_TRUST_SAFETY_SIGNAL_SQL: &str = r#"
 INSERT INTO trust_safety_signals (
@@ -680,6 +785,25 @@ pub struct PersistedSettlementAttempt {
     pub tx_signature: Option<String>,
 }
 
+/// Row shape returned by [`INSERT_MATCH_SQL`] (verified create).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedMatchRow {
+    pub match_id: String,
+    pub match_key: String,
+    pub onchain_match_id: i64,
+    pub status: String,
+    pub room_status: String,
+}
+
+/// Row shape returned by [`INSERT_MATCH_SEAT_SQL`] (verified deposit).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedMatchSeat {
+    pub match_id: String,
+    pub seat_index: i16,
+    pub wallet_address: String,
+    pub deposit_signature: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,6 +886,51 @@ mod tests {
         assert!(LIST_DUE_SETTLEMENT_ATTEMPTS_SQL.contains("status = 'submitted'"));
         assert!(LIST_DUE_SETTLEMENT_ATTEMPTS_SQL.contains("retry_scheduled"));
         assert!(LOAD_ALL_MATCH_EVENTS_SQL.contains("ORDER BY seq ASC"));
+    }
+
+    #[test]
+    fn match_lifecycle_writers_are_idempotent_and_advance_room_state() {
+        // Create: idempotent on re-reported txhash, starts in Filling, leaves
+        // scheduled_end_ts unset (begin_live pins it).
+        assert!(INSERT_MATCH_SQL.contains("INSERT INTO matches"));
+        assert!(INSERT_MATCH_SQL.contains("ON CONFLICT (match_key) DO NOTHING"));
+        assert!(INSERT_MATCH_SQL.contains("'Filling'"));
+        assert!(!INSERT_MATCH_SQL.contains("scheduled_end_ts"));
+
+        // Deposit: idempotent on re-reported txhash.
+        assert!(INSERT_MATCH_SEAT_SQL.contains("INSERT INTO match_seats"));
+        assert!(INSERT_MATCH_SEAT_SQL.contains("ON CONFLICT (match_id, seat_index) DO NOTHING"));
+
+        // begin_live: pins timing, records sealed cohort, advances to Live.
+        assert!(UPDATE_MATCH_ON_BEGIN_LIVE_SQL.contains("scheduled_end_ts = $3::timestamptz"));
+        assert!(UPDATE_MATCH_ON_BEGIN_LIVE_SQL.contains("sealed_count = $6"));
+        assert!(UPDATE_MATCH_ON_BEGIN_LIVE_SQL.contains("room_status = 'Live'"));
+
+        // Terminal: settle vs void share one statement, stamping the right *_at.
+        assert!(MARK_MATCH_TERMINAL_SQL.contains("status = $3::match_status"));
+        assert!(MARK_MATCH_TERMINAL_SQL.contains("void_kind = $4"));
+        assert!(MARK_MATCH_TERMINAL_SQL.contains("WHEN $3::match_status = 'settled'"));
+        assert!(MARK_MATCH_TERMINAL_SQL.contains("WHEN $3::match_status = 'voided'"));
+    }
+
+    #[test]
+    fn migration_0006_makes_scheduled_end_nullable_and_guards_live() {
+        const MIGRATION_0006: &str =
+            include_str!("../migrations/0006_match_lifecycle_columns.sql");
+        assert!(MIGRATION_0006.contains("ALTER COLUMN scheduled_end_ts DROP NOT NULL"));
+        assert!(MIGRATION_0006.contains("room_status"));
+        assert!(MIGRATION_0006.contains("matches_scheduled_end_set_when_live"));
+        assert!(MIGRATION_0006
+            .contains("CHECK (room_status IS NULL OR room_status IN ('Filling', 'Sealing', 'Live', 'Settled', 'Void'))"));
+        assert!(MIGRATION_0006
+            .contains("void_kind IS NULL OR void_kind IN ('FillingVoid', 'UnderMinSealed', 'Emergency')"));
+    }
+
+    #[test]
+    fn settlement_context_read_still_resolves_after_lifecycle_columns() {
+        // Phase 05 must not disturb the worker read path.
+        assert!(LOAD_MATCH_SETTLEMENT_CONTEXT_SQL.contains("m.scheduled_end_ts"));
+        assert!(LOAD_MATCH_SETTLEMENT_CONTEXT_SQL.contains("m.dead_money_chips"));
     }
 
     #[test]

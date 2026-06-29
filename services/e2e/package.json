@@ -1,0 +1,10 @@
+{
+  "name": "@syndicate/e2e",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "End-to-end lifecycle verification (library smoke + devnet integration gate).",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

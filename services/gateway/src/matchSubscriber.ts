@@ -24,7 +24,11 @@ export class MatchSubscriber {
   }
 
   async ensureSubscribed(matchId: string): Promise<void> {
-    const channel = `match:${matchId}`;
+    return this.ensureChannelSubscribed(`match:${matchId}`);
+  }
+
+  /** Subscribe to an arbitrary channel (e.g. the global `rooms` lobby feed). */
+  async ensureChannelSubscribed(channel: string): Promise<void> {
     if (this.subscribed.has(channel)) return;
     await this.connect();
     this.subscribed.add(channel);
