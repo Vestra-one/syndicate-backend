@@ -2,16 +2,18 @@
 
 **Goal:** prove the vault drains to exactly zero on every terminal path (the pre-audit capital-safety gate).
 
-- **Status:** 🔴 blocked — code complete & host-compiled, but cannot RUN/verify: the
-  Solana SBF toolchain is not installed on this machine, so `target/deploy/syndicate_program.so`
-  cannot be produced and the harness's `add_program_from_file` fails at load. Concretely:
-  `cargo build-sbf` → `error: no such command: build-sbf`; no `solana`/`anchor`/`avm`/
-  `cargo-build-sbf` anywhere on PATH or in `~/.local/share/solana`; no `.so` on disk.
-  All helpers, the two previously-`#[ignore]` tests (un-ignored + fleshed out), the full
-  funds-exit matrix (`funds_exit_matrix.rs`), golden-parity-through-`.so`, and the
-  auto-check fairness assertion are written and compile cleanly on the host target
-  (`cargo test --no-run` green). To unblock: install platform-tools v1.53, run
-  `cargo build-sbf --tools-version v1.53 -p syndicate-program`, then `cargo test`.
+- **Status:** ✅ done — SBF toolchain (platform-tools v1.53) installed; `.so` builds and the
+  full suite RUNS green against it. `cd services/programs/programs/syndicate_program &&
+  cargo build-sbf --tools-version v1.53` produces `services/programs/target/deploy/syndicate_program.so`
+  (note: this cargo-build-sbf rejects `-p`; build from the program crate dir), then
+  `cd services/programs/litesvm-tests && cargo test` → 23 tests pass, none ignored
+  (full_lifecycle 2, funds_exit_matrix 9, golden_parity 6, intent_verification 5,
+  sealing_lifecycle 1). Two fixes were needed to run on-chain: (1) the harness now seeds the
+  litesvm `Clock` to `BASE_TS` (1_700_000_000) in `bare()` — it defaulted to unix 0, before
+  drand genesis, so no valid `timelock_target` round existed and every seal hit
+  `InvalidDrandRound`; (2) `claim_like` derives `seat_index` as `seat as u16` instead of
+  reading the seat account, so a double-claim is rejected by the program rather than panicking
+  the harness on the already-closed seat PDA.
 - **Depends on:** — (contract final; independent of TS work)
 - **Parallel-safe with:** everything
 - **Checklist ref:** §7
@@ -61,10 +63,10 @@ vault balance ends at exactly zero under the generalized conservation invariant.
 
 ## Acceptance criteria
 
-- [ ] All new helpers exist; the two previously-ignored tests run and pass.
-- [ ] Every matrix row ends with vault balance exactly 0.
-- [ ] Golden parity holds through the program `.so`, not just the shared core.
-- [ ] Auto-check-only-when-`to_call==0` asserted.
+- [x] All new helpers exist; the two previously-ignored tests run and pass.
+- [x] Every matrix row ends with vault balance exactly 0.
+- [x] Golden parity holds through the program `.so`, not just the shared core.
+- [x] Auto-check-only-when-`to_call==0` asserted.
 
 ## Verification
 

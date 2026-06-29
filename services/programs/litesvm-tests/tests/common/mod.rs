@@ -34,6 +34,15 @@ pub const PROGRAM_ID: Pubkey = pubkey!("8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZ
 pub const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 
+/// Base wall-clock the harness seeds the litesvm `Clock` to before any instruction runs.
+/// litesvm defaults `unix_timestamp` to 0, which is *before* `DRAND_GENESIS_TIME`
+/// (1_692_803_367) — so every derived `seal_deadline_ts`/`scheduled_end_ts` would land before
+/// drand genesis and NO valid `timelock_target` round would exist in the
+/// `(latest_match_end, latest_match_end + MAX_TIMELOCK_SKEW_SEC]` window, making seals
+/// un-registerable (`InvalidDrandRound`). Seed a realistic "now" well after genesis so the
+/// full lifecycle's timing is valid. Chosen << the default `fill_deadline_ts` so creates pass.
+pub const BASE_TS: u64 = 1_700_000_000;
+
 pub const MATCH_ID: u64 = 1;
 pub const BUY_IN: u64 = 100;
 pub const ENTRY_FEE: u64 = 0;
@@ -250,6 +259,13 @@ impl MatchHarness {
         let mut svm = LiteSVM::new();
         svm.add_program_from_file(PROGRAM_ID, program_so_path())
             .expect("load syndicate_program.so — run `cargo build-sbf` first");
+
+        // Seed a realistic wall-clock (litesvm defaults to unix 0, before drand genesis).
+        {
+            let mut clock = svm.get_sysvar::<Clock>();
+            clock.unix_timestamp = BASE_TS as i64;
+            svm.set_sysvar::<Clock>(&clock);
+        }
 
         let admin = Keypair::new();
         let players = [Keypair::new(), Keypair::new(), Keypair::new()];
@@ -596,7 +612,10 @@ impl MatchHarness {
     fn claim_like(&mut self, seat: usize, disc: &str) -> Result<(), String> {
         let player = self.players[seat].insecure_clone();
         let (seat_key, _) = seat_pda(&self.match_key, &player.pubkey());
-        let seat_index = self.seat_account(seat).seat_index;
+        // `deposit_all` assigns `seat_index = seat as u16`, so derive it directly rather than
+        // reading the seat account — on a double-claim the seat PDA is already closed, and a
+        // read would panic in the harness instead of letting the program reject the tx.
+        let seat_index = seat as u16;
         let (seat_index_key, _) = seat_index_pda(&self.match_key, seat_index);
         let (vault, _) = vault_pda(&self.match_key);
         let ix = Instruction {
