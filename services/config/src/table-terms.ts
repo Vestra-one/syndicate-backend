@@ -1,4 +1,4 @@
-import { bindConfig, getTierForFeed, type MatchConfig } from './index.ts';
+import { bindConfig, getTierForFeed, totalBettingDurationSec, type MatchConfig } from './index.ts';
 
 /** Fixed-point decimals per launch feed (Pyth exponent -8 → display 8). */
 export const FEED_DECIMALS: Record<string, number> = {
@@ -14,8 +14,7 @@ export interface TableTermsPayload {
   chipsToken: string;
   decimals: number;
   oracleAdapter: 'pyth';
-  settlementMode: 'bounded-exact-after';
-  oracleDelayWindowSec: number;
+  settlementMode: 'exact-timestamp';
   oracleUnavailableMessage: string;
   buyIn: number;
   entryFee: number;
@@ -27,6 +26,13 @@ export interface TableTermsPayload {
   maxPlayers: number;
   roundCount: number;
   roundDurationsSec: number[];
+  observationWindowsSec: number[];
+  sealWindowSec: number;
+  beginLiveWindowSec: number;
+  nonsealPenaltyBps: number;
+  /** Σ round durations + Σ observations — what begin_live adds to live_start to derive
+   *  scheduled_end_ts, and the on-chain CreateParams.total_betting_duration_sec. */
+  totalBettingDurationSec: number;
   actionTimerSec: number;
   timeBankSec: number;
   settlementWindowSec: number;
@@ -51,8 +57,7 @@ export function toTableTerms(
     chipsToken: config.chipsToken,
     decimals: FEED_DECIMALS[config.priceFeedId] ?? 8,
     oracleAdapter: 'pyth',
-    settlementMode: 'bounded-exact-after',
-    oracleDelayWindowSec: config.oracleDelayWindowSec,
+    settlementMode: 'exact-timestamp',
     oracleUnavailableMessage: config.oracleUnavailableMessage,
     buyIn: config.buyIn,
     entryFee: config.entryFee,
@@ -64,6 +69,11 @@ export function toTableTerms(
     maxPlayers: config.maxPlayers,
     roundCount: config.roundCount,
     roundDurationsSec: config.roundDurationsSec,
+    observationWindowsSec: config.observationWindowsSec,
+    sealWindowSec: config.sealWindowSec,
+    beginLiveWindowSec: config.beginLiveWindowSec,
+    nonsealPenaltyBps: config.nonsealPenaltyBps,
+    totalBettingDurationSec: totalBettingDurationSec(config),
     actionTimerSec: config.actionTimerSec,
     timeBankSec: config.timeBankSec,
     settlementWindowSec: config.settlementWindowSec,

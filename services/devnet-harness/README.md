@@ -66,21 +66,18 @@ Pyth audit receipts are written to `/tmp/syndicate-devnet-receipts` by default. 
 | `SYNDICATE_DEVNET_SETTLEMENT_TS` | current Unix timestamp | Match scheduled end timestamp for the settlement test. |
 | `SYNDICATE_DEVNET_IDEMPOTENCY_KEY` | derived from timestamp + feed | Audit/idempotency label for the settlement receipt. |
 | `SYNDICATE_DEVNET_BUY_IN` | `1000000` | Per-seat buy-in in token base units. |
-| `SYNDICATE_DEVNET_SMALL_BLIND` | `10000` | Small blind for action-log init (heads-up SB/BB). |
-| `SYNDICATE_DEVNET_BIG_BLIND` | `20000` | Big blind for action-log init. |
-| `SYNDICATE_DEVNET_ROUND_COUNT` | `1` | Round count passed to `init_action_log`. |
+| `SYNDICATE_DEVNET_TOTAL_BETTING_DURATION_SEC` | `600` | Bound into `CreateParams`; `scheduled_end_ts` derived at `begin_live`. |
+| `SYNDICATE_DEVNET_SEAL_WINDOW_SEC` | `20` | SEALING window length. |
+| `SYNDICATE_DEVNET_BEGIN_LIVE_WINDOW_SEC` | `5` | Max delay after seal deadline for `begin_live`. |
+| `SYNDICATE_DEVNET_NONSEAL_PENALTY_BPS` | `2500` | Non-sealer penalty bound at create. |
 | `SYNDICATE_DEVNET_INTER_TX_DELAY_MS` | `2500` | Delay between Devnet txs (RPC rate-limit pacing). |
-| `SYNDICATE_DEVNET_SETTLEMENT_ONLY` | `false` | Skip refund lifecycle; run settlement path only. |
-| `SYNDICATE_DEVNET_PRICE_FEED_ID_HEX` | BTC/USD | 32-byte Pyth feed id. Launch feeds are configurable: BTC/USD, ETH/USD, SOL/USD. |
+| `SYNDICATE_DEVNET_SETTLEMENT_ONLY` | `false` | Skip refund lifecycle; run sealing-to-live path only. |
+| `SYNDICATE_DEVNET_PRICE_FEED_ID_HEX` | BTC/USD | 32-byte Pyth feed id (Hermes lookup); first 20 bytes encode `price_token`. |
 | `SYNDICATE_DEVNET_PLAYER_MINT_AMOUNT` | `10000000` | Test chips minted to each player. |
-| `SYNDICATE_DEVNET_ORACLE_DELAY_WINDOW_SEC` | `5` | Exact-after settlement window. |
 | `SYNDICATE_DEVNET_MAX_ORACLE_CONFIDENCE` | `u64::MAX` | Confidence guard for the created match. |
-| `SYNDICATE_DEVNET_ORACLE_EXPONENT` | `-8` | Expected Pyth exponent for the created settlement match. |
+| `SYNDICATE_DEVNET_ORACLE_EXPONENT` | `-18` | Expected signed-price exponent for the created match. |
 | `SYNDICATE_DEVNET_RAKE_BPS` | `0` | Pot rake for harness-created matches. |
 | `SYNDICATE_DEVNET_RAKE_CAP` | `0` | Per-pot rake cap. |
-| `SYNDICATE_PYTH_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS` | `100000` | Priority fee used for the atomic Pyth settlement transaction. |
-| `SYNDICATE_SUBMIT_SETTLEMENT_COMPUTE_UNITS` | `200000` | Compute-unit estimate for the Syndicate consumer instruction inside the Pyth builder. |
-| `SYNDICATE_DEVNET_ALLOW_TWO_STEP_PYTH_FALLBACK` | `true` | Allow measured Pyth post + settlement two-step fallback when the full-verification builder cannot fit one transaction. |
 | `SYNDICATE_DEVNET_RPC_RETRIES` | `6` | Retry count for transient Solana Devnet RPC transport failures. |
 | `SYNDICATE_DEVNET_RPC_RETRY_BASE_MS` | `500` | Base delay for exponential RPC retry backoff. |
 | `SYNDICATE_DEVNET_RECEIPT_DIR` | `/tmp/syndicate-devnet-receipts` | Directory for Pyth settlement audit receipts. |

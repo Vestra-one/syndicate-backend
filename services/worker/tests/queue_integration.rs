@@ -69,7 +69,6 @@ async fn settlement_outbox_claim_publish_cycle() {
         "event_root": "aa".repeat(32),
         "scheduled_end_ts": 1_000,
         "pyth_feed_id": "bb".repeat(32),
-        "oracle_delay_window_sec": 5,
         "oracle_exponent": -8,
         "max_oracle_confidence": 1000,
         "rake_bps": 0,

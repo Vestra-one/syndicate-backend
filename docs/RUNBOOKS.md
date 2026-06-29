@@ -37,9 +37,9 @@ Match lifecycle transitions; per-turn timer/timeout/auto-action counts; Pyth upd
 > Common first move for any custody/integrity Sev-1: **engage the kill switch (§3)** to stop new matches at the affected scope, finish or VOID in-flight matches capital-safely, then diagnose. New matches never resume until the invariant is re-verified.
 
 ### RB-1 — Pyth update degradation / outage (`risk S1`)
-**Detect:** no valid Pyth update in `[scheduled_end_ts, scheduled_end_ts + oracle_delay_window_sec]`, confidence/exponent/feed-id guard breach, Pyth post failure, or affected matches signal `OracleDegraded`.
-**Act:** in-flight matches with no valid exact-after Pyth update must go to **VOID + full refund**. Halt new matches on the affected feed. The backend may automate this, but on-chain it is still a separate emergency-void-admin `void` transaction; refunds are then pull-based player `refund` transactions. Verify Hermes access, Pyth Receiver posting, RPC health, and provider status. **Never** hand-pick a settlement price or fall back to a median sample path.
-**Resume:** only after exact-after update success ≥ SLO for a sustained window.
+**Detect:** no signed price at exact `scheduled_end_ts`, confidence/exponent/feed-id guard breach, signed-price-server outage, or affected matches signal `OracleDegraded`.
+**Act:** in-flight matches with no valid exact-timestamp signed price must go to **VOID + full refund**. Halt new matches on the affected feed. Verify signed-price-server health, settlement-chain posting, RPC health. **Never** hand-pick a settlement price.
+**Resume:** only after exact-timestamp signed-price success ≥ SLO for a sustained window.
 
 ### RB-2 — Time-lock beacon (drand) unavailable (`risk A8`)
 **Detect:** round key not published by `timelock_target` + grace.

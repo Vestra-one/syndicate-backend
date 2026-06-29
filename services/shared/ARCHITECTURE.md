@@ -2,7 +2,7 @@
 
 **Stack:** Rust crate (pure, `no_std`-friendly where possible; optional WASM build for TS consumers). **Trust role:** the single source of truth for all outcome math. **Implements:** `04 §1,§9,§11,§13,§18`.
 
-> This crate is the most important code in the system. The exact same compiled logic runs in `settlement` (off-chain) and `programs` (on-chain) so results are **byte-identical**. There must be **exactly one** implementation of pot construction, Pyth bounded exact-after oracle validation, winner selection, and tie-breaks — here.
+> This crate is the most important code in the system. The exact same compiled logic is used off-chain in v1 (`settlement` worker). On-chain replay via `programs` is deferred (`TODO(v1+)`). There must be **exactly one** implementation of pot construction, exact-timestamp oracle validation, winner selection, and tie-breaks — here.
 
 ---
 
@@ -23,7 +23,7 @@ shared/src/
   types/         # Chips, Price, ids, config
   log/           # hash-chained event log + intent verification
   pots/          # side-pot construction (the §9 algorithm)
-  oracle/        # Pyth bounded exact-after validation + first-valid selection
+  oracle/        # exact-timestamp oracle validation (publish_time == scheduled_end_ts)
   settle/        # winner selection + ties + top-level settle()
   replay/        # pure replay entrypoint
   lib.rs

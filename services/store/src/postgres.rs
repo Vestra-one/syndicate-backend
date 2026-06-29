@@ -156,14 +156,16 @@ INSERT INTO settlement_attempts (
     idempotency_key,
     attempt_kind,
     event_root,
+    oracle_audit,
     status,
     next_retry_at
 )
-VALUES ($1::uuid, $2, $3, $4, 'pending', CASE WHEN $5 IS NULL THEN NULL ELSE to_timestamp($5::double precision / 1000.0) END)
+VALUES ($1::uuid, $2, $3, $4, $5, 'pending', CASE WHEN $6 IS NULL THEN NULL ELSE to_timestamp($6::double precision / 1000.0) END)
 ON CONFLICT (idempotency_key) DO UPDATE
-SET updated_at = now()
+SET updated_at = now(),
+    oracle_audit = COALESCE(settlement_attempts.oracle_audit, EXCLUDED.oracle_audit)
 RETURNING id, match_id::text, idempotency_key, status::text, attempt_count, tx_signature,
-          event_root, last_error,
+          event_root, last_error, oracle_audit,
           CAST(EXTRACT(EPOCH FROM next_retry_at) * 1000 AS bigint) AS next_retry_at_ms
 "#;
 
@@ -175,7 +177,7 @@ SELECT id FROM settlement_attempts WHERE idempotency_key = $1 FOR UPDATE
 /// Load one settlement attempt by idempotency key.
 pub const LOAD_SETTLEMENT_ATTEMPT_SQL: &str = r#"
 SELECT match_id::text, idempotency_key, status::text, attempt_count, tx_signature, event_root,
-       last_error,
+       last_error, oracle_audit,
        CAST(EXTRACT(EPOCH FROM next_retry_at) * 1000 AS bigint) AS next_retry_at_ms
 FROM settlement_attempts
 WHERE idempotency_key = $1
@@ -192,7 +194,7 @@ SET status = 'submitted',
     updated_at = now()
 WHERE idempotency_key = $1
 RETURNING match_id::text, idempotency_key, status::text, attempt_count, tx_signature, event_root,
-          last_error,
+          last_error, oracle_audit,
           CAST(EXTRACT(EPOCH FROM next_retry_at) * 1000 AS bigint) AS next_retry_at_ms
 "#;
 
@@ -552,8 +554,10 @@ SELECT m.id::text,
        m.event_head,
        m.event_count,
        EXTRACT(EPOCH FROM m.scheduled_end_ts)::bigint AS scheduled_end_ts_sec,
+       m.dead_money_chips,
+       c.price_feed_symbol,
        c.pyth_feed_id,
-       c.oracle_delay_window_sec,
+       c.buy_in_chips,
        c.oracle_exponent,
        c.max_oracle_confidence,
        c.rake_bps,

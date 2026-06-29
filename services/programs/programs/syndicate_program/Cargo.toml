@@ -2,7 +2,7 @@
 name = "syndicate-program"
 version = "0.1.0"
 edition = "2021"
-description = "Syndicate Solana/Anchor on-chain program: vault custody, deposits/claims/refunds, fees, and settlement RE-VERIFICATION via the shared deterministic core."
+description = "Syndicate Solana/Anchor on-chain program: vault custody, deposits/claims/refunds, fees, and v1 backend-trusted settlement with conservation + signed-price checks."
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -18,9 +18,7 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 [dependencies]
 anchor-lang = "0.32.1"
 anchor-spl = "0.32.1"
-pyth-solana-receiver-sdk = { version = "1.2.0" }
-# The single deterministic core — the program re-verifies settlement with the EXACT
-# same code the off-chain builder runs (uses only Vec/BTreeMap/sort, SBF-compatible).
+solana-keccak-hasher = "2.2.1"
+solana-secp256k1-recover = "2.2.1"
+# The deterministic core for signed-price validation types.
 syndicate-shared = { path = "../../../shared" }
-syndicate-engine-core = { path = "../../../engine-core" }
-engine_borsh = { package = "borsh", version = "1" }

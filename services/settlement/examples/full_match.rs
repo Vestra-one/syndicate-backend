@@ -63,6 +63,7 @@ fn main() {
     let params = SettleParams {
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let mut bindings = BTreeMap::new();
     for (id, pred) in [(0u16, 100_010i128), (1, 99_000), (2, 100_500)] {

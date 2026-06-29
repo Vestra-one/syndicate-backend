@@ -27,6 +27,7 @@ fn params() -> SettleParams {
     SettleParams {
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     }
 }
 

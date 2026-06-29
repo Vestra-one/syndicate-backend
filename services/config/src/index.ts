@@ -11,8 +11,7 @@ export interface MatchConfig {
   supportedFeeds: string[]; // feeds this config family permits; launch default BTC/ETH/SOL
   chipsToken: string;       // e.g. "USDC" (decoupled from the feed)
   oracleAdapter: string;    // canonical launch path: "pyth"
-  settlementMode: string;   // canonical launch path: "bounded-exact-after"
-  oracleDelayWindowSec: number; // first valid Pyth update after scheduled end, default 5s
+  settlementMode: string;   // canonical launch path: "exact-timestamp"
   oracleUnavailableMessage: string;
   buyIn: number;            // in chips_token base units
   maxBuyIn: number;         // table cap (anti-manipulation, 08 OQ2)
@@ -29,6 +28,17 @@ export interface MatchConfig {
   timeBankSec: number;
   roundCount: number;
   roundDurationsSec: number[];
+  /** Per-street no-betting observation window (plan_v2 §8/§12); len === roundCount. The
+   *  last entry is the final price-uncertainty tail before scheduled_end_ts. */
+  observationWindowsSec: number[];
+  /** SEALING window length (plan_v2 §1): seats record their on-chain seal commitment
+   *  within this window after `lock`. */
+  sealWindowSec: number;
+  /** Max delay after the seal deadline for the operator to call `begin_live` (plan_v2 §I).
+   *  Pins match end near the seal round so timelock targets can't decrypt mid-match. */
+  beginLiveWindowSec: number;
+  /** Non-sealer penalty in basis points of buy-in (plan_v2 §5), forfeited to the pot. */
+  nonsealPenaltyBps: number;
   settlementWindowSec: number;
   timelockTargetOffsetSec: number;
   geofenceBlocklist: string[]; // ISO country codes; India ("IN") blocked by default
@@ -57,13 +67,19 @@ export interface ConfigCatalog {
 /** Minimum acceptable starting stack depth, in big blinds. */
 export const MIN_START_BB = 20;
 export const ORACLE_ADAPTER_PYTH = 'pyth';
-export const SETTLEMENT_MODE_BOUNDED_EXACT_AFTER = 'bounded-exact-after';
-export const DEFAULT_ORACLE_DELAY_WINDOW_SEC = 5;
+export const SETTLEMENT_MODE_EXACT_TIMESTAMP = 'exact-timestamp';
 export const DEFAULT_ORACLE_UNAVAILABLE_MESSAGE = 'Pyth Oracle price for settlement is unavailable.';
 export const DEFAULT_SUPPORTED_FEEDS = ['BTC/USD', 'ETH/USD', 'SOL/USD'] as const;
 export const DEFAULT_GEOFENCE_BLOCKLIST = ['IN'] as const;
 export const DEFAULT_ENTRY_FEE = 0;
 export const DEFAULT_RAKE_BPS = 300;
+export const DEFAULT_SEAL_WINDOW_SEC = 20;
+/** Default non-sealer penalty: 25% of buy-in forfeited to the pot (plan_v2 §5). */
+export const DEFAULT_NONSEAL_PENALTY_BPS = 2500;
+/** Default begin_live window — matches on-chain DEFAULT_BEGIN_LIVE_WINDOW_SEC (plan_v2 §I). */
+export const DEFAULT_BEGIN_LIVE_WINDOW_SEC = 5;
+/** Must equal the on-chain MAX_TIMELOCK_SKEW_SEC (plan_v2 §I). */
+export const MAX_TIMELOCK_SKEW_SEC = 20;
 
 /** Returns a list of guardrail violations; empty means the config is safe to use. */
 export function validateConfig(c: MatchConfig): string[] {
@@ -75,8 +91,7 @@ export function validateConfig(c: MatchConfig): string[] {
   }
   if (new Set(c.supportedFeeds).size !== c.supportedFeeds.length) e.push('supportedFeeds must be unique');
   if (c.oracleAdapter !== ORACLE_ADAPTER_PYTH) e.push('oracleAdapter must be pyth');
-  if (c.settlementMode !== SETTLEMENT_MODE_BOUNDED_EXACT_AFTER) e.push('settlementMode must be bounded-exact-after');
-  if (!Number.isInteger(c.oracleDelayWindowSec) || c.oracleDelayWindowSec <= 0) e.push('oracleDelayWindowSec must be a positive integer');
+  if (c.settlementMode !== SETTLEMENT_MODE_EXACT_TIMESTAMP) e.push('settlementMode must be exact-timestamp');
   if (!c.oracleUnavailableMessage || c.oracleUnavailableMessage.trim() !== DEFAULT_ORACLE_UNAVAILABLE_MESSAGE) {
     e.push('oracleUnavailableMessage must match the canonical Pyth unavailable message');
   }
@@ -97,6 +112,23 @@ export function validateConfig(c: MatchConfig): string[] {
   if (c.roundCount < 1) e.push('roundCount must be >= 1');
   if (c.roundDurationsSec.length !== c.roundCount) e.push('roundDurations length != roundCount');
   if (c.roundDurationsSec.some((d) => d <= 0)) e.push('round durations must be positive');
+  if (!Array.isArray(c.observationWindowsSec) || c.observationWindowsSec.length !== c.roundCount) {
+    e.push('observationWindowsSec length must equal roundCount');
+  }
+  if (Array.isArray(c.observationWindowsSec) && c.observationWindowsSec.some((o) => o < 0 || !Number.isInteger(o))) {
+    e.push('observation windows must be non-negative integers');
+  }
+  // The last street's observation window IS the final price-uncertainty tail; require it
+  // to be positive so betting always closes before the settlement price is read (plan_v2 §12).
+  if (Array.isArray(c.observationWindowsSec) && c.observationWindowsSec.length === c.roundCount) {
+    const lastObs = c.observationWindowsSec[c.roundCount - 1] ?? 0;
+    if (lastObs <= 0) e.push('the final street observation window (price-uncertainty tail) must be positive');
+  }
+  if (!Number.isInteger(c.sealWindowSec) || c.sealWindowSec <= 0) e.push('sealWindowSec must be a positive integer');
+  if (!Number.isInteger(c.beginLiveWindowSec) || c.beginLiveWindowSec <= 0) e.push('beginLiveWindowSec must be a positive integer');
+  if (!Number.isInteger(c.nonsealPenaltyBps) || c.nonsealPenaltyBps < 0 || c.nonsealPenaltyBps > 10_000) {
+    e.push('nonsealPenaltyBps must be an integer in 0..=10000');
+  }
   const matchDuration = c.roundDurationsSec.reduce((a, b) => a + b, 0);
   if (c.settlementWindowSec <= 0) e.push('settlementWindow must be positive');
   if (c.settlementWindowSec > matchDuration) e.push('settlementWindow exceeds match duration');
@@ -109,6 +141,36 @@ export function validateConfig(c: MatchConfig): string[] {
 
 export function isValid(c: MatchConfig): boolean {
   return validateConfig(c).length === 0;
+}
+
+/**
+ * Total wall-clock betting span (seconds) = Σ street durations + Σ observation windows.
+ * This is what `begin_live` adds to `live_start_ts` to derive `scheduled_end_ts`, and
+ * what the on-chain `CreateParams.total_betting_duration_sec` must equal (plan_v2 §A/§D).
+ */
+export function totalBettingDurationSec(c: MatchConfig): number {
+  const betting = c.roundDurationsSec.reduce((a, b) => a + b, 0);
+  const observation = (c.observationWindowsSec ?? []).reduce((a, b) => a + b, 0);
+  return betting + observation;
+}
+
+/**
+ * Derive the drand `timelock_target` round a prediction is sealed to. Must land in the
+ * on-chain valid window (plan_v2 §I): `(latest_match_end, latest_match_end + MAX_TIMELOCK_SKEW_SEC]`
+ * where `latest_match_end = projectedLiveStart + totalBettingDuration + beginLiveWindowSec`
+ * (the latest possible match end given the begin_live slack). Picking the FIRST round after
+ * `latest_match_end` publishes within one beacon period (3s) → always inside the 20s skew,
+ * concealment-safe and promptly decryptable. (`timelockTargetOffsetSec` is no longer used
+ * for this and is retained only as legacy config metadata.)
+ * Mirrors the on-chain pinned-beacon math: round publish = genesis + round*period.
+ */
+export const DRAND_GENESIS_TIME = 1_692_803_367;
+export const DRAND_PERIOD_SEC = 3;
+export function timelockTargetRound(c: MatchConfig, projectedLiveStartUnix: number): number {
+  const latestMatchEnd = projectedLiveStartUnix + totalBettingDurationSec(c) + c.beginLiveWindowSec;
+  // First round whose publish time is strictly after the latest possible match end.
+  const round = Math.floor((latestMatchEnd - DRAND_GENESIS_TIME) / DRAND_PERIOD_SEC) + 1;
+  return Math.max(round, 1);
 }
 
 export interface BoundConfig {
@@ -157,8 +219,7 @@ export function defaultFeedUsdcTier(priceFeedId: string, buyIn: number): MatchCo
     supportedFeeds: [...DEFAULT_SUPPORTED_FEEDS],
     chipsToken: 'USDC',
     oracleAdapter: ORACLE_ADAPTER_PYTH,
-    settlementMode: SETTLEMENT_MODE_BOUNDED_EXACT_AFTER,
-    oracleDelayWindowSec: DEFAULT_ORACLE_DELAY_WINDOW_SEC,
+    settlementMode: SETTLEMENT_MODE_EXACT_TIMESTAMP,
     oracleUnavailableMessage: DEFAULT_ORACLE_UNAVAILABLE_MESSAGE,
     buyIn,
     maxBuyIn: 5_000_000_000_000,
@@ -174,7 +235,11 @@ export function defaultFeedUsdcTier(priceFeedId: string, buyIn: number): MatchCo
     actionTimerSec: 25,
     timeBankSec: 60,
     roundCount: 3,
-    roundDurationsSec: [240, 180, 180],
+    roundDurationsSec: [220, 160, 120],
+    observationWindowsSec: [20, 20, 40],
+    sealWindowSec: DEFAULT_SEAL_WINDOW_SEC,
+    beginLiveWindowSec: DEFAULT_BEGIN_LIVE_WINDOW_SEC,
+    nonsealPenaltyBps: DEFAULT_NONSEAL_PENALTY_BPS,
     settlementWindowSec: 60,
     timelockTargetOffsetSec: 600,
     geofenceBlocklist: [...DEFAULT_GEOFENCE_BLOCKLIST],
@@ -200,7 +265,7 @@ export function defaultSolUsdcTier(buyIn: number): MatchConfig {
 /** No-stakes practice preset — identical rules, zero custody. */
 export function practiceModeConfig(priceFeedId = 'BTC/USD'): MatchConfig {
   const base = defaultFeedUsdcTier(priceFeedId, 0);
-  return { ...base, buyIn: 0, entryFee: 0, rakeBps: 0, rakeCap: 0, practiceMode: true, fillWindowSec: 60 };
+  return { ...base, buyIn: 0, entryFee: 0, rakeBps: 0, rakeCap: 0, nonsealPenaltyBps: 0, practiceMode: true, fillWindowSec: 60 };
 }
 
 export const TIER_BUY_INS = {
@@ -269,4 +334,62 @@ export function getTierForFeed(tierId: string, feedId: string): TierDefinition |
   const config = defaultFeedUsdcTier(feedId, buyIn);
   config.fillWindowSec = tier.fillWindowSec;
   return { ...tier, config };
+}
+
+/**
+ * A published, hashed game template (plan_v2 §C/§H). Each (non-practice) tier × supported
+ * feed is a coexisting template. The indexer projects ONLY matches whose on-chain
+ * `config_hash` is in this allowlist; clients use the template to build the
+ * `[create_match, deposit]` params (durations, sealWindow, penalty, oracle tolerance).
+ */
+export interface GameTemplate {
+  templateId: string;
+  tierId: string;
+  label: string;
+  feed: string;
+  buyIn: number;
+  config: MatchConfig;
+  configHash: string;
+  totalBettingDurationSec: number;
+}
+
+/** Build every coexisting published template across tiers and supported feeds. */
+export function buildTemplates(): GameTemplate[] {
+  const catalog = buildConfigCatalog();
+  const out: GameTemplate[] = [];
+  for (const tier of catalog.tiers) {
+    const feeds = tier.practiceMode ? catalog.feeds : catalog.feeds;
+    for (const feed of feeds) {
+      const t = getTierForFeed(tier.tierId, feed);
+      if (!t) continue;
+      const bound = bindConfig(t.config);
+      out.push({
+        templateId: `${tier.tierId}:${feed}`,
+        tierId: tier.tierId,
+        label: tier.label,
+        feed,
+        buyIn: t.buyIn,
+        config: t.config,
+        configHash: bound.hash,
+        totalBettingDurationSec: totalBettingDurationSec(t.config),
+      });
+    }
+  }
+  return out;
+}
+
+/** config_hash -> template map (consumed by indexer allowlist + client). */
+export function buildTemplateHashMap(): Map<string, GameTemplate> {
+  const m = new Map<string, GameTemplate>();
+  for (const t of buildTemplates()) m.set(t.configHash, t);
+  return m;
+}
+
+/** Allowlisted config hashes — the indexer ignores matches with any other config_hash. */
+export function templateAllowlist(): Set<string> {
+  return new Set(buildTemplates().map((t) => t.configHash));
+}
+
+export function getTemplateByHash(configHash: string): GameTemplate | undefined {
+  return buildTemplateHashMap().get(configHash);
 }

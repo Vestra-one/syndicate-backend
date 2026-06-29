@@ -79,7 +79,6 @@ mod tests {
 
     #[test]
     fn schema_preserves_launch_policy_defaults() {
-        assert!(POSTGRES_SCHEMA_V1.contains("oracle_delay_window_sec integer NOT NULL DEFAULT 5"));
         assert!(
             POSTGRES_SCHEMA_V1.contains("geofence_blocklist text[] NOT NULL DEFAULT ARRAY['IN']")
         );

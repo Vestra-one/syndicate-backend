@@ -1,9 +1,9 @@
-//! Pyth bounded exact-after oracle validation.
+//! Signed-price oracle validation.
 //!
-//! The canonical settlement price is the first valid Pyth update whose publish time is
-//! inside `[scheduled_end_ts, scheduled_end_ts + oracle_delay_window_sec]`. This module
-//! is pure and signature-agnostic: the Solana program is responsible for verifying the
-//! Pyth account/proof, then feeds the authenticated metadata through these same rules.
+//! The canonical settlement price is the signed price whose publish time exactly equals
+//! `scheduled_end_ts`. This module is pure and signature-agnostic: the Solana program
+//! is responsible for verifying the secp256k1 signature, then feeds the authenticated
+//! metadata through these same rules.
 
 use crate::types::{CoreError, Price};
 
@@ -25,7 +25,6 @@ pub struct OraclePriceUpdate {
 pub struct OracleValidation {
     pub expected_feed_id: FeedId,
     pub scheduled_end_ts: u64,
-    pub oracle_delay_window_sec: u64,
     pub max_confidence: u64,
     pub expected_exponent: i32,
 }
@@ -40,15 +39,7 @@ pub struct VerifiedOraclePrice {
     pub exponent: i32,
 }
 
-impl OracleValidation {
-    pub fn window_end(&self) -> Result<u64, CoreError> {
-        self.scheduled_end_ts
-            .checked_add(self.oracle_delay_window_sec)
-            .ok_or(CoreError::InvalidOraclePrice)
-    }
-}
-
-/// Validate one authenticated Pyth update against the bound match rules.
+/// Validate one authenticated price update against the bound match rules (exact timestamp).
 pub fn validate_oracle_update(
     update: &OraclePriceUpdate,
     rules: &OracleValidation,
@@ -62,8 +53,7 @@ pub fn validate_oracle_update(
     if update.confidence > rules.max_confidence {
         return Err(CoreError::InvalidOraclePrice);
     }
-    let window_end = rules.window_end()?;
-    if update.publish_time < rules.scheduled_end_ts || update.publish_time > window_end {
+    if update.publish_time != rules.scheduled_end_ts {
         return Err(CoreError::InvalidOraclePrice);
     }
     Ok(VerifiedOraclePrice {
@@ -75,33 +65,17 @@ pub fn validate_oracle_update(
     })
 }
 
-/// Select the first valid Pyth update in the configured bounded exact-after window.
-///
-/// If multiple valid updates share the same publish time, the first one in the provided
-/// slice wins. In production the settlement worker should pass updates in provider
-/// order; on-chain verification still validates the selected update's metadata.
+/// Select the first valid update whose publish time exactly matches `scheduled_end_ts`.
 pub fn first_valid_oracle_update(
     updates: &[OraclePriceUpdate],
     rules: &OracleValidation,
 ) -> Result<VerifiedOraclePrice, CoreError> {
-    let mut selected: Option<(usize, VerifiedOraclePrice)> = None;
-    for (idx, update) in updates.iter().enumerate() {
-        let verified = match validate_oracle_update(update, rules) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        match selected {
-            None => selected = Some((idx, verified)),
-            Some((best_idx, best)) => {
-                if verified.publish_time < best.publish_time
-                    || (verified.publish_time == best.publish_time && idx < best_idx)
-                {
-                    selected = Some((idx, verified));
-                }
-            }
+    for update in updates {
+        if let Ok(verified) = validate_oracle_update(update, rules) {
+            return Ok(verified);
         }
     }
-    selected.map(|(_, v)| v).ok_or(CoreError::OracleUnavailable)
+    Err(CoreError::OracleUnavailable)
 }
 
 #[cfg(test)]
@@ -115,7 +89,6 @@ mod tests {
         OracleValidation {
             expected_feed_id: FEED,
             scheduled_end_ts: 1_000,
-            oracle_delay_window_sec: 5,
             max_confidence: 50,
             expected_exponent: -8,
         }
@@ -138,19 +111,14 @@ mod tests {
     }
 
     #[test]
-    fn selects_first_valid_update_inside_window() {
-        let updates = vec![
-            u(FEED, 99, 999, 10, -8),    // before lower bound
-            u(FEED, 102, 1_002, 10, -8), // valid, but later
-            u(FEED, 100, 1_000, 10, -8), // first valid by publish_time
-        ];
-        let selected = first_valid_oracle_update(&updates, &rules()).unwrap();
+    fn accepts_exact_timestamp_match() {
+        let selected = validate_oracle_update(&u(FEED, 100, 1_000, 10, -8), &rules()).unwrap();
         assert_eq!(selected.price, 100);
         assert_eq!(selected.publish_time, 1_000);
     }
 
     #[test]
-    fn rejects_wrong_feed_confidence_exponent_and_window_miss() {
+    fn rejects_wrong_feed_confidence_exponent_and_timestamp() {
         let r = rules();
         assert_eq!(
             validate_oracle_update(&u(OTHER, 100, 1_000, 10, -8), &r),
@@ -165,7 +133,11 @@ mod tests {
             Err(CoreError::InvalidOraclePrice)
         );
         assert_eq!(
-            validate_oracle_update(&u(FEED, 100, 1_006, 10, -8), &r),
+            validate_oracle_update(&u(FEED, 100, 1_001, 10, -8), &r),
+            Err(CoreError::InvalidOraclePrice)
+        );
+        assert_eq!(
+            validate_oracle_update(&u(FEED, 100, 999, 10, -8), &r),
             Err(CoreError::InvalidOraclePrice)
         );
         assert_eq!(

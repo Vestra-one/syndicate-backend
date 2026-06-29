@@ -7,7 +7,6 @@
 //!
 //! Demo mode (non-mainnet only) exercises the in-memory settlement path for local dev.
 
-mod action_log_sync;
 mod consumer;
 mod health;
 mod metrics;
@@ -300,7 +299,7 @@ mod demo {
     use syndicate_engine::{Action, Engine};
     use syndicate_settlement::ops::{
         PythFetchRequest, PythSelectedProof, PythSettlementContext, SettlementJob,
-        SolanaMatchContext,
+        SignedPricePayload, SolanaMatchContext,
     };
     use syndicate_settlement::{seal_binding_for, settle_match, Outcome, SettleParams};
     use syndicate_shared::{PlayerId, VerifiedOraclePrice};
@@ -318,12 +317,13 @@ mod demo {
                     "demo-wallet-1".into(),
                     "demo-wallet-2".into(),
                 ],
+                buy_in_chips: 100,
             },
             pyth_context: PythSettlementContext {
                 rules: PythFetchRequest {
+                    symbol: "BTCUSD".into(),
                     feed_id: [7u8; 32],
                     scheduled_end_ts: 1_000,
-                    oracle_delay_window_sec: 5,
                     max_confidence: 50,
                     expected_exponent: -8,
                 },
@@ -340,6 +340,19 @@ mod demo {
                     binary_update_hash: "22".repeat(32),
                     hermes_url: None,
                 }),
+                signed_price: Some(SignedPricePayload {
+                    token: "0xa7BaE7da3E4950700BE9f107EB186e89a474d180".into(),
+                    symbol: "BTCUSD".into(),
+                    price_in_wad: "100000".into(),
+                    timestamp: 1_000_000,
+                    v: 27,
+                    r: format!("0x{}", "11".repeat(32)),
+                    s: format!("0x{}", "22".repeat(32)),
+                    signed_at: Some(1_000_001),
+                }),
+                signed_price_source_url: Some(
+                    "http://127.0.0.1:8080/prices/at?symbol=BTCUSD&timestamp=1000".into(),
+                ),
             },
             outcome: sample_outcome(),
         }
@@ -388,6 +401,7 @@ mod demo {
         let params = SettleParams {
             rake_bps: 0,
             rake_cap: 0,
+            dead_money: 0,
         };
         let mut bindings = BTreeMap::new();
         for (id, pred) in [(0u16, 100_010i128), (1, 99_000), (2, 100_500)] {

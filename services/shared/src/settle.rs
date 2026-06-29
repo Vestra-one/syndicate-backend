@@ -26,6 +26,13 @@ pub struct SettleInput<'a> {
     pub rake_bps: u32,
     /// Per-pot rake cap in chips.
     pub rake_cap: Chips,
+    /// Non-sealer penalty pool injected into the main pot before award: the sum of
+    /// `buy_in * nonseal_penalty_bps` forfeited by seats that had the seal window but
+    /// did not commit, collected at `begin_live` (plan_v2 §4/§5). It is treated as
+    /// standard dead money — added to the lowest pot layer, raked with it, and awarded
+    /// to that pot's closest-prediction winner(s). Conservation:
+    /// `total_in = Σ contributions + dead_money`.
+    pub dead_money: Chips,
 }
 
 /// The deterministic settlement result.
@@ -48,7 +55,38 @@ pub struct SettleResult {
 pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
     let s = input.oracle_price.price;
 
-    let layout = build_pots(input.players)?;
+    let mut layout = build_pots(input.players)?;
+
+    // Inject the non-sealer penalty pool as dead money (plan_v2 §4/§5). Standard
+    // treatment: add it to the main (lowest) pot so it is raked with that pot and
+    // awarded to its closest-prediction winner(s). If no pot formed (degenerate:
+    // fewer than two contributors — not reachable once blinds are posted in real
+    // flow, but possible for arbitrary settle() inputs), it becomes a synthetic pot
+    // contested by the non-folded players, so no chip is ever stranded.
+    if input.dead_money > 0 {
+        match layout.pots.first_mut() {
+            Some(main) => {
+                main.amount = main
+                    .amount
+                    .checked_add(input.dead_money)
+                    .ok_or(CoreError::ConservationViolation)?;
+            }
+            None => {
+                let contributors: Vec<PlayerId> = input.players.iter().map(|p| p.id).collect();
+                let eligible: Vec<PlayerId> = input
+                    .players
+                    .iter()
+                    .filter(|p| !p.folded)
+                    .map(|p| p.id)
+                    .collect();
+                layout.pots.push(Pot {
+                    amount: input.dead_money,
+                    contributors,
+                    eligible,
+                });
+            }
+        }
+    }
 
     let mut awards_raw: Vec<Award> = Vec::new();
     let mut returns_raw: Vec<(PlayerId, Chips)> = layout.uncalled_returns.clone();
@@ -74,8 +112,14 @@ pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
     let pot_awards = merge_by_player(awards_raw);
     let uncalled_returns = merge_returns(returns_raw);
 
-    // Conservation (net of fees): awards + returns + rake == total contributions.
-    let total_in: u128 = input.players.iter().map(|p| p.contribution as u128).sum();
+    // Conservation (net of fees): awards + returns + rake == total contributions
+    // plus the injected non-sealer penalty pool (plan_v2 §4).
+    let total_in: u128 = input
+        .players
+        .iter()
+        .map(|p| p.contribution as u128)
+        .sum::<u128>()
+        + input.dead_money as u128;
     let total_out: u128 = pot_awards.iter().map(|a| a.amount as u128).sum::<u128>()
         + uncalled_returns
             .iter()

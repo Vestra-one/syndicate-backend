@@ -17,7 +17,7 @@ test('Hermes timestamp URL uses ids array and never includes API key', () => {
   assert.doesNotMatch(url, /secret-api-key/);
 });
 
-test('earliest valid candidate wins inside bounded exact-after window', () => {
+test('exact timestamp candidate wins', () => {
   const response = (publishTime: number, conf = '10', expo = -8) => ({
     binary: { encoding: 'hex', data: ['01020304'] },
     parsed: [{ id: feed, price: { price: '100000', conf, expo, publish_time: publishTime } }],
@@ -30,7 +30,6 @@ test('earliest valid candidate wins inside bounded exact-after window', () => {
   const selected = selectEarliestValidPythUpdate(candidates, {
     feedIdHex: feed,
     scheduledEndTs: 1000,
-    oracleDelayWindowSec: 5,
     maxConfidence: 50,
     expectedExponent: -8,
   });
@@ -50,7 +49,6 @@ test('invalid feed exponent confidence and timestamp are rejected', () => {
   const selected = selectEarliestValidPythUpdate(good, {
     feedIdHex: feed,
     scheduledEndTs: 1000,
-    oracleDelayWindowSec: 5,
     maxConfidence: 50,
     expectedExponent: -8,
   });

@@ -445,6 +445,7 @@ mod tests {
             oracle_price: oracle(100),
             rake_bps: 0,
             rake_cap: 0,
+            dead_money: 0,
         };
         let r = settle(&input).unwrap();
         let total_out: u64 = r.pot_awards.iter().map(|a| a.amount).sum::<u64>()

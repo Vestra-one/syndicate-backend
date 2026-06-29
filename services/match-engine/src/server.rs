@@ -32,6 +32,9 @@ pub struct EngineServerState {
 struct ActiveMatch {
     runtime: FencedMatchRuntime,
     action_deadline_ms: u64,
+    /// Server-clock anchor (ms epoch) for street wall-clock deadlines: the on-chain
+    /// `live_start_ts` (seconds → ms) when supplied, else when the engine went live.
+    live_start_ms: u64,
 }
 
 impl EngineServerState {
@@ -94,8 +97,18 @@ struct StartBody {
     big_blind: Option<u64>,
     #[serde(rename = "roundCount")]
     round_count: Option<u8>,
+    #[serde(rename = "roundDurationsSec")]
+    round_durations_sec: Option<Vec<u64>>,
+    #[serde(rename = "observationWindowsSec")]
+    observation_windows_sec: Option<Vec<u64>>,
     #[serde(rename = "actionTimeoutMs")]
     action_timeout_ms: Option<u64>,
+    #[serde(rename = "timeBankSec")]
+    time_bank_sec: Option<u64>,
+    /// On-chain-stamped live_start (unix seconds) from begin_live; absolute street
+    /// deadlines are derived from it so every client renders the identical countdown.
+    #[serde(rename = "liveStartTs")]
+    live_start_ts: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -202,7 +215,12 @@ async fn timeout_loop(state: EngineServerState) {
             let Some(to_act) = active.runtime.engine().to_act else {
                 continue;
             };
-            if now < active.action_deadline_ms {
+            // The current actor is resolved at whichever fires first: their per-turn
+            // timer, or the street's wall-clock hard cap (plan_v2 §H). Repeated each poll,
+            // this force-resolves every pending actor at the street deadline.
+            let street_close_ms = active.runtime.current_street_close_ms(active.live_start_ms);
+            let effective_deadline = active.action_deadline_ms.min(street_close_ms);
+            if now < effective_deadline {
                 continue;
             }
             let default = active
@@ -211,7 +229,7 @@ async fn timeout_loop(state: EngineServerState) {
                 .get(&to_act)
                 .map(|p| p.policy)
                 .unwrap_or(DefaultAction::CheckFold);
-            let deadline = active.action_deadline_ms;
+            let deadline = effective_deadline;
             let mut coord = state.coordinator.lock().await;
             let Some(coordinator) = coord.as_mut() else {
                 continue;
@@ -300,11 +318,16 @@ async fn start_match(state: &EngineServerState, body: &str) -> (&'static str, St
             }
         };
         let runtime = FencedMatchRuntime::start(config, lease);
+        let start_ms = now_ms();
         runtimes.insert(
             input.match_id.clone(),
             ActiveMatch {
                 runtime,
-                action_deadline_ms: now_ms() + 25_000,
+                action_deadline_ms: start_ms + 25_000,
+                live_start_ms: input
+                    .live_start_ts
+                    .map(|s| s.saturating_mul(1000))
+                    .unwrap_or(start_ms),
             },
         );
         return (
@@ -333,6 +356,10 @@ async fn start_match(state: &EngineServerState, body: &str) -> (&'static str, St
                 ActiveMatch {
                     runtime,
                     action_deadline_ms: now.saturating_add(timeout),
+                    live_start_ms: input
+                        .live_start_ts
+                        .map(|s| s.saturating_mul(1000))
+                        .unwrap_or(now),
                 },
             );
             let payload = serde_json::json!({
@@ -415,6 +442,15 @@ async fn apply_action(
     };
 
     let now = now_ms();
+    // Reject bets outside the current street's betting window — during a per-street
+    // observation gap or after the match's betting span (plan_v2 §8/§12). The price keeps
+    // moving untouched toward settlement, preserving end-of-match uncertainty.
+    if !active.runtime.betting_open(active.live_start_ms, now) {
+        return (
+            "409 Conflict",
+            r#"{"error":"betting closed for this street (observation window)"}"#.into(),
+        );
+    }
     let mut coord = state.coordinator.lock().await;
     if let Some(coordinator) = coord.as_mut() {
         match coordinator
@@ -561,7 +597,24 @@ async fn get_state(state: &EngineServerState, match_id: &str) -> (&'static str, 
     ("200 OK", serde_json::to_string(&resp).unwrap_or_default())
 }
 
+/// Size a per-street timing vector to exactly `round_count` entries: use the supplied
+/// vector if it already matches; otherwise pad/truncate with `fill` so street math is
+/// always well-formed even if a caller under-specifies.
+fn sized_streets(supplied: &Option<Vec<u64>>, round_count: u8, fill: u64) -> Vec<u64> {
+    let n = round_count as usize;
+    match supplied {
+        Some(v) if v.len() == n => v.clone(),
+        Some(v) => {
+            let mut out = v.clone();
+            out.resize(n, fill);
+            out
+        }
+        None => vec![fill; n],
+    }
+}
+
 fn build_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
+    let round_count = input.round_count.unwrap_or(3);
     MatchConfig {
         match_id: input.match_id.clone(),
         onchain_match_id: input.onchain_match_id.unwrap_or(1),
@@ -572,8 +625,11 @@ fn build_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
         button: input.button.unwrap_or(0) as usize,
         small_blind: input.small_blind.unwrap_or(1),
         big_blind: input.big_blind.unwrap_or(2),
-        round_count: input.round_count.unwrap_or(3),
+        round_count,
+        round_durations_sec: sized_streets(&input.round_durations_sec, round_count, 180),
+        observation_windows_sec: sized_streets(&input.observation_windows_sec, round_count, 20),
         action_timeout_ms: input.action_timeout_ms.unwrap_or(25_000),
+        time_bank_sec: input.time_bank_sec.unwrap_or(60),
         lease_ttl_ms: 60_000,
     }
 }
@@ -588,7 +644,10 @@ fn demo_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
             small_blind: 1,
             big_blind: 2,
             round_count: 3,
+            round_durations_sec: vec![180, 180, 180],
+            observation_windows_sec: vec![20, 20, 20],
             action_timeout_ms: 25_000,
+            time_bank_sec: 60,
             lease_ttl_ms: 60_000,
         };
     }

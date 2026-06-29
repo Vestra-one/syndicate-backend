@@ -16,7 +16,7 @@ pub enum SyndicateError {
     ConservationViolation,
     #[msg("Oracle/settlement inputs invalid or insufficient.")]
     InvalidSettlementInput,
-    #[msg("Pyth Receiver price update account/proof is missing, unauthenticated, or does not match the bound feed.")]
+    #[msg("Signed price proof is missing, unauthenticated, or not from the whitelisted signer.")]
     InvalidOracleProof,
     #[msg("Seat already claimed.")]
     AlreadyClaimed,
@@ -48,8 +48,28 @@ pub enum SyndicateError {
     SettlementDeadlinePassed,
     #[msg("Match fees were already withdrawn.")]
     FeesAlreadyWithdrawn,
-    #[msg("VRF button seed has not been recorded.")]
+    #[msg("Dealer button has not been recorded.")]
     ButtonNotSet,
-    #[msg("VRF seed does not match the recorded match seed.")]
-    VrfSeedMismatch,
+    #[msg("Seal window has closed; commitment rejected (after seal_deadline_ts).")]
+    SealWindowClosed,
+    #[msg("Seal deadline has not been reached; cannot begin live yet.")]
+    SealDeadlineNotReached,
+    #[msg("Fill deadline has not been reached; cannot permissionlessly void yet.")]
+    FillDeadlineNotReached,
+    #[msg("Settlement grace has not elapsed; cannot permissionlessly void the live match yet.")]
+    SettleGraceNotElapsed,
+    #[msg("begin_live window elapsed; the operator did not start the match in time (void only).")]
+    BeginLiveWindowPassed,
+    #[msg("Seat has already recorded a seal commitment.")]
+    AlreadySealed,
+    #[msg("drand button round is invalid (must publish after the seal deadline).")]
+    InvalidDrandRound,
+    #[msg("drand button randomness is missing or does not match the committed round.")]
+    InvalidButtonRandomness,
+    #[msg("Oracle tolerance window is too wide; must be tight (single-update).")]
+    OracleToleranceTooWide,
+    #[msg("Invalid match configuration parameter.")]
+    InvalidConfig,
+    #[msg("Refund not available for this seat in the current void kind.")]
+    RefundUnavailable,
 }

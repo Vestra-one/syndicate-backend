@@ -25,7 +25,6 @@ pub struct SettlementRequest {
     pub event_root: String,
     pub scheduled_end_ts: u64,
     pub pyth_feed_id: String,
-    pub oracle_delay_window_sec: u64,
     pub oracle_exponent: i32,
     pub max_oracle_confidence: u64,
     pub rake_bps: u32,
@@ -99,16 +98,16 @@ pub async fn reconstruct_job<C: PythResolveClient, T: TimelockOpenClient>(
     require_seals_for_all_seats(&snapshot.engine, &sealed_players)?;
     let feed_id = context.pyth_feed_id;
     let pyth_request = PythFetchRequest {
+        symbol: context.price_feed_symbol.clone(),
         feed_id,
         scheduled_end_ts: context.scheduled_end_ts,
-        oracle_delay_window_sec: context.oracle_delay_window_sec,
         max_confidence: context.max_oracle_confidence,
         expected_exponent: context.oracle_exponent,
     };
     let resolved = match oracle.resolve_pyth(&pyth_request) {
         Ok(Some(resolved)) => Some(resolved),
         Ok(None) => None,
-        Err(e) => return Err(ReconstructError::Oracle(format!("{e:?}"))),
+        Err(_) => None,
     };
     let oracle_price = resolved.as_ref().map(|r| r.price);
     let opened = match timelock.open(&TimelockOpenRequest {
@@ -138,10 +137,13 @@ pub async fn reconstruct_job<C: PythResolveClient, T: TimelockOpenClient>(
                 chain_context: SolanaMatchContext {
                     onchain_match_id: context.onchain_match_id,
                     seat_wallets,
+                    buy_in_chips: context.buy_in_chips,
                 },
                 pyth_context: PythSettlementContext {
                     rules: pyth_request,
-                    selected: resolved.map(|r| r.selected),
+                    selected: resolved.as_ref().map(|r| r.selected.clone()),
+                    signed_price_source_url: resolved.as_ref().and_then(|r| r.source_url.clone()),
+                    signed_price: resolved.map(|r| r.signed_price),
                 },
                 outcome,
             });
@@ -156,6 +158,7 @@ pub async fn reconstruct_job<C: PythResolveClient, T: TimelockOpenClient>(
     let params = SettleParams {
         rake_bps: context.rake_bps,
         rake_cap: context.rake_cap,
+        dead_money: context.dead_money,
     };
     let outcome = settle_match(
         &snapshot.engine,
@@ -174,10 +177,13 @@ pub async fn reconstruct_job<C: PythResolveClient, T: TimelockOpenClient>(
         chain_context: SolanaMatchContext {
             onchain_match_id: context.onchain_match_id,
             seat_wallets,
+            buy_in_chips: context.buy_in_chips,
         },
         pyth_context: PythSettlementContext {
             rules: pyth_request,
-            selected: resolved.map(|r| r.selected),
+            selected: resolved.as_ref().map(|r| r.selected.clone()),
+            signed_price_source_url: resolved.as_ref().and_then(|r| r.source_url.clone()),
+            signed_price: resolved.map(|r| r.signed_price),
         },
         outcome,
     })
@@ -199,7 +205,6 @@ pub async fn reconstruct_job_from_attempt<C: PythResolveClient, T: TimelockOpenC
             event_root: hex::encode(event_root),
             scheduled_end_ts: context.scheduled_end_ts,
             pyth_feed_id: hex::encode(context.pyth_feed_id),
-            oracle_delay_window_sec: context.oracle_delay_window_sec,
             oracle_exponent: context.oracle_exponent,
             max_oracle_confidence: context.max_oracle_confidence,
             rake_bps: context.rake_bps,
@@ -217,12 +222,14 @@ struct LoadedContext {
     event_root: [u8; 32],
     onchain_match_id: u64,
     scheduled_end_ts: u64,
+    price_feed_symbol: String,
     pyth_feed_id: [u8; 32],
-    oracle_delay_window_sec: u64,
+    buy_in_chips: u64,
     oracle_exponent: i32,
     max_oracle_confidence: u64,
     rake_bps: u32,
     rake_cap: u64,
+    dead_money: u64,
 }
 
 async fn load_context(pool: &Pool, match_id: &str) -> Result<LoadedContext, ReconstructError> {
@@ -255,12 +262,14 @@ async fn load_context(pool: &Pool, match_id: &str) -> Result<LoadedContext, Reco
         event_root,
         onchain_match_id: onchain_match_id as u64,
         scheduled_end_ts: row.get::<_, i64>("scheduled_end_ts_sec") as u64,
+        price_feed_symbol: row.get("price_feed_symbol"),
         pyth_feed_id,
-        oracle_delay_window_sec: row.get::<_, i32>("oracle_delay_window_sec") as u64,
+        buy_in_chips: row.get::<_, i64>("buy_in_chips") as u64,
         oracle_exponent: row.get("oracle_exponent"),
         max_oracle_confidence: row.get::<_, i64>("max_oracle_confidence") as u64,
         rake_bps: row.get::<_, i32>("rake_bps") as u32,
         rake_cap: row.get::<_, i64>("rake_cap_chips") as u64,
+        dead_money: row.get::<_, i64>("dead_money_chips") as u64,
     })
 }
 

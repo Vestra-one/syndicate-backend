@@ -16,7 +16,6 @@ const OTHER_FEED = '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a
 const RULES = {
   feedIdHex: FEED,
   scheduledEndTs: 1_000,
-  oracleDelayWindowSec: 5,
   maxConfidence: 50n,
   expectedExponent: -8,
 };
@@ -39,17 +38,17 @@ test('API key redaction never exposes the secret', () => {
   assert.equal(serialized.includes('super-secret-pyth-key'), false);
 });
 
-test('earliest valid update selection ignores later valid candidates', () => {
+test('exact timestamp candidate is selected', () => {
   const selected = selectEarliestValidPythUpdate([
     candidate({ publishTime: 1_004, price: 104n }),
-    candidate({ publishTime: 1_001, price: 101n }),
+    candidate({ publishTime: 1_000, price: 100n }),
     candidate({ publishTime: 1_002, price: 102n }),
   ], RULES);
-  assert.equal(selected.price, 101n);
-  assert.equal(selected.publishTime, 1_001);
+  assert.equal(selected.price, 100n);
+  assert.equal(selected.publishTime, 1_000);
 });
 
-test('invalid Pyth candidates are rejected by feed, exponent, confidence, and window', () => {
+test('invalid Pyth candidates are rejected by feed, exponent, confidence, and exact timestamp', () => {
   assert.equal(selectEarliestValidPythUpdate([candidate({ feedIdHex: OTHER_FEED })], RULES), null);
   assert.equal(selectEarliestValidPythUpdate([candidate({ exponent: -9 })], RULES), null);
   assert.equal(selectEarliestValidPythUpdate([candidate({ confidence: 51n })], RULES), null);
@@ -72,7 +71,7 @@ test('Hermes extraction converts hex binary updates to base64 receiver input', (
   assert.match(candidateFromHermes.binaryUpdateHash, /^[0-9a-f]{64}$/);
 });
 
-test('fetcher scans the exact-after window and selects first valid publish_time', async () => {
+test('fetcher requests the exact scheduled_end_ts only', async () => {
   const requests = [];
   const client = {
     async getPriceUpdatesAtTimestamp(ts, ids, options) {
@@ -82,19 +81,19 @@ test('fetcher scans the exact-after window and selects first valid publish_time'
         parsed: [{
           id: FEED,
           price: {
-            price: String(100_000 + ts),
+            price: '100000',
             conf: '10',
             expo: -8,
-            publish_time: ts === 1_000 ? 999 : ts,
+            publish_time: ts,
           },
         }],
       };
     },
   };
   const selected = await fetchEarliestValidPythUpdate({ client, ...RULES });
-  assert.equal(selected.publishTime, 1_001);
-  assert.equal(selected.price, 101_001n);
-  assert.equal(requests.length, 6);
+  assert.equal(selected.publishTime, 1_000);
+  assert.equal(selected.price, 100_000n);
+  assert.equal(requests.length, 1);
   assert.deepEqual(requests[0], {
     ts: 1_000,
     ids: [normalizeFeedIdHex(FEED)],
@@ -102,22 +101,22 @@ test('fetcher scans the exact-after window and selects first valid publish_time'
   });
 });
 
-test('audit receipt records two-step settlement mode and all signatures', () => {
+test('audit receipt records settlement signatures', () => {
   const receipt = pythAuditReceipt({
     matchId: 42n,
     idempotencyKey: 'match:42',
-    selected: candidate({ publishTime: 1_001, price: 101n }),
+    selected: candidate({ publishTime: 1_000, price: 100n }),
     priceUpdateAccount: 'price-update-account',
     settlementTxSignature: 'settle-sig',
-    settlementTxSignatures: ['post-sig', 'settle-sig'],
-    settlementMode: 'two_step',
+    settlementTxSignatures: ['settle-sig'],
+    settlementMode: 'signed_price',
     receiverProgramId: 'receiver',
     wormholeProgramId: 'wormhole',
     pushOracleProgramId: 'push',
   });
-  assert.equal(receipt.settlementMode, 'two_step');
+  assert.equal(receipt.settlementMode, 'signed_price');
   assert.equal(receipt.atomicSettlementTxSignature, 'settle-sig');
-  assert.deepEqual(receipt.settlementTxSignatures, ['post-sig', 'settle-sig']);
+  assert.deepEqual(receipt.settlementTxSignatures, ['settle-sig']);
 });
 
 function candidate(overrides = {}) {

@@ -75,6 +75,7 @@ mod engine_tests {
             oracle_price: oracle(100_000),
             rake_bps: 0,
             rake_cap: 0,
+            dead_money: 0,
         };
         let r = settle(&input).unwrap();
         assert_eq!(r.pot_awards[0].amount, 6);

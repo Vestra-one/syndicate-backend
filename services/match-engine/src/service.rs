@@ -22,7 +22,17 @@ pub struct MatchConfig {
     pub small_blind: Chips,
     pub big_blind: Chips,
     pub round_count: u8,
+    /// Per-street betting window (seconds), one per street; `len == round_count`. The
+    /// street's wall-clock hard cap = live_start + Σ(prior streets' duration+observation)
+    /// + this street's duration (plan_v2 §D/§H).
+    pub round_durations_sec: Vec<u64>,
+    /// Per-street no-betting observation window (seconds), one per street; the last one
+    /// is the final price-uncertainty tail before scheduled_end_ts (plan_v2 §8/§12).
+    pub observation_windows_sec: Vec<u64>,
+    /// Per-turn action timer (ms). Normal turn-based pace within a street.
     pub action_timeout_ms: u64,
+    /// Replenishing per-street time bank (seconds), drawn only when a turn overflows.
+    pub time_bank_sec: u64,
     pub lease_ttl_ms: u64,
 }
 
@@ -345,6 +355,125 @@ impl FencedMatchRuntime {
             deadline_ms,
             fired_at_ms: now_ms,
         }))
+    }
+
+    /// Wall-clock offset (seconds from live_start) at which street `round` (1-based)
+    /// stops accepting bets, i.e. its betting window closes. Sum of all prior streets'
+    /// (betting + observation) plus this street's betting window (plan_v2 §H).
+    pub fn betting_close_offset_sec(&self, round: u8) -> u64 {
+        let durs = &self.config.round_durations_sec;
+        let obs = &self.config.observation_windows_sec;
+        let k = round as usize;
+        let mut off = 0u64;
+        for i in 0..k.saturating_sub(1) {
+            off = off
+                .saturating_add(durs.get(i).copied().unwrap_or(0))
+                .saturating_add(obs.get(i).copied().unwrap_or(0));
+        }
+        off.saturating_add(durs.get(k.saturating_sub(1)).copied().unwrap_or(0))
+    }
+
+    /// Wall-clock offset (seconds from live_start) at which street `round` fully ends
+    /// (betting + its observation window). The last street's value is the whole match
+    /// span (== scheduled_end - live_start).
+    pub fn street_end_offset_sec(&self, round: u8) -> u64 {
+        let obs = &self.config.observation_windows_sec;
+        self.betting_close_offset_sec(round)
+            .saturating_add(obs.get(round as usize - 1).copied().unwrap_or(0))
+    }
+
+    /// Wall-clock offset (seconds from live_start) at which street `round` (1-based)
+    /// OPENS for betting (after all prior streets' betting + observation).
+    pub fn street_start_offset_sec(&self, round: u8) -> u64 {
+        let durs = &self.config.round_durations_sec;
+        let obs = &self.config.observation_windows_sec;
+        let k = round as usize;
+        let mut off = 0u64;
+        for i in 0..k.saturating_sub(1) {
+            off = off
+                .saturating_add(durs.get(i).copied().unwrap_or(0))
+                .saturating_add(obs.get(i).copied().unwrap_or(0));
+        }
+        off
+    }
+
+    /// True iff `now_ms` is inside the betting window of the engine's CURRENT street,
+    /// given the live-start anchor. Outside it (the per-street observation gap, or before
+    /// live_start) actions are rejected so no bet lands while the price moves untouched
+    /// toward settlement (plan_v2 §8/§12 — preserves end-of-match uncertainty).
+    pub fn betting_open(&self, live_start_ms: u64, now_ms: u64) -> bool {
+        if self.engine.phase != Phase::Live {
+            return false;
+        }
+        let round = self.engine.round;
+        if round == 0 || round > self.config.round_count {
+            return false;
+        }
+        let open = live_start_ms.saturating_add(self.street_start_offset_sec(round).saturating_mul(1000));
+        let close =
+            live_start_ms.saturating_add(self.betting_close_offset_sec(round).saturating_mul(1000));
+        now_ms >= open && now_ms < close
+    }
+
+    /// Wall-clock deadline (ms epoch) at which the engine's current betting street is
+    /// hard-capped and any pending actors are force-resolved.
+    pub fn current_street_close_ms(&self, live_start_ms: u64) -> u64 {
+        live_start_ms
+            .saturating_add(self.betting_close_offset_sec(self.engine.round).saturating_mul(1000))
+    }
+
+    /// Total betting span = scheduled_end - live_start (Σ all durations + observations).
+    pub fn total_betting_duration_sec(&self) -> u64 {
+        let n = self.config.round_count;
+        if n == 0 {
+            0
+        } else {
+            self.street_end_offset_sec(n)
+        }
+    }
+
+    /// Street wall-clock hard cap (plan_v2 §H, money-safety rule): force-resolve EVERY
+    /// still-pending actor in the current betting street, in turn order, using each
+    /// seat's registered default — or the safe `CheckFold` fallback when none is
+    /// registered. `CheckFold` resolves to a free CHECK when `to_call == 0` (the actor
+    /// keeps their seat for nothing) and to FOLD when facing an unmatched bet — it NEVER
+    /// auto-commits chips a player didn't act on, so pot eligibility is never granted
+    /// without payment. Each resolution is recorded as an engine-authored timeout event
+    /// so the on-chain replay + binding check stay faithful. Stops when the street closes
+    /// (round advances) or the match completes. Returns the number of seats resolved.
+    pub fn force_resolve_street(
+        &mut self,
+        leases: &impl LeaseAuthorizer,
+        now_ms: u64,
+    ) -> Result<usize, MatchServiceError> {
+        leases.assert_current(&self.lease, now_ms)?;
+        let start_round = self.engine.round;
+        let mut resolved = 0usize;
+        // Bounded by seat count: each iteration resolves the current actor and advances
+        // `to_act`; the street closes once all contenders have matched/folded.
+        let max_iters = self.engine.seats.len().saturating_add(1);
+        while self.engine.phase == Phase::Live
+            && self.engine.round == start_round
+            && resolved <= max_iters
+        {
+            let Some(seat) = self.engine.to_act else {
+                break;
+            };
+            let default = self
+                .registered_defaults
+                .get(&seat)
+                .map(|p| p.policy)
+                .unwrap_or(DefaultAction::CheckFold);
+            self.engine.apply_timeout(seat, default)?;
+            self.append_event(EngineLogEvent::TimeoutDefaultApplied {
+                seat_index: seat,
+                default,
+                deadline_ms: now_ms,
+                fired_at_ms: now_ms,
+            });
+            resolved += 1;
+        }
+        Ok(resolved)
     }
 
     pub fn write_snapshot_marker(&mut self) -> &EventEnvelope {
@@ -696,12 +825,22 @@ fn canonical_event_bytes(event: &EngineLogEvent, fencing_token: u64) -> Vec<u8> 
 
 fn push_config(out: &mut Vec<u8>, config: &MatchConfig) {
     push_str(out, &config.match_id);
+    push_u64(out, config.onchain_match_id);
     push_usize(out, config.button);
     push_u64(out, config.small_blind);
     push_u64(out, config.big_blind);
     out.extend_from_slice(config.round_count.to_string().as_bytes());
     out.push(b'|');
+    for d in &config.round_durations_sec {
+        push_u64(out, *d);
+    }
+    out.push(b'|');
+    for o in &config.observation_windows_sec {
+        push_u64(out, *o);
+    }
+    out.push(b'|');
     push_u64(out, config.action_timeout_ms);
+    push_u64(out, config.time_bank_sec);
     push_u64(out, config.lease_ttl_ms);
     for (player, stack, seal_seq) in &config.players {
         out.extend_from_slice(player.0.to_string().as_bytes());
@@ -812,7 +951,10 @@ mod tests {
             small_blind: 1,
             big_blind: 2,
             round_count: 3,
+            round_durations_sec: vec![200, 150, 150],
+            observation_windows_sec: vec![20, 20, 40],
             action_timeout_ms: 10_000,
+            time_bank_sec: 60,
             lease_ttl_ms: 1_000,
         }
     }
@@ -979,6 +1121,119 @@ mod tests {
                 .unwrap();
             assert_eq!(runtime.events().len(), 2);
             assert_ne!(runtime.head(), GENESIS);
+        }
+    }
+
+    // ---- Multi-street wall-clock (plan_v2 §H) ----
+
+    #[test]
+    fn street_offsets_match_template_schedule() {
+        // durations [200,150,150], observations [20,20,40].
+        let cfg = config("m-offsets");
+        let leases = InMemoryLeaseCoordinator::new();
+        let lease = MatchLease {
+            match_id: cfg.match_id.clone(),
+            owner_id: "n".into(),
+            fencing_token: 1,
+            expires_at_ms: u64::MAX,
+        };
+        let _ = &leases;
+        let rt = FencedMatchRuntime::start(cfg, lease);
+        assert_eq!(rt.street_start_offset_sec(1), 0);
+        assert_eq!(rt.betting_close_offset_sec(1), 200);
+        assert_eq!(rt.street_end_offset_sec(1), 220);
+        assert_eq!(rt.street_start_offset_sec(2), 220);
+        assert_eq!(rt.betting_close_offset_sec(2), 370);
+        assert_eq!(rt.street_start_offset_sec(3), 390);
+        assert_eq!(rt.betting_close_offset_sec(3), 540);
+        assert_eq!(rt.total_betting_duration_sec(), 580);
+    }
+
+    #[test]
+    fn betting_open_only_inside_current_street_window() {
+        let cfg = config("m-window");
+        let lease = MatchLease {
+            match_id: cfg.match_id.clone(),
+            owner_id: "n".into(),
+            fencing_token: 1,
+            expires_at_ms: u64::MAX,
+        };
+        let rt = FencedMatchRuntime::start(cfg, lease);
+        let ls = 0u64; // live_start at epoch 0 (ms)
+        assert!(rt.betting_open(ls, 0), "open at street-1 start");
+        assert!(rt.betting_open(ls, 199_000), "open just before close");
+        assert!(!rt.betting_open(ls, 200_000), "closed at exact close");
+        assert!(!rt.betting_open(ls, 210_000), "closed during observation gap");
+    }
+
+    #[test]
+    fn force_resolve_street_folds_facing_bet_and_completes() {
+        // 3-handed, no registered defaults -> CheckFold fallback. Preflop everyone but
+        // the big blind faces the blind, so the safe default folds them; the BB wins
+        // uncontested. No player is auto-committed beyond what they already posted.
+        let cfg = config("m-force");
+        let mut leases = InMemoryLeaseCoordinator::new();
+        let lease = leases
+            .acquire(&cfg.match_id, "node", 0, cfg.lease_ttl_ms)
+            .unwrap();
+        let mut rt = FencedMatchRuntime::start(cfg, lease);
+        let resolved = rt.force_resolve_street(&leases, 10).unwrap();
+        assert!(resolved >= 1);
+        assert!(rt.engine().is_complete(), "fold-to-one completes the match");
+        let folded = rt.engine().seats.iter().filter(|s| s.folded).count();
+        assert_eq!(folded, 2, "the two non-BB seats fold facing the blind");
+        // Conservation: only the posted blinds are in play (1 + 2 = 3).
+        let total: u64 = rt
+            .engine()
+            .seats
+            .iter()
+            .map(|s| s.total_contribution)
+            .sum();
+        assert_eq!(total, 3);
+        // Each forced resolution is recorded for faithful on-chain replay.
+        let timeouts = rt
+            .events()
+            .iter()
+            .filter(|e| matches!(e.event, EngineLogEvent::TimeoutDefaultApplied { .. }))
+            .count();
+        assert_eq!(timeouts, resolved);
+    }
+
+    #[test]
+    fn force_resolve_auto_checks_when_no_bet_to_call() {
+        // Drive to a postflop street where the first actor faces no bet, then force-
+        // resolve: a free CHECK must keep them in (not fold), proving the to_call==0 rule.
+        let cfg = config("m-check");
+        let mut leases = InMemoryLeaseCoordinator::new();
+        let lease = leases
+            .acquire(&cfg.match_id, "node", 0, cfg.lease_ttl_ms)
+            .unwrap();
+        let mut rt = FencedMatchRuntime::start(cfg, lease);
+        // Preflop: everyone calls/checks to close street 1 (round advances to 2).
+        // Heads-up-agnostic: just call around until the round increments.
+        let start_round = rt.engine().round;
+        let mut nonce = 1u64;
+        let mut now = 10u64;
+        while rt.engine().round == start_round && !rt.engine().is_complete() {
+            let seat = rt.engine().to_act.unwrap();
+            let to_call = rt.engine().to_call(seat);
+            let action = if to_call == 0 { Action::Check } else { Action::Call };
+            let head = rt.head();
+            rt.apply_signed_action(&leases, now, intent(seat, nonce, action, head))
+                .unwrap();
+            nonce += 1;
+            now += 1;
+        }
+        // Now on a fresh postflop street, the first actor faces no bet (current_bet 0).
+        if !rt.engine().is_complete() {
+            let first = rt.engine().to_act.unwrap();
+            assert_eq!(rt.engine().to_call(first), 0, "fresh street has no bet to call");
+            rt.force_resolve_street(&leases, now).unwrap();
+            // Auto-checked players stay in; nobody is folded by a free check.
+            assert!(
+                !rt.engine().seats[first].folded,
+                "a free check must keep the player in, never fold them"
+            );
         }
     }
 }

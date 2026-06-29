@@ -4,7 +4,10 @@
 //! it collects the engine's contributions, consumes a Pyth-authenticated bounded
 //! exact-after oracle price (missing/invalid → VOID), auto-decrypts predictions via the time-lock (missing key → VOID), merges
 //! them, computes the outcome with **`syndicate-shared`** (the single core), and packages
-//! the **submission bundle** the on-chain program re-verifies with that same crate.
+//! packages the **submission bundle** for on-chain settlement. In v1 the chain trusts
+//! backend-computed payouts and only enforces conservation + signed-price checks; this
+//! crate still runs the full deterministic `settle()` / `verify_settlement()` path
+//! off-chain for correctness and audit.
 //!
 //! It performs **no outcome math of its own** and **fails to VOID, never to a guess**
 //! (`ARCHITECTURE.md §4`, `04_GAME_MECHANICS §11, §12, §17, §18`). The remaining glue —
@@ -21,11 +24,16 @@ use syndicate_timelock::{RoundKey, SealRegistry, TimelockScheme};
 
 pub mod ops;
 
-/// Tunable settlement parameters (sourced from `config`; `08 OQ1, OQ11`).
+/// Scalar settlement inputs for one match. `rake_bps`/`rake_cap` come from the bound
+/// config (`08 OQ1, OQ11`); `dead_money` is the non-sealer penalty pool recorded
+/// on-chain at `begin_live` (plan_v2 §4/§5) — NOT a config constant. It must equal the
+/// match account's `dead_money` so the off-chain recompute is byte-identical to the
+/// chain's `verify_settlement`.
 #[derive(Clone, Copy, Debug)]
 pub struct SettleParams {
     pub rake_bps: u32,
     pub rake_cap: Chips,
+    pub dead_money: Chips,
 }
 
 /// Why a match voided instead of settling — every one maps to a full, capital-safe
@@ -65,6 +73,10 @@ pub struct SettlementBundle {
     pub oracle_price: VerifiedOraclePrice,
     pub rake_bps: u32,
     pub rake_cap: Chips,
+    /// Non-sealer penalty pool (= match account `dead_money`); injected into the main
+    /// pot by `settle()` (plan_v2 §4). Carried in the bundle so `verify()` and the chain
+    /// recompute the identical input.
+    pub dead_money: Chips,
     pub result: SettleResult,
 }
 
@@ -76,6 +88,7 @@ impl SettlementBundle {
             oracle_price: self.oracle_price,
             rake_bps: self.rake_bps,
             rake_cap: self.rake_cap,
+            dead_money: self.dead_money,
         };
         verify_settlement(&input, &self.result).is_ok()
     }
@@ -149,6 +162,7 @@ pub fn settle_match<S: TimelockScheme>(
             oracle_price,
             rake_bps: params.rake_bps,
             rake_cap: params.rake_cap,
+            dead_money: params.dead_money,
         };
         match settle(&input) {
             Ok(r) => {
@@ -168,6 +182,7 @@ pub fn settle_match<S: TimelockScheme>(
         oracle_price,
         rake_bps: params.rake_bps,
         rake_cap: params.rake_cap,
+        dead_money: params.dead_money,
         result,
     })
 }
@@ -337,6 +352,7 @@ mod tests {
         SettleParams {
             rake_bps: 0,
             rake_cap: 0,
+            dead_money: 0,
         }
     }
 

@@ -26,16 +26,18 @@ settlement-admin-keypair.json
 
 **App** (`deploy/docker-compose.app.yml`):
 
-| Service | Port (host) | Health |
-|---------|-------------|--------|
-| gateway | 18081 (+19081 metrics) | `/healthz` |
-| matchmaking | 18082 | `/healthz` |
-| action-feed | 18080 | `/healthz` |
-| match-engine | 18083 | `/healthz` |
-| match-orchestrator | 18086 | `/healthz` |
-| config | 18085 | `/healthz` |
-| settlement-chain | 18790 | `/health` |
-| settlement-worker | 18084 | `/healthz` |
+
+| Service            | Port (host)            | Health     |
+| ------------------ | ---------------------- | ---------- |
+| gateway            | 18081 (+19081 metrics) | `/healthz` |
+| matchmaking        | 18082                  | `/healthz` |
+| action-feed        | 18080                  | `/healthz` |
+| match-engine       | 18083                  | `/healthz` |
+| match-orchestrator | 18086                  | `/healthz` |
+| config             | 18085                  | `/healthz` |
+| settlement-chain   | 18790                  | `/health`  |
+| settlement-worker  | 18084                  | `/healthz` |
+
 
 Block public access to these ports at the Hetzner Cloud Firewall (SSH + 80/443 only). Services bind on the Docker host; use a reverse proxy later for gateway/action-feed.
 
@@ -190,14 +192,16 @@ Re-run these exports in every new shell.
 
 Postgres is published on **host port 5433** (not 5432) so it can run alongside a system Postgres. Other infra host ports are also offset to avoid clashes on a shared VPS:
 
-| Service | Host port | UI / notes |
-|---------|-----------|------------|
-| Postgres | 5433 | migrations from host |
-| Redis | 6380 | |
-| NATS | 4223 | monitor 8223 |
-| MinIO | 9002 | console 9003 |
-| Prometheus | 9091 | http://HOST:9091 |
-| Grafana | 3002 | admin / syndicate-localnet |
+
+| Service    | Host port | UI / notes                           |
+| ---------- | --------- | ------------------------------------ |
+| Postgres   | 5433      | migrations from host                 |
+| Redis      | 6380      |                                      |
+| NATS       | 4223      | monitor 8223                         |
+| MinIO      | 9002      | console 9003                         |
+| Prometheus | 9091      | [http://HOST:9091](http://HOST:9091) |
+| Grafana    | 3002      | admin / syndicate-localnet           |
+
 
 App containers use internal names (`postgres:5432`, `redis:6379`, …) and are unaffected.
 
@@ -266,14 +270,16 @@ docker logs $(docker ps -qf name=settlement-worker) 2>&1 | tail -n 20
 
 Wire the domain in [04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md). Devnet handoff:
 
-| Key | Devnet value |
-|-----|--------------|
-| `GATEWAY_WS_URL` | `wss://gateway.devnet.satoshitable.fun` |
-| `ACTION_FEED_URL` | `https://api.devnet.satoshitable.fun` |
-| `CONFIG_URL` | `https://config.devnet.satoshitable.fun` |
-| `PROGRAM_ID` | from `app.env` |
-| `CHIPS_TOKEN_MINT` | from `app.env` |
-| `SOLANA_RPC_URL` | public RPC or client-side provider |
+
+| Key                | Devnet value                             |
+| ------------------ | ---------------------------------------- |
+| `GATEWAY_WS_URL`   | `wss://gateway.devnet.satoshitable.fun`  |
+| `ACTION_FEED_URL`  | `https://api.devnet.satoshitable.fun`    |
+| `CONFIG_URL`       | `https://config.devnet.satoshitable.fun` |
+| `PROGRAM_ID`       | from `app.env`                           |
+| `CHIPS_TOKEN_MINT` | from `app.env`                           |
+| `SOLANA_RPC_URL`   | public RPC or client-side provider       |
+
 
 Full wire protocol: [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md)
 
@@ -302,20 +308,22 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 
 ## 13. Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
-| `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` / parameter property | `git pull` (matchmaking fix); rebuild: `$COMPOSE_APP build matchmaking` |
-| `RpcWebSocketClient extends value undefined` (settlement-chain) | `git pull` (removed bad `rpc-websockets` override in lockfile); `$COMPOSE_APP build --no-cache settlement-chain` |
-| Worker: `Permission denied` reading `SETTLEMENT_CHAIN_AUTH_TOKEN_FILE` | `chmod 755 deploy/secrets` and `chmod 644 deploy/secrets/settlement-chain.token deploy/secrets/settlement-admin-keypair.json` (§3) |
-| `could not translate host name "postgres"` | Infra not running or app not on shared network: `$COMPOSE_INFRA up -d`, then `$COMPOSE_APP up -d` **without** `-f deploy/docker-compose.localnet.yml`; verify `docker exec syndicate-app-action-feed-1 getent hosts postgres` |
-| `Bind for 0.0.0.0:9091 failed: port is already allocated` | Infra already running — start app with `$COMPOSE_APP` only, not app+localnet merged |
-| Worker restarts: `settlement-chain health check failed` | Wait for chain startup; `curl 127.0.0.1:18790/health` |
-| Worker: `missing required environment variable` | Fill `deploy/secrets/app.env`; re-export `COMPOSE_APP` |
-| `settlement relay/poller error: error serializing parameter` | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker` |
-| Wrong programId on `/health` | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d` |
-| Pyth settlement fails on devnet | Keep `PYTH_RECEIVER_STACK=legacy`; do **not** use `upgraded` on devnet |
-| OOM during build | Add swap (guide 02 §9); rebuild |
-| `network syndicate-localnet_default not found` | Run `$COMPOSE_INFRA up -d` first |
+
+| Symptom                                                                | Fix                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` / parameter property               | `git pull` (matchmaking fix); rebuild: `$COMPOSE_APP build matchmaking`                                                                                                                                                       |
+| `RpcWebSocketClient extends value undefined` (settlement-chain)        | `git pull` (removed bad `rpc-websockets` override in lockfile); `$COMPOSE_APP build --no-cache settlement-chain`                                                                                                              |
+| Worker: `Permission denied` reading `SETTLEMENT_CHAIN_AUTH_TOKEN_FILE` | `chmod 755 deploy/secrets` and `chmod 644 deploy/secrets/settlement-chain.token deploy/secrets/settlement-admin-keypair.json` (§3)                                                                                            |
+| `could not translate host name "postgres"`                             | Infra not running or app not on shared network: `$COMPOSE_INFRA up -d`, then `$COMPOSE_APP up -d` **without** `-f deploy/docker-compose.localnet.yml`; verify `docker exec syndicate-app-action-feed-1 getent hosts postgres` |
+| `Bind for 0.0.0.0:9091 failed: port is already allocated`              | Infra already running — start app with `$COMPOSE_APP` only, not app+localnet merged                                                                                                                                           |
+| Worker restarts: `settlement-chain health check failed`                | Wait for chain startup; `curl 127.0.0.1:18790/health`                                                                                                                                                                         |
+| Worker: `missing required environment variable`                        | Fill `deploy/secrets/app.env`; re-export `COMPOSE_APP`                                                                                                                                                                        |
+| `settlement relay/poller error: error serializing parameter`           | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker`                                                                                                                                |
+| Wrong programId on `/health`                                           | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d`                                                                                                                                                                 |
+| Pyth settlement fails on devnet                                        | Keep `PYTH_RECEIVER_STACK=legacy`; do **not** use `upgraded` on devnet                                                                                                                                                        |
+| OOM during build                                                       | Add swap (guide 02 §9); rebuild                                                                                                                                                                                               |
+| `network syndicate-localnet_default not found`                         | Run `$COMPOSE_INFRA up -d` first                                                                                                                                                                                              |
+
 
 ---
 

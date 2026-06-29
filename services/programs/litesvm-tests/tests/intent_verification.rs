@@ -4,16 +4,9 @@ use common::{advance_head, canonical_action_step, MatchHarness, GENESIS_HEAD};
 use syndicate_shared::intent::action_intent_message;
 
 #[test]
-fn lifecycle_reaches_live_match() {
+fn lifecycle_reaches_sealing_match() {
     let h = MatchHarness::new();
     assert_ne!(h.match_key, solana_sdk::pubkey::Pubkey::default());
-}
-
-#[test]
-fn injected_action_log_starts_at_genesis_head() {
-    let mut h = MatchHarness::new();
-    h.inject_action_log();
-    assert_eq!(h.read_action_log_head(), GENESIS_HEAD);
 }
 
 #[test]

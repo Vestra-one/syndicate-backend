@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { buildConfigCatalog, getTierForFeed } from './index.ts';
+import { buildConfigCatalog, getTierForFeed, buildTemplates, getTemplateByHash } from './index.ts';
 import { tableTermsForTier } from './table-terms.ts';
 
 const DEFAULT_TIMELOCK_TARGET_ROUND = 1_000_000;
@@ -22,6 +22,21 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (url.pathname === '/healthz') return json(res, 200, { ok: true });
   if (url.pathname === '/config/catalog') return json(res, 200, buildConfigCatalog());
+  // Published, hashed game templates: the indexer allowlist (config_hash set) and the
+  // client's create-tx params source (plan_v2 §C/§H).
+  if (url.pathname === '/config/templates') {
+    const templates = buildTemplates();
+    return json(res, 200, {
+      templates,
+      allowlist: templates.map((t) => t.configHash),
+    });
+  }
+  if (url.pathname.startsWith('/config/template/')) {
+    const hash = decodeURIComponent(url.pathname.slice('/config/template/'.length));
+    const template = getTemplateByHash(hash);
+    if (!template) return json(res, 404, { error: 'unknown config_hash' });
+    return json(res, 200, { template });
+  }
   if (url.pathname === '/config/table') {
     const matchId = url.searchParams.get('matchId') ?? '';
     const tierId = url.searchParams.get('tierId') ?? 'tier-low';

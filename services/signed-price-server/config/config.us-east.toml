@@ -1,0 +1,108 @@
+# US East price server — Coinbase BTC/ETH primary, Binance USDC warm standby.
+# Deploy with CONFIG_PATH=config/config.us-east.toml and the same ECDSA_PRIVATE_KEY as Canada.
+
+[server]
+listen_addr = ":8080"
+max_connections = 12000
+read_buffer_size = 1024
+write_buffer_size = 1024
+shutdown_timeout = 30
+
+[signing]
+num_workers = 0
+trade_queue_size = 100000
+signed_queue_size = 100000
+
+[store]
+history_capacity = 100000
+
+[book_mid]
+emit_interval_ms = 45
+max_book_age_ms = 1500
+stale_watchdog_interval_ms = 1000
+stale_threshold_ms = 5000
+stale_reconnect_cooldown_ms = 30000
+
+[hub]
+client_queue_size = 200000
+client_send_buffer_size = 256
+ping_interval = 30
+write_timeout = 10
+
+[failover]
+enabled = true
+node_id = "us-east-1"
+peer_node_id = "canada-1"
+peer_url = "https://price-canada.internal:8080"
+shared_secret_env = "FAILOVER_SHARED_SECRET"
+promote_debounce_ms = 100
+recover_hysteresis_ms = 500
+peer_request_timeout_ms = 300
+
+[[failover.symbols]]
+symbol = "BTCUSD"
+role = "primary"
+
+[[failover.symbols]]
+symbol = "ETHUSD"
+role = "primary"
+
+[[failover.symbols]]
+symbol = "USDCUSD"
+role = "standby"
+
+# Primary — Coinbase book_mid
+[[currency_pairs]]
+base = "BTC"
+quote = "USD"
+token = "0xa7BaE7da3E4950700BE9f107EB186e89a474d180"
+providers = ["coinbase"]
+provider_price_modes = { coinbase = "book_mid" }
+
+[[currency_pairs]]
+base = "ETH"
+quote = "USD"
+token = "0x6Dd0C6a2e058bc3F7D6AaCe23965180BcBbb2635"
+providers = ["coinbase"]
+provider_price_modes = { coinbase = "book_mid" }
+
+# Warm standby — Binance USDC (sign only when promoted for USDC)
+[[currency_pairs]]
+base = "USDC"
+quote = "USDT"
+token = "0x6aEB5326b5DcA2163e0995824DcB816194b157a6"
+providers = ["binance"]
+provider_price_modes = { binance = "book_mid" }
+
+[[provider_endpoints]]
+name = "binance"
+websocket = "stream.binance.com:9443"
+rest = "https://api.binance.com"
+
+[[provider_endpoints]]
+name = "coinbase"
+websocket = "ws-feed.exchange.coinbase.com"
+rest = "https://api.exchange.coinbase.com"
+
+[[token_mappings]]
+symbol = "BTCUSD"
+address = "0xa7BaE7da3E4950700BE9f107EB186e89a474d180"
+
+[[token_mappings]]
+symbol = "ETHUSD"
+address = "0x6Dd0C6a2e058bc3F7D6AaCe23965180BcBbb2635"
+
+[[token_mappings]]
+symbol = "USDCUSD"
+address = "0x6aEB5326b5DcA2163e0995824DcB816194b157a6"
+
+[[token_mappings]]
+symbol = "USDCUSDT"
+address = "0x6aEB5326b5DcA2163e0995824DcB816194b157a6"
+
+[logging]
+level = "info"
+format = "json"
+
+[metrics]
+path = "/metrics"

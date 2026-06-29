@@ -61,13 +61,16 @@ pub fn default_policy_message(
     out
 }
 
-/// Prediction commitment: player signs H(prediction || blinding) before the match goes live.
+/// Prediction commitment: during SEALING (before LIVE), the player signs a binding over
+/// their seat, the time-lock ciphertext hash, and the `timelock_target` drand round.
+/// `seal_seq` is NOT signed — it is assigned on-chain by arrival order so no player can
+/// claim an early seal to grab tie-remainders (plan_v2 §1).
 pub fn prediction_commitment_message(
     match_id: u64,
     onchain_match_id: u64,
     seat_index: u16,
     seat_pubkey: &[u8; 32],
-    seal_seq: u64,
+    timelock_target: u64,
     commitment: &[u8; 32],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(96);
@@ -77,7 +80,7 @@ pub fn prediction_commitment_message(
     push_u64(&mut out, onchain_match_id);
     push_u16(&mut out, seat_index);
     out.extend_from_slice(seat_pubkey);
-    push_u64(&mut out, seal_seq);
+    push_u64(&mut out, timelock_target);
     out.extend_from_slice(commitment);
     out
 }

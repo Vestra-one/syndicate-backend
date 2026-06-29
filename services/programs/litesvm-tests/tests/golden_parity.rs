@@ -48,6 +48,7 @@ fn golden_showdown_parity_via_shared_core() {
         oracle_price,
         rake_bps: inputs["rake_bps"].as_u64().unwrap() as u32,
         rake_cap: inputs["rake_cap"].as_u64().unwrap(),
+        dead_money: 0,
     };
     let result = settle(&input).expect("settle");
     verify_settlement(&input, &result).expect("verify");
@@ -100,6 +101,7 @@ fn golden_conservation_holds() {
         },
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let result = settle(&input).unwrap();
     let paid: u64 = result

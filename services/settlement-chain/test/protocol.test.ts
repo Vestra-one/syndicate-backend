@@ -1,34 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { deriveSyndicateAccounts, encodeSettleArgsFromBundle } from '../src/main.ts';
-import { buildEd25519VerifyInstruction } from '../src/actionLog.ts';
 import { predictionCommitmentHash } from '../src/intent.ts';
 
 function bundle(overrides: Record<string, any> = {}) {
   return {
-    revealed: [
-      {
-        seat_index: 0,
-        prediction: '1000',
-        blinding_hex: '00'.repeat(32),
-      },
-    ],
-    oracle_price: {
-      feed_id: '07'.repeat(32),
-      price: '1000',
-      publish_time: 1715000000,
-      confidence: 10,
-      exponent: -8,
+    signed_price: {
+      token: '0xa7BaE7da3E4950700BE9f107EB186e89a474d180',
+      price_in_wad: '1000000000000000000000',
+      timestamp: 1715000000123,
+      v: 27,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
     },
-    rake_bps: 0,
-    rake_cap: 0,
     result: {
-      settlement_price: '1000',
-      oracle_publish_time: 1715000000,
-      pot_awards: [{ seat_index: 0, amount: 100 }],
-      uncalled_returns: [],
       rake_collected: 0,
     },
+    payouts: [{ engine_seat: 0, amount: 100 }],
     ...overrides,
   };
 }
@@ -82,24 +70,22 @@ test('Pyth Receiver package imports under the supported Node runtime', async (t)
 });
 
 test('settlement bundle encodes Anchor SettleArgs deterministically', () => {
-  const encoded = encodeSettleArgsFromBundle(bundle({ vrf_seed_hex: '00'.repeat(32) }));
-  assert.ok(encoded.length > 64);
-  assert.equal(encoded.readBigInt64LE(64), 1000n);
+  const encoded = encodeSettleArgsFromBundle(bundle({}));
+  assert.ok(encoded.length > 93);
+  assert.equal(encoded.subarray(0, 20).toString('hex'), 'a7bae7da3e4950700be9f107eb186e89a474d180');
+  assert.equal(encoded.subarray(20, 52).toString('hex'), '00000000000000000000000000000000000000000000003635c9adc5dea00000');
+  assert.equal(encoded.readBigUInt64LE(52), 1715000000123n);
+  assert.equal(encoded.readUInt8(60), 27);
+  assert.equal(encoded.subarray(61, 93).toString('hex'), '11'.repeat(32));
+  assert.equal(encoded.readBigUInt64LE(125), 0n);
+  assert.equal(encoded.readUInt32LE(133), 1);
+  assert.equal(encoded.readUInt8(137), 0);
+  assert.equal(encoded.readBigUInt64LE(138), 100n);
 });
 
-test('ed25519 verify instruction packs signature and message', () => {
-  const ix = buildEd25519VerifyInstruction({
-    publicKey: Uint8Array.from({ length: 32 }, (_, i) => i),
-    message: Uint8Array.from([1, 2, 3]),
-    signature: Uint8Array.from({ length: 64 }, () => 9),
-  });
-  assert.equal(ix.data.readUInt8(0), 1);
-  assert.ok(ix.data.length > 112);
-});
-
-test('settlement bundle requires revealed predictions', () => {
+test('settlement bundle requires payouts', () => {
   assert.throws(
-    () => encodeSettleArgsFromBundle(bundle({ revealed: undefined })),
-    /bundle.revealed/,
+    () => encodeSettleArgsFromBundle(bundle({ payouts: undefined })),
+    /bundle.payouts/,
   );
 });

@@ -155,6 +155,10 @@ CREATE TABLE matches (
     config_id uuid NOT NULL REFERENCES match_configs(id),
     status match_status NOT NULL DEFAULT 'created',
     scheduled_end_ts timestamptz NOT NULL,
+    -- Non-sealer penalty pool injected into the main pot at settlement (plan_v2 §4/§5).
+    -- Recorded on-chain at begin_live (sum of buy_in*nonseal_penalty_bps for dropped
+    -- seats) and projected here by the indexer; 0 when every seat sealed.
+    dead_money_chips bigint NOT NULL DEFAULT 0,
     owner_node_id text,
     owner_fencing_token bigint NOT NULL DEFAULT 0,
     owner_lease_expires_at timestamptz,
@@ -165,7 +169,8 @@ CREATE TABLE matches (
     settled_at timestamptz,
     voided_at timestamptz,
     CHECK (octet_length(event_head) = 32),
-    CHECK (event_count >= 0)
+    CHECK (event_count >= 0),
+    CHECK (dead_money_chips >= 0)
 );
 
 CREATE INDEX matches_owner_lease_idx
@@ -289,6 +294,7 @@ CREATE TABLE settlement_attempts (
     event_root bytea NOT NULL,
     tx_signature text,
     last_error text,
+    oracle_audit jsonb,
     next_retry_at timestamptz,
     confirmed_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),

@@ -11,8 +11,6 @@ use syndicate_settlement::ops::{
 };
 use syndicate_settlement::Outcome;
 
-use crate::action_log_sync::sync_action_log_for_job;
-
 use crate::metrics::WorkerMetrics;
 use crate::reconstruct::{parse_settlement_request, reconstruct_job, ReconstructError};
 use crate::timelock_open::TimelockOpenClient;
@@ -129,17 +127,6 @@ where
         }
         Err(e) => return Err(format!("{e:?}")),
     };
-    if matches!(job.outcome, Outcome::Settled(_)) {
-        if let Err(e) = sync_action_log_for_job(pool, chain, &job).await {
-            message
-                .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                    Duration::from_secs(30),
-                )))
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-            return Err(e);
-        }
-    }
     let result = ops
         .process(&job, started)
         .await

@@ -6,8 +6,8 @@
 
 ## 1. What an external auditor must review (scope, in priority order)
 
-1. ⛔ **On-chain program (`services/programs`)** — custody is here. Vault PDA authority, deposit/lock/settle/claim/void/refund, the settlement re-verification path, fee accounting, idempotent claim, arithmetic, account constraints/seeds. This is the highest-value target and gets the deepest review + a dedicated audit.
-2. ⛔ **Deterministic core (`services/shared`)** — the money math the program links. Side-pot construction, bounded exact-after Pyth price validation, winner/tie, conservation. A bug here mis-pays on **both** sides identically (the parity check won't catch it), so it needs its own scrutiny + fuzzing.
+1. ⛔ **On-chain program (`services/programs`)** — custody is here. Vault PDA authority, deposit/lock/settle/claim/void/refund, v1 signed-price + conservation gate, fee accounting, idempotent claim, arithmetic, account constraints/seeds. Full on-chain outcome re-derivation is deferred (`TODO(v1+)`).
+2. ⛔ **Deterministic core (`services/shared`)** — the money math used off-chain in v1 (and for future on-chain parity). Side-pot construction, exact-timestamp oracle validation, winner/tie, conservation. Still needs scrutiny + fuzzing even when not linked on-chain in v1.
 3. **Settlement builder (`services/settlement`)** — input collection + VOID orchestration; ensure no path releases funds on unverified or degraded inputs.
 4. **Pyth updater/receiver path + time-lock** — Pyth update authenticity, feed/timestamp/confidence/exponent guards, beacon trust, binding-before-LIVE.
 5. **Edge (`gateway`, `matchmaking`)** — auth/signature handling, deposit-finality gating, geofencing bypass.
@@ -19,10 +19,10 @@
 
 | Adversary goal | Primary control | Evidence (test / mechanism) |
 |----------------|-----------------|------------------------------|
-| Drain the vault | Minimal-trust program; funds release only after on-chain re-verification; conservation assert | `programs::submit_settlement` + audit; `shared::verify_settlement` tamper tests |
-| Submit a forged/inflated settlement | Chain recomputes via `shared` and rejects mismatch | `e2e_contested_showdown_parity_and_tamper_rejection`, `verify_rejects_*` |
+| Drain the vault | Minimal-trust program; funds release only after signed-price verification + conservation (v1) | `programs::submit_settlement` + audit |
+| Submit a forged/inflated settlement | Conservation + signed-price checks; v1 does not re-derive outcomes on-chain (`TODO(v1+)`) | `shared::verify_settlement` tamper tests (off-chain); conservation tests on-chain |
 | Read a prediction early | Time-lock encryption, no key holder | `timelock` binding/round-gating tests; `04 §12` |
-| Decide a pot on a bad/manipulated price | Pyth-authenticated bounded exact-after update + confidence/exponent/feed/timestamp guards → VOID; buy-in caps << market impact | `shared::oracle` guard/no-update tests; `settlement::ops` Pyth tests; `04 §11`, `08 OQ2` |
+| Decide a pot on a bad/manipulated price | Signed price at exact `scheduled_end_ts` + confidence/exponent/feed guards → VOID | `shared::oracle` exact-timestamp tests; signed-price-server integration; `04 §11` |
 | Steal via tiny bet vs big all-in | Side-pot eligibility caps winnings to matched chips | `shared` golden/property tests; `04 §9` |
 | Grief settlement by not revealing | Auto-decrypt at match end (no manual reveal); missing key → VOID | `timelock` missing-key test; `04 §12` |
 | Collude / chip-dump / bot / Sybil | Muck-on-fold, server CSPRNG button (v1), deposit gate, T&S telemetry; residual priced | `trust-safety` detectors; `07 S3/S4` |

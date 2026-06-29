@@ -26,6 +26,11 @@ export function feedIdToBuffer(feedIdHex) {
   return Buffer.from(normalizeFeedIdHex(feedIdHex).slice(2), 'hex');
 }
 
+/** 20-byte signed-price token derived from the leading bytes of a 32-byte feed id. */
+export function priceTokenFromFeedId(feedIdHex) {
+  return feedIdToBuffer(feedIdHex).subarray(0, 20);
+}
+
 export function buildHermesTimestampUrl(baseUrl, publishTime, feedIdHex, options = {}) {
   const encoding = options.encoding ?? 'hex';
   const parsed = options.parsed ?? true;
@@ -58,26 +63,22 @@ export async function fetchEarliestValidPythUpdate({
   hermesUrl = DEFAULT_PYTH_HERMES_URL,
   feedIdHex,
   scheduledEndTs,
-  oracleDelayWindowSec,
   maxConfidence,
   expectedExponent,
 }) {
   const rules = normalizeRules({
     feedIdHex,
     scheduledEndTs,
-    oracleDelayWindowSec,
     maxConfidence,
     expectedExponent,
   });
-  const candidates = [];
-  for (let ts = rules.scheduledEndTs; ts <= rules.windowEndTs; ts += 1) {
-    const response = await client.getPriceUpdatesAtTimestamp(
-      Number(ts),
-      [rules.feedIdHex],
-      { encoding: 'hex', parsed: true },
-    );
-    candidates.push(...extractHermesCandidates(response, Number(ts), hermesUrl));
-  }
+  const ts = rules.scheduledEndTs;
+  const response = await client.getPriceUpdatesAtTimestamp(
+    ts,
+    [rules.feedIdHex],
+    { encoding: 'hex', parsed: true },
+  );
+  const candidates = extractHermesCandidates(response, ts, hermesUrl);
   return selectEarliestValidPythUpdate(candidates, rules);
 }
 
@@ -154,32 +155,14 @@ export function pythAuditReceipt({
 }
 
 function normalizeRules(input) {
-  const { feedIdHex, scheduledEndTs, oracleDelayWindowSec, maxConfidence, expectedExponent } = input;
-  if (oracleDelayWindowSec === undefined && maxConfidence !== undefined && expectedExponent !== undefined) {
-    const scheduled = Number(scheduledEndTs);
-    const windowEnd = Number(input.windowEndTs);
-    if (!Number.isSafeInteger(scheduled) || !Number.isSafeInteger(windowEnd)) {
-      throw new Error('Pyth timestamp window must be safe JavaScript integers');
-    }
-    return {
-      feedIdHex: normalizeFeedIdHex(feedIdHex),
-      scheduledEndTs: scheduled,
-      windowEndTs: windowEnd,
-      maxConfidence: BigInt(maxConfidence),
-      expectedExponent: Number(expectedExponent),
-    };
-  }
-  const scheduled = BigInt(scheduledEndTs);
-  const window = BigInt(oracleDelayWindowSec);
-  if (window < 0n) throw new Error('oracleDelayWindowSec must be non-negative');
-  const windowEnd = scheduled + window;
-  if (scheduled > BigInt(Number.MAX_SAFE_INTEGER) || windowEnd > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error('Pyth timestamp window exceeds safe JavaScript integer range');
+  const { feedIdHex, scheduledEndTs, maxConfidence, expectedExponent } = input;
+  const scheduled = Number(scheduledEndTs);
+  if (!Number.isSafeInteger(scheduled)) {
+    throw new Error('scheduledEndTs must be a safe JavaScript integer');
   }
   return {
     feedIdHex: normalizeFeedIdHex(feedIdHex),
-    scheduledEndTs: Number(scheduled),
-    windowEndTs: Number(windowEnd),
+    scheduledEndTs: scheduled,
     maxConfidence: BigInt(maxConfidence),
     expectedExponent: Number(expectedExponent),
   };
@@ -187,7 +170,7 @@ function normalizeRules(input) {
 
 function isValidCandidate(candidate, rules) {
   if (candidate.feedIdHex !== rules.feedIdHex) return false;
-  if (candidate.publishTime < rules.scheduledEndTs || candidate.publishTime > rules.windowEndTs) return false;
+  if (candidate.publishTime !== rules.scheduledEndTs) return false;
   if (candidate.exponent !== rules.expectedExponent) return false;
   if (candidate.confidence > rules.maxConfidence) return false;
   if (candidate.price < I64_MIN || candidate.price > I64_MAX) return false;

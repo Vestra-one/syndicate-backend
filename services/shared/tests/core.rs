@@ -67,6 +67,7 @@ fn golden_section9_award_no_rake() {
         oracle_price: oracle(105_120),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     assert_eq!(r.settlement_price, 105_120);
@@ -89,6 +90,7 @@ fn uncalled_bet_is_returned() {
         oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     // One pot of 200 (100+100); A wins it. A also gets 20 back uncalled.
@@ -115,6 +117,7 @@ fn tie_split_with_odd_chip_to_earliest_seal() {
         oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     // pot = 102, split 51/51 — even, no remainder
@@ -138,6 +141,7 @@ fn odd_remainder_to_earliest_seal() {
         oracle_price: oracle(100_000),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     // pot 100 tie → 50/50, no remainder; B also gets 1 uncalled back.
@@ -170,6 +174,7 @@ fn rake_is_deducted_from_pot() {
         oracle_price: oracle(100_000),
         rake_bps: 300, // 3%
         rake_cap: 1_000_000,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     // pot 200, rake 6, payable 194 to A.
@@ -192,6 +197,7 @@ fn settlement_uses_verified_oracle_price() {
         oracle_price: oracle(2),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     };
     let r = settle(&input).unwrap();
     assert_eq!(r.settlement_price, 2);
@@ -233,16 +239,19 @@ fn property_conservation_over_100k_random_scenarios() {
             };
             players.push(p(id as u16, contribution, folded, prediction, id));
         }
+        let dead_money = rng.below(300); // 0..=299 non-sealer penalty pool
         let input = SettleInput {
             players: &players,
             oracle_price: oracle(rng.below(200_000) as i128),
             rake_bps: (rng.below(1001)) as u32, // 0..=10%
             rake_cap: rng.below(500),
+            dead_money,
         };
         match settle(&input) {
             Ok(r) => {
-                // Conservation: awards + returns + rake == total contributions.
-                let total_in: u128 = players.iter().map(|p| p.contribution as u128).sum();
+                // Conservation: awards + returns + rake == total contributions + dead_money.
+                let total_in: u128 = players.iter().map(|p| p.contribution as u128).sum::<u128>()
+                    + dead_money as u128;
                 let total_out: u128 = r.pot_awards.iter().map(|a| a.amount as u128).sum::<u128>()
                     + r.uncalled_returns
                         .iter()
@@ -278,6 +287,7 @@ fn sample_input(players: &[PlayerState]) -> SettleInput<'_> {
         oracle_price: oracle(105_120),
         rake_bps: 0,
         rake_cap: 0,
+        dead_money: 0,
     }
 }
 
@@ -342,5 +352,147 @@ fn prediction_commitment_hash_is_sensitive() {
     assert_ne!(
         prediction_commitment_hash(100_000, &b),
         prediction_commitment_hash(100_001, &b)
+    );
+}
+
+// ---- Non-sealer penalty dead money (plan_v2 §4/§5) ----
+
+/// Dead money is added to the main pot and won by the closest eligible prediction.
+#[test]
+fn dead_money_goes_to_main_pot_winner() {
+    let players = vec![
+        p(0, 100, false, Some(100_000), 0), // A — exact, wins
+        p(1, 100, false, Some(101_000), 1), // B
+    ];
+    let input = SettleInput {
+        players: &players,
+        oracle_price: oracle(100_000),
+        rake_bps: 0,
+        rake_cap: 0,
+        dead_money: 50,
+    };
+    let r = settle(&input).unwrap();
+    // pot 200 + dead 50 = 250, all to A.
+    assert_eq!(
+        r.pot_awards,
+        vec![syndicate_shared::Award {
+            player: PlayerId(0),
+            amount: 250
+        }]
+    );
+    assert!(r.uncalled_returns.is_empty());
+    assert_eq!(r.rake_collected, 0);
+}
+
+/// With side pots, dead money attaches ONLY to the main (lowest) pot; higher side
+/// pots are unaffected.
+#[test]
+fn dead_money_only_grows_main_pot_with_side_pots() {
+    // §9 layout: A=100,B=60,C=100,D=20(folded) -> pots [80,120,80].
+    let players = vec![
+        p(0, 100, false, Some(100_200), 0), // A dist 200
+        p(1, 60, false, Some(100_000), 1),  // B exact -> wins main+second
+        p(2, 100, false, Some(100_050), 2), // C dist 50 -> wins top pot {A,C}
+        p(3, 20, true, None, 3),            // D folded (dead money)
+    ];
+    let input = SettleInput {
+        players: &players,
+        oracle_price: oracle(100_000),
+        rake_bps: 0,
+        rake_cap: 0,
+        dead_money: 30,
+    };
+    let r = settle(&input).unwrap();
+    let award = |id: u16| {
+        r.pot_awards
+            .iter()
+            .find(|a| a.player == PlayerId(id))
+            .map(|a| a.amount)
+            .unwrap_or(0)
+    };
+    // Main(80)+dead(30)=110 and second(120) -> B=230. Top(80) eligible{A,C}: C wins.
+    assert_eq!(award(1), 230, "B wins main(+dead)+second");
+    assert_eq!(award(2), 80, "C wins top pot, no dead money attached");
+    assert_eq!(award(0), 0);
+    let total: u64 = r.pot_awards.iter().map(|a| a.amount).sum::<u64>()
+        + r.uncalled_returns.iter().map(|(_, c)| *c).sum::<u64>()
+        + r.rake_collected;
+    assert_eq!(total, 310, "280 contributions + 30 dead money");
+}
+
+/// Dead money is raked together with the main pot it joins.
+#[test]
+fn dead_money_is_raked_with_main_pot() {
+    let players = vec![
+        p(0, 100, false, Some(100_000), 0), // A wins
+        p(1, 100, false, Some(101_000), 1),
+    ];
+    let input = SettleInput {
+        players: &players,
+        oracle_price: oracle(100_000),
+        rake_bps: 300, // 3%
+        rake_cap: 1_000_000,
+        dead_money: 100,
+    };
+    let r = settle(&input).unwrap();
+    // pot 200 + dead 100 = 300; rake 3% = 9; payable 291 -> A.
+    assert_eq!(r.rake_collected, 9);
+    assert_eq!(
+        r.pot_awards,
+        vec![syndicate_shared::Award {
+            player: PlayerId(0),
+            amount: 291
+        }]
+    );
+}
+
+/// When no pot forms (single contributor), dead money becomes a synthetic pot and is
+/// awarded to the lone non-folded survivor — never stranded.
+#[test]
+fn dead_money_to_uncontested_survivor_when_no_pot() {
+    let players = vec![
+        p(0, 100, false, Some(100_000), 0), // A — sole contributor & survivor
+        p(1, 0, true, None, 1),             // B folded, contributed nothing
+    ];
+    let input = SettleInput {
+        players: &players,
+        oracle_price: oracle(100_000),
+        rake_bps: 0,
+        rake_cap: 0,
+        dead_money: 40,
+    };
+    let r = settle(&input).unwrap();
+    // A's 100 is an uncalled return; the 40 dead money is awarded to A.
+    assert_eq!(r.uncalled_returns, vec![(PlayerId(0), 100)]);
+    assert_eq!(
+        r.pot_awards,
+        vec![syndicate_shared::Award {
+            player: PlayerId(0),
+            amount: 40
+        }]
+    );
+}
+
+/// A settlement carrying dead money re-verifies, and a tampered one is rejected.
+#[test]
+fn verify_round_trips_with_dead_money() {
+    let players = vec![
+        p(0, 100, false, Some(100_000), 0),
+        p(1, 100, false, Some(101_000), 1),
+    ];
+    let input = SettleInput {
+        players: &players,
+        oracle_price: oracle(100_000),
+        rake_bps: 0,
+        rake_cap: 0,
+        dead_money: 50,
+    };
+    let result = settle(&input).unwrap();
+    assert!(syndicate_shared::verify_settlement(&input, &result).is_ok());
+    let mut tampered = result.clone();
+    tampered.pot_awards[0].amount += 1;
+    assert_eq!(
+        syndicate_shared::verify_settlement(&input, &tampered),
+        Err(syndicate_shared::CoreError::SettlementMismatch)
     );
 }

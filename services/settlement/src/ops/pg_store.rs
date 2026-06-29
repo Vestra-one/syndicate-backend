@@ -86,6 +86,7 @@ fn row_to_attempt(row: &Row) -> Result<AttemptRecord, AttemptStoreError> {
         tx_sig: row.get("tx_signature"),
         next_retry_at_ms: next_retry_at_ms.map(|v| v as u64),
         last_error: row.get("last_error"),
+        oracle_audit: row.try_get("oracle_audit").ok().flatten(),
     })
 }
 
@@ -123,6 +124,7 @@ impl SettlementAttemptStore for PostgresAttemptStore {
             .await
             .map_err(map_pg_err)?;
         let next_retry: Option<f64> = None;
+        let oracle_audit = super::oracle_audit_for_job(job);
         let row = transaction
             .query_one(
                 UPSERT_SETTLEMENT_ATTEMPT_SQL,
@@ -131,6 +133,7 @@ impl SettlementAttemptStore for PostgresAttemptStore {
                     &job.idempotency_key,
                     &attempt_kind(job),
                     &job.event_root.as_slice(),
+                    &oracle_audit,
                     &next_retry,
                 ],
             )

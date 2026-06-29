@@ -32,9 +32,9 @@ pub use nats::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PythFetchRequest {
+    pub symbol: String,
     pub feed_id: FeedId,
     pub scheduled_end_ts: u64,
-    pub oracle_delay_window_sec: u64,
     pub max_confidence: u64,
     pub expected_exponent: i32,
 }
@@ -79,6 +79,23 @@ impl PythSelectedProof {
 pub struct PythResolvedPrice {
     pub price: VerifiedOraclePrice,
     pub selected: PythSelectedProof,
+    pub signed_price: SignedPricePayload,
+    pub source_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedPricePayload {
+    pub token: String,
+    pub symbol: String,
+    #[serde(alias = "priceInWad")]
+    pub price_in_wad: String,
+    pub timestamp: u64,
+    pub v: u8,
+    pub r: String,
+    pub s: String,
+    #[serde(default)]
+    #[serde(alias = "signedAt")]
+    pub signed_at: Option<u64>,
 }
 
 pub trait PythResolveClient {
@@ -127,7 +144,6 @@ pub fn fetch_and_post_first_valid_pyth_update<C: PythUpdateClient>(
     let rules = OracleValidation {
         expected_feed_id: request.feed_id,
         scheduled_end_ts: request.scheduled_end_ts,
-        oracle_delay_window_sec: request.oracle_delay_window_sec,
         max_confidence: request.max_confidence,
         expected_exponent: request.expected_exponent,
     };
@@ -209,12 +225,15 @@ pub struct SettlementJob {
 pub struct SolanaMatchContext {
     pub onchain_match_id: u64,
     pub seat_wallets: Vec<String>,
+    pub buy_in_chips: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PythSettlementContext {
     pub rules: PythFetchRequest,
     pub selected: Option<PythSelectedProof>,
+    pub signed_price: Option<SignedPricePayload>,
+    pub signed_price_source_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +256,7 @@ pub struct AttemptRecord {
     pub tx_sig: Option<String>,
     pub next_retry_at_ms: Option<u64>,
     pub last_error: Option<String>,
+    pub oracle_audit: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -366,6 +386,7 @@ impl SettlementAttemptStore for InMemoryAttemptStore {
                 tx_sig: None,
                 next_retry_at_ms: None,
                 last_error: None,
+                oracle_audit: oracle_audit_for_job(job),
             })
             .clone())
     }
@@ -452,6 +473,7 @@ impl SettlementAttemptStore for InMemoryAttemptStore {
                 tx_sig: None,
                 next_retry_at_ms: None,
                 last_error: None,
+                oracle_audit: oracle_audit_for_job(job),
             });
         record.status = AttemptStatus::DeadLetter;
         record.last_error = Some(reason.clone());
@@ -468,6 +490,30 @@ impl SettlementAttemptStore for InMemoryAttemptStore {
     async fn get(&self, idempotency_key: &str) -> Result<Option<AttemptRecord>, AttemptStoreError> {
         Ok(self.records.get(idempotency_key).cloned())
     }
+}
+
+fn oracle_audit_for_job(job: &SettlementJob) -> Option<serde_json::Value> {
+    let signed_price = job.pyth_context.signed_price.as_ref()?;
+    let payload = serde_json::json!({
+        "token": signed_price.token,
+        "symbol": signed_price.symbol,
+        "price_in_wad": signed_price.price_in_wad,
+        "timestamp": signed_price.timestamp,
+        "v": signed_price.v,
+        "r": signed_price.r,
+        "s": signed_price.s,
+        "signed_at": signed_price.signed_at,
+    });
+    let hash = syndicate_store::chain(&[0u8; 32], payload.to_string().as_bytes());
+    Some(serde_json::json!({
+        "kind": "signed_price",
+        "source_url": job.pyth_context.signed_price_source_url,
+        "symbol": signed_price.symbol,
+        "timestamp_sec": signed_price.timestamp / 1_000,
+        "signed_payload_timestamp_ms": signed_price.timestamp,
+        "signed_payload_hash": hex::encode(hash),
+        "payload": payload,
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -960,38 +1006,33 @@ pub mod net {
             &mut self,
             request: &PythFetchRequest,
         ) -> Result<Vec<OraclePriceUpdate>, PythError> {
-            let window_end = request
-                .scheduled_end_ts
-                .checked_add(request.oracle_delay_window_sec)
-                .ok_or_else(|| PythError::InvalidUpdate("oracle window overflow".into()))?;
+            let publish_time = request.scheduled_end_ts;
+            let url = self.url_for(request, publish_time);
+            let mut http =
+                ureq::get(&url).timeout(std::time::Duration::from_millis(self.timeout_ms));
+            if let Some(access_token) = &self.access_token {
+                http = http.set("Authorization", &format!("Bearer {access_token}"));
+            }
+            let body = http
+                .call()
+                .map_err(|e| PythError::Unavailable(format!("Hermes fetch failed: {e}")))?
+                .into_string()
+                .map_err(|e| PythError::InvalidUpdate(format!("Hermes body invalid: {e}")))?;
+            let hermes_response_hash = sha256_32(body.as_bytes());
+            let response: HermesPriceResponse = serde_json::from_str(&body)
+                .map_err(|e| PythError::InvalidUpdate(format!("Hermes JSON invalid: {e}")))?;
+            let binary_update_hash = response.binary_update_hash()?;
+            let proof = HermesProofPayload {
+                response: response.clone(),
+                hermes_response_hash,
+                binary_update_hash,
+            };
             let mut out = Vec::new();
-            for publish_time in request.scheduled_end_ts..=window_end {
-                let url = self.url_for(request, publish_time);
-                let mut http =
-                    ureq::get(&url).timeout(std::time::Duration::from_millis(self.timeout_ms));
-                if let Some(access_token) = &self.access_token {
-                    http = http.set("Authorization", &format!("Bearer {access_token}"));
-                }
-                let body = http
-                    .call()
-                    .map_err(|e| PythError::Unavailable(format!("Hermes fetch failed: {e}")))?
-                    .into_string()
-                    .map_err(|e| PythError::InvalidUpdate(format!("Hermes body invalid: {e}")))?;
-                let hermes_response_hash = sha256_32(body.as_bytes());
-                let response: HermesPriceResponse = serde_json::from_str(&body)
-                    .map_err(|e| PythError::InvalidUpdate(format!("Hermes JSON invalid: {e}")))?;
-                let binary_update_hash = response.binary_update_hash()?;
-                let proof = HermesProofPayload {
-                    response: response.clone(),
-                    hermes_response_hash,
-                    binary_update_hash,
-                };
-                for parsed in &response.parsed {
-                    if let Some(update) = parsed.to_update()? {
-                        self.raw_by_key
-                            .insert((update.feed_id, update.publish_time), proof.clone());
-                        out.push(update);
-                    }
+            for parsed in &response.parsed {
+                if let Some(update) = parsed.to_update()? {
+                    self.raw_by_key
+                        .insert((update.feed_id, update.publish_time), proof.clone());
+                    out.push(update);
                 }
             }
             Ok(out)
@@ -1015,7 +1056,6 @@ pub mod net {
             let body = PythPostRequest {
                 feed_id: feed_id_hex(&request.feed_id),
                 scheduled_end_ts: request.scheduled_end_ts,
-                oracle_delay_window_sec: request.oracle_delay_window_sec,
                 update: update_wire(update),
                 hermes_response: raw.response.clone(),
                 hermes_response_hash: hex_32(raw.hermes_response_hash),
@@ -1090,10 +1130,6 @@ pub mod net {
                 .map_err(|e| SubmitError::Rpc(format!("settlement-chain {path} JSON invalid: {e}")))
         }
 
-        pub fn sync_action_log(&self, body: serde_json::Value) -> Result<(), SubmitError> {
-            let _: serde_json::Value = self.post_json("/internal/solana/sync-action-log", &body)?;
-            Ok(())
-        }
     }
 
     impl PythResolveClient for SettlementChainHttpClient {
@@ -1108,10 +1144,30 @@ pub mod net {
             if !response.available {
                 return Ok(None);
             }
-            let selected = response.selected.ok_or_else(|| {
-                PythError::InvalidUpdate("resolve response missing selected".into())
+            let signed_price = response.signed_price.ok_or_else(|| {
+                PythError::InvalidUpdate("resolve response missing signed_price".into())
             })?;
-            let price = selected.verified_price()?;
+            let price_wire = response
+                .price
+                .ok_or_else(|| PythError::InvalidUpdate("resolve response missing price".into()))?;
+            let update = OraclePriceUpdate {
+                feed_id: parse_feed_id_hex(&price_wire.feed_id)
+                    .map_err(|e| PythError::InvalidUpdate(format!("bad feed id: {e}")))?,
+                price: price_wire
+                    .price
+                    .parse()
+                    .map_err(|e| PythError::InvalidUpdate(format!("bad price integer: {e}")))?,
+                publish_time: price_wire.publish_time,
+                confidence: price_wire.confidence,
+                exponent: price_wire.exponent,
+            };
+            let price = VerifiedOraclePrice {
+                feed_id: update.feed_id,
+                price: update.price,
+                publish_time: update.publish_time,
+                confidence: update.confidence,
+                exponent: update.exponent,
+            };
             let update = OraclePriceUpdate {
                 feed_id: price.feed_id,
                 price: price.price,
@@ -1122,13 +1178,30 @@ pub mod net {
             let rules = OracleValidation {
                 expected_feed_id: request.feed_id,
                 scheduled_end_ts: request.scheduled_end_ts,
-                oracle_delay_window_sec: request.oracle_delay_window_sec,
                 max_confidence: request.max_confidence,
                 expected_exponent: request.expected_exponent,
             };
             first_valid_oracle_update(&[update], &rules)
                 .map_err(|e| PythError::InvalidUpdate(format!("{e:?}")))?;
-            Ok(Some(PythResolvedPrice { price, selected }))
+            let selected = response.selected.unwrap_or_else(|| PythSelectedProof {
+                feed_id_hex: feed_id_hex(&price.feed_id),
+                price: price.price.to_string(),
+                confidence: price.confidence.to_string(),
+                exponent: price.exponent,
+                publish_time: price.publish_time,
+                requested_timestamp: request.scheduled_end_ts,
+                binary_data_hex: Vec::new(),
+                price_update_data: Vec::new(),
+                hermes_response_hash: String::new(),
+                binary_update_hash: String::new(),
+                hermes_url: None,
+            });
+            Ok(Some(PythResolvedPrice {
+                price,
+                selected,
+                signed_price,
+                source_url: response.source_url,
+            }))
         }
     }
 
@@ -1141,8 +1214,8 @@ pub mod net {
             if !bundle.verify() {
                 return Err(SubmitError::SelfVerifyFailed);
             }
-            let selected = job.pyth_context.selected.clone().ok_or_else(|| {
-                SubmitError::Rpc("missing selected Pyth proof for settlement".into())
+            let signed_price = job.pyth_context.signed_price.clone().ok_or_else(|| {
+                SubmitError::Rpc("missing signed price payload for settlement".into())
             })?;
             let payload_hash = settlement_payload_hash(bundle);
             let payload = AdapterSubmitRequest {
@@ -1150,11 +1223,8 @@ pub mod net {
                 match_id: job.match_id.clone(),
                 payload_hash: hex_32(payload_hash),
                 match_context: AdapterMatchContext::from_job(job, true),
-                pyth: AdapterPythContext {
-                    rules: AdapterPythRules::from_request(&job.pyth_context.rules),
-                    selected,
-                },
-                bundle: SettlementBundleWire::from_bundle(bundle),
+                signed_price,
+                bundle: SettlementBundleWire::from_bundle(bundle, job.chain_context.buy_in_chips),
             };
             Ok(SolanaTransactionPlan {
                 idempotency_key: job.idempotency_key.clone(),
@@ -1230,7 +1300,7 @@ pub mod net {
         payload_hash: String,
         #[serde(rename = "match")]
         match_context: AdapterMatchContext,
-        pyth: AdapterPythContext,
+        signed_price: SignedPricePayload,
         bundle: SettlementBundleWire,
     }
 
@@ -1250,6 +1320,7 @@ pub mod net {
         onchain_match_id: String,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         seat_wallets: Vec<String>,
+        buy_in_chips: u64,
     }
 
     impl AdapterMatchContext {
@@ -1261,23 +1332,17 @@ pub mod net {
                 } else {
                     Vec::new()
                 },
+                buy_in_chips: job.chain_context.buy_in_chips,
             }
         }
     }
 
     #[derive(Clone, Debug, Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct AdapterPythContext {
-        rules: AdapterPythRules,
-        selected: PythSelectedProof,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
     struct AdapterPythRules {
+        symbol: String,
         feed_id_hex: String,
         scheduled_end_ts: u64,
-        oracle_delay_window_sec: u64,
         max_confidence: String,
         expected_exponent: i32,
     }
@@ -1285,9 +1350,9 @@ pub mod net {
     impl AdapterPythRules {
         fn from_request(request: &PythFetchRequest) -> Self {
             Self {
+                symbol: request.symbol.clone(),
                 feed_id_hex: feed_id_hex(&request.feed_id),
                 scheduled_end_ts: request.scheduled_end_ts,
-                oracle_delay_window_sec: request.oracle_delay_window_sec,
                 max_confidence: request.max_confidence.to_string(),
                 expected_exponent: request.expected_exponent,
             }
@@ -1299,6 +1364,11 @@ pub mod net {
     struct AdapterResolveResponse {
         available: bool,
         selected: Option<PythSelectedProof>,
+        price: Option<OracleUpdateWire>,
+        #[serde(alias = "signed_price")]
+        signed_price: Option<SignedPricePayload>,
+        #[serde(alias = "source_url")]
+        source_url: Option<String>,
         #[allow(dead_code)]
         reason: Option<String>,
     }
@@ -1317,6 +1387,41 @@ pub mod net {
         rake_bps: u32,
         rake_cap: u64,
         result: SettleResultWire,
+        payouts: Vec<SeatPayoutWire>,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    struct SeatPayoutWire {
+        engine_seat: u8,
+        amount: u64,
+    }
+
+    fn compute_seat_payouts(bundle: &SettlementBundle, buy_in: u64) -> Vec<SeatPayoutWire> {
+        bundle
+            .players
+            .iter()
+            .map(|player| {
+                let won: u64 = bundle
+                    .result
+                    .pot_awards
+                    .iter()
+                    .filter(|a| a.player == player.id)
+                    .map(|a| a.amount)
+                    .sum::<u64>()
+                    + bundle
+                        .result
+                        .uncalled_returns
+                        .iter()
+                        .filter(|(p, _)| *p == player.id)
+                        .map(|(_, amount)| *amount)
+                        .sum::<u64>();
+                let leftover = buy_in.saturating_sub(player.contribution);
+                SeatPayoutWire {
+                    engine_seat: player.id.0 as u8,
+                    amount: leftover.saturating_add(won),
+                }
+            })
+            .collect()
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -1327,7 +1432,7 @@ pub mod net {
     }
 
     impl SettlementBundleWire {
-        fn from_bundle(bundle: &SettlementBundle) -> Self {
+        fn from_bundle(bundle: &SettlementBundle, buy_in: u64) -> Self {
             Self {
                 players: bundle
                     .players
@@ -1381,6 +1486,7 @@ pub mod net {
                         .collect(),
                     rake_collected: bundle.result.rake_collected,
                 },
+                payouts: compute_seat_payouts(bundle, buy_in),
             }
         }
     }
@@ -1417,13 +1523,7 @@ pub mod net {
     ) -> String {
         template
             .replace("{publish_time}", &publish_time.to_string())
-            .replace(
-                "{window_end}",
-                &request
-                    .scheduled_end_ts
-                    .saturating_add(request.oracle_delay_window_sec)
-                    .to_string(),
-            )
+            .replace("{window_end}", &request.scheduled_end_ts.to_string())
             .replace("{feed_id}", feed_hex)
     }
 
@@ -1563,14 +1663,13 @@ pub mod net {
     struct PythPostRequest {
         feed_id: String,
         scheduled_end_ts: u64,
-        oracle_delay_window_sec: u64,
         update: OracleUpdateWire,
         hermes_response: HermesPriceResponse,
         hermes_response_hash: String,
         binary_update_hash: Option<String>,
     }
 
-    #[derive(Clone, Debug, Serialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     struct OracleUpdateWire {
         feed_id: String,
         price: String,
@@ -1598,9 +1697,9 @@ pub mod net {
             let client = HermesHttpPythClient::benchmarks("https://pyth.dourolabs.app/hermes")
                 .with_access_token("secret-token");
             let request = PythFetchRequest {
+                symbol: "BTCUSD".into(),
                 feed_id: [0xff; 32],
                 scheduled_end_ts: 1_715_000_000,
-                oracle_delay_window_sec: 5,
                 max_confidence: 50,
                 expected_exponent: -8,
             };
@@ -1652,16 +1751,19 @@ pub mod net {
                 chain_context: SolanaMatchContext {
                     onchain_match_id: 42,
                     seat_wallets: vec!["wallet-a".into(), "wallet-b".into()],
+                    buy_in_chips: 100,
                 },
                 pyth_context: PythSettlementContext {
                     rules: PythFetchRequest {
+                        symbol: "BTCUSD".into(),
                         feed_id: [7u8; 32],
                         scheduled_end_ts: 1_000,
-                        oracle_delay_window_sec: 5,
                         max_confidence: 50,
                         expected_exponent: -8,
                     },
                     selected: None,
+                    signed_price: None,
+                    signed_price_source_url: None,
                 },
                 outcome: Outcome::Void(VoidReason::OracleDegraded),
             };
@@ -1757,6 +1859,7 @@ mod tests {
             &SettleParams {
                 rake_bps: 0,
                 rake_cap: 0,
+                dead_money: 0,
             },
             &bindings,
         ) {
@@ -1773,12 +1876,13 @@ mod tests {
             chain_context: SolanaMatchContext {
                 onchain_match_id: 42,
                 seat_wallets: vec!["wallet-a".into(), "wallet-b".into(), "wallet-c".into()],
+                buy_in_chips: 100,
             },
             pyth_context: PythSettlementContext {
                 rules: PythFetchRequest {
+                    symbol: "BTCUSD".into(),
                     feed_id: [7u8; 32],
                     scheduled_end_ts: 1_000,
-                    oracle_delay_window_sec: 5,
                     max_confidence: 50,
                     expected_exponent: -8,
                 },
@@ -1795,6 +1899,19 @@ mod tests {
                     binary_update_hash: "22".repeat(32),
                     hermes_url: None,
                 }),
+                signed_price: Some(SignedPricePayload {
+                    token: "0xa7BaE7da3E4950700BE9f107EB186e89a474d180".into(),
+                    symbol: "BTCUSD".into(),
+                    price_in_wad: "100000".into(),
+                    timestamp: 1_000_000,
+                    v: 27,
+                    r: format!("0x{}", "11".repeat(32)),
+                    s: format!("0x{}", "22".repeat(32)),
+                    signed_at: Some(1_000_001),
+                }),
+                signed_price_source_url: Some(
+                    "http://127.0.0.1:8080/prices/at?symbol=BTCUSD&timestamp=1000".into(),
+                ),
             },
             outcome,
         }
@@ -1807,9 +1924,9 @@ mod tests {
             posted: Vec::new(),
         };
         let request = PythFetchRequest {
+            symbol: "BTCUSD".into(),
             feed_id: [7u8; 32],
             scheduled_end_ts: 1_000,
-            oracle_delay_window_sec: 5,
             max_confidence: 50,
             expected_exponent: -8,
         };
@@ -1861,11 +1978,10 @@ mod tests {
         assert!(payload.contains("\"matchId\":\"match-1\""));
         assert!(payload.contains("\"onchainMatchId\":\"42\""));
         assert!(payload.contains("\"seatWallets\":[\"wallet-a\",\"wallet-b\",\"wallet-c\"]"));
-        assert!(payload.contains(
-            "\"feedIdHex\":\"0707070707070707070707070707070707070707070707070707070707070707\""
-        ));
-        assert!(payload.contains("\"selected\""));
+        assert!(payload.contains("\"signedPrice\""));
+        assert!(payload.contains("\"symbol\":\"BTCUSD\""));
         assert!(payload.contains("\"bundle\""));
+        assert!(payload.contains("\"payouts\""));
     }
 
     #[tokio::test]

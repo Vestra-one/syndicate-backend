@@ -29,7 +29,6 @@ pub struct SettlementContext {
     pub event_root: [u8; 32],
     pub scheduled_end_ts: u64,
     pub pyth_feed_id: [u8; 32],
-    pub oracle_delay_window_sec: u64,
     pub oracle_exponent: i32,
     pub max_oracle_confidence: u64,
     pub rake_bps: u32,
@@ -230,7 +229,6 @@ impl PostgresMatchStore {
             "event_root": hex::encode(event_root),
             "scheduled_end_ts": context.scheduled_end_ts,
             "pyth_feed_id": hex::encode(context.pyth_feed_id),
-            "oracle_delay_window_sec": context.oracle_delay_window_sec,
             "oracle_exponent": context.oracle_exponent,
             "max_oracle_confidence": context.max_oracle_confidence,
             "rake_bps": context.rake_bps,
@@ -301,7 +299,6 @@ fn row_to_settlement_context(row: &Row) -> Result<SettlementContext, Persistence
         event_root: root,
         scheduled_end_ts: row.get::<_, i64>("scheduled_end_ts_sec") as u64,
         pyth_feed_id,
-        oracle_delay_window_sec: row.get::<_, i32>("oracle_delay_window_sec") as u64,
         oracle_exponent: row.get("oracle_exponent"),
         max_oracle_confidence: row.get::<_, i64>("max_oracle_confidence") as u64,
         rake_bps: row.get::<_, i32>("rake_bps") as u32,
@@ -348,10 +345,16 @@ fn event_payload(event: &EngineLogEvent) -> Result<Value, PersistenceError> {
         EngineLogEvent::MatchStarted { config } => json!({
             "kind": "match.started",
             "match_id": config.match_id,
+            "onchain_match_id": config.onchain_match_id,
             "button": config.button,
             "small_blind": config.small_blind,
             "big_blind": config.big_blind,
             "round_count": config.round_count,
+            "round_durations_sec": config.round_durations_sec,
+            "observation_windows_sec": config.observation_windows_sec,
+            "action_timeout_ms": config.action_timeout_ms,
+            "time_bank_sec": config.time_bank_sec,
+            "lease_ttl_ms": config.lease_ttl_ms,
             "players": config.players.iter().map(|(id, stack, seal)| json!({
                 "player_id": id.0,
                 "stack": stack,
@@ -489,8 +492,28 @@ pub fn parse_persisted_event(payload: &Value) -> Result<EngineLogEvent, Persiste
                         .get("round_count")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(1) as u8,
-                    action_timeout_ms: 10_000,
-                    lease_ttl_ms: 1_000,
+                    round_durations_sec: payload
+                        .get("round_durations_sec")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+                        .unwrap_or_default(),
+                    observation_windows_sec: payload
+                        .get("observation_windows_sec")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+                        .unwrap_or_default(),
+                    action_timeout_ms: payload
+                        .get("action_timeout_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(25_000),
+                    time_bank_sec: payload
+                        .get("time_bank_sec")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    lease_ttl_ms: payload
+                        .get("lease_ttl_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(1_000),
                 },
             })
         }

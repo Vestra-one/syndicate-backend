@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# Standalone workspace root: this crate lives under services/programs/ (itself an Anchor
+# workspace) but is not one of its members, so it must declare its own workspace.
+[workspace]
+
 [dependencies]
 litesvm = "0.6"
 solana-sdk = "2.2"

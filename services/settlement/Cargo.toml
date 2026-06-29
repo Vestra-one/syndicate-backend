@@ -10,8 +10,9 @@ syndicate-shared = { path = "../shared" }
 syndicate-engine = { path = "../match-engine" }
 syndicate-timelock = { path = "../timelock" }
 syndicate-store = { path = "../store" }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+hex = "0.4"
 sha2 = { version = "0.10", optional = true }
 ureq = { version = "2", features = ["json"], optional = true }
 async-nats = { version = "0.38", optional = true }
@@ -27,6 +28,6 @@ required-features = ["pg"]
 
 [features]
 default = []
-net = ["dep:serde", "dep:serde_json", "dep:sha2", "dep:ureq"]
-pg = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:serde_json"]
-nats = ["dep:async-nats", "dep:serde", "dep:serde_json"]
+net = ["dep:sha2", "dep:ureq"]
+pg = ["dep:tokio-postgres", "dep:deadpool-postgres"]
+nats = ["dep:async-nats"]

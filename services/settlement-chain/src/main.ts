@@ -2,42 +2,25 @@ import { createHash } from 'node:crypto';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_PYTH_HERMES_URL,
-  PYTH_UNAVAILABLE_MESSAGE,
-  fetchEarliestValidPythUpdate,
   normalizeFeedIdHex,
   redactSecrets,
-  type PythCandidate,
 } from './pyth.ts';
 import { resolvePythStackFromEnv } from './pythStack.ts';
-import {
-  anchorDiscriminator,
-  buildEd25519VerifyInstruction,
-  buildActionIntentMessage,
-  buildDefaultPolicyMessage,
-  buildPredictionCommitmentMessage,
-  decodeBase64Signature,
-  decodeWalletPubkey,
-  encodeAppendPlayerActionArgs,
-  encodeAppendTimeoutActionArgs,
-  encodeInitActionLogParams,
-  encodeRegisterDefaultPolicyArgs,
-  encodeRegisterPredictionCommitmentArgs,
-  actionTagFromName,
-  ED25519_PROGRAM_ID,
-  IX_SYSVAR_ID,
-} from './actionLog.ts';
 import {
   buildClaimPreview,
   buildCreateMatchPreview,
   buildLockMatchPreview,
   buildRefundPreview,
+  buildDepositPreview,
+  buildCreateAndDepositPreview,
+  buildRegisterCommitmentPreview,
   CustodyError,
   settlementStatus,
   submitCreateMatch,
   submitLockMatch,
   submitBeginLive,
-  submitSetButtonSeed,
+  submitVoidBeforeStart,
+  submitVoidLiveAfterDeadline,
   submitWithdrawFees,
   type CustodyConfig,
   type CreateMatchInput,
@@ -60,6 +43,7 @@ type Config = {
   wormholeProgramId: string;
   pushOracleProgramId: string;
   pythStack: string;
+  signedPriceServerUrl: string;
   confirmationTimeoutMs: number;
   computeUnitPriceMicroLamports: number;
   allowTwoStepFallback: boolean;
@@ -93,6 +77,7 @@ export function createServer(config: Config) {
           pushOracleProgramId: config.pushOracleProgramId,
           pythStack: config.pythStack,
           hermesUrl: config.hermesUrl,
+          signedPriceServerUrl: config.signedPriceServerUrl,
         });
       }
       if (req.method === 'GET' && req.url === '/metrics') {
@@ -142,20 +127,45 @@ export function createServer(config: Config) {
         }
         return sendJson(res, 200, buildLockMatchPreview(String(body.onchainMatchId ?? body.matchId)));
       }
-      if (req.url === '/internal/solana/set-button-seed') {
+      if (req.url === '/internal/solana/deposit') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
-        const vrfSeedHex = body.vrfSeedHex ?? body.vrf_seed_hex;
-        const vrfProofHashHex = body.vrfProofHashHex ?? body.vrf_proof_hash_hex;
-        return sendJson(res, 200, await submitSetButtonSeed(custodyConfig(config), {
-          onchainMatchId: BigInt(String(onchain)),
-          matchId: body.matchId ?? body.match_id,
-          vrfSeedHex: vrfSeedHex === undefined ? undefined : String(vrfSeedHex),
-          vrfProofHashHex: vrfProofHashHex === undefined ? undefined : String(vrfProofHashHex),
-        }));
+        return sendJson(res, 200, await buildDepositPreview(
+          custodyConfig(config),
+          String(body.wallet),
+          numberArg(body.seatIndex ?? body.seat_index, 'seatIndex'),
+          BigInt(String(onchain)),
+        ));
+      }
+      if (req.url === '/internal/solana/create-and-deposit') {
+        const input = body as CreateMatchInput & { wallet: string; seatIndex: number };
+        return sendJson(res, 200, await buildCreateAndDepositPreview(custodyConfig(config), input));
+      }
+      if (req.url === '/internal/solana/register-commitment') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        return sendJson(res, 200, await buildRegisterCommitmentPreview(
+          custodyConfig(config),
+          String(body.wallet),
+          String(body.commitmentHex ?? body.commitment_hex),
+          body.timelockTarget ?? body.timelock_target,
+          BigInt(String(onchain)),
+        ));
       }
       if (req.url === '/internal/solana/begin-live') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
-        return sendJson(res, 200, await submitBeginLive(custodyConfig(config), BigInt(String(onchain))));
+        const seatWallets = body.seatWallets ?? body.seat_wallets ?? body.match?.seatWallets ?? [];
+        return sendJson(res, 200, await submitBeginLive(custodyConfig(config), {
+          onchainMatchId: BigInt(String(onchain)),
+          seatWallets: (seatWallets as unknown[]).map((w) => String(w)),
+          buttonRandomnessHex: body.buttonRandomnessHex ?? body.button_randomness_hex,
+        }));
+      }
+      if (req.url === '/internal/solana/void-before-start') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        return sendJson(res, 200, await submitVoidBeforeStart(custodyConfig(config), BigInt(String(onchain))));
+      }
+      if (req.url === '/internal/solana/void-live-after-deadline') {
+        const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
+        return sendJson(res, 200, await submitVoidLiveAfterDeadline(custodyConfig(config), BigInt(String(onchain))));
       }
       if (req.url === '/internal/solana/withdraw-fees') {
         const onchain = body.onchainMatchId ?? body.match?.onchainMatchId;
@@ -168,7 +178,6 @@ export function createServer(config: Config) {
         ));
       }
       if (req.url === '/internal/solana/submit-settlement') return sendJson(res, 200, await submitSettlement(config, body));
-      if (req.url === '/internal/solana/sync-action-log') return sendJson(res, 200, await syncActionLog(config, body));
       if (req.url === '/internal/solana/void-match') return sendJson(res, 200, await voidMatch(config, body));
       if (req.url === '/internal/solana/claim-preview') {
         return sendJson(res, 200, await buildClaimPreview(
@@ -214,11 +223,12 @@ export function loadConfigFromEnv(): Config {
     programId: requiredEnv('SYNDICATE_PROGRAM_ID'),
     chipsTokenMint: process.env.CHIPS_TOKEN_MINT ?? '',
     hermesUrl: pythStack.hermesUrl,
-    pythApiKey: requiredEnv('PYTH_API_KEY'),
+    pythApiKey: process.env.PYTH_API_KEY ?? '',
     receiverProgramId: pythStack.receiverProgramId,
     wormholeProgramId: pythStack.wormholeProgramId,
     pushOracleProgramId: pythStack.pushOracleProgramId,
     pythStack: pythStack.stack,
+    signedPriceServerUrl: process.env.SIGNED_PRICE_SERVER_URL ?? 'http://127.0.0.1:8080',
     confirmationTimeoutMs: envInt('SETTLEMENT_CONFIRMATION_TIMEOUT_MS', 60_000),
     computeUnitPriceMicroLamports: envInt('SETTLEMENT_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS', 100_000),
     allowTwoStepFallback: envBool('PYTH_ALLOW_TWO_STEP_FALLBACK', true),
@@ -227,141 +237,83 @@ export function loadConfigFromEnv(): Config {
 
 async function resolvePyth(config: Config, body: any) {
   metrics.resolveTotal += 1;
-  const selected = await fetchEarliestValidPythUpdate({
-    hermesUrl: config.hermesUrl,
-    apiKey: config.pythApiKey,
-    timeoutMs: envInt('PYTH_HTTP_TIMEOUT_MS', 5_000),
-    rules: {
-      feedIdHex: body.feedIdHex ?? body.feed_id_hex,
-      scheduledEndTs: body.scheduledEndTs ?? body.scheduled_end_ts,
-      oracleDelayWindowSec: body.oracleDelayWindowSec ?? body.oracle_delay_window_sec,
-      maxConfidence: body.maxConfidence ?? body.max_confidence,
-      expectedExponent: body.expectedExponent ?? body.expected_exponent,
-    },
+  const symbol = requiredString(body.symbol, 'symbol').toUpperCase();
+  const timestamp = Number(parseU64(body.scheduledEndTs ?? body.scheduled_end_ts, 'scheduledEndTs'));
+  const url = new URL('/prices/at', config.signedPriceServerUrl);
+  url.searchParams.set('symbol', symbol);
+  url.searchParams.set('timestamp', String(timestamp));
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(envInt('SIGNED_PRICE_HTTP_TIMEOUT_MS', 5_000)),
   });
-  if (!selected) return { available: false, reason: PYTH_UNAVAILABLE_MESSAGE };
-  return { available: true, selected: candidateJson(selected) };
+  if (response.status === 404) return { available: false, reason: 'signed price unavailable' };
+  if (!response.ok) throw new HttpError(424, `signed price server returned ${response.status}`);
+  const bodyJson = await response.json();
+  const signedPrice = requireObject(bodyJson.price ?? bodyJson, 'signed_price');
+  validateSignedPriceResponse(signedPrice, symbol, timestamp, body.feedIdHex ?? body.feed_id_hex);
+  const tokenFeedId = tokenFeedIdHex(field(signedPrice, 'token'));
+  const price = {
+    feed_id: tokenFeedId,
+    price: requiredString(field(signedPrice, 'priceInWad', 'price_in_wad'), 'signed_price.price_in_wad'),
+    publish_time: Math.floor(Number(parseU64(field(signedPrice, 'timestampMs', 'timestamp'), 'signed_price.timestamp')) / 1000),
+    confidence: 0,
+    exponent: -18,
+  };
+  return {
+    available: true,
+    price,
+    signed_price: signedPrice,
+    source_url: url.toString(),
+  };
 }
 
 async function submitSettlement(config: Config, body: any) {
   metrics.submitSettlementTotal += 1;
-  const selected = await selectedFromBody(config, body);
-  const { Connection, Keypair, PublicKey, TransactionInstruction } = await import('@solana/web3.js');
-  const { Wallet } = await import('@coral-xyz/anchor');
-  const { PythSolanaReceiver } = await import('@pythnetwork/pyth-solana-receiver');
+  const { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } = await import('@solana/web3.js');
   const signer = Keypair.fromSecretKey(Uint8Array.from(readKeypair(config.signerKeypairPath)));
   const connection = new Connection(config.primaryRpcUrl, 'confirmed');
-  const wallet = new Wallet(signer);
-  const receiver = new PythSolanaReceiver({
-    connection,
-    wallet,
-    receiverProgramId: new PublicKey(config.receiverProgramId),
-    wormholeProgramId: new PublicKey(config.wormholeProgramId),
-    pushOracleProgramId: new PublicKey(config.pushOracleProgramId),
-  });
   const programId = new PublicKey(body.programId ?? config.programId);
-  const pythContext = requireObject(body.pyth, 'pyth');
-  const rules = requireObject(pythContext.rules, 'pyth.rules');
-  assertSelectedMatchesRules(selected, rules);
   const bundle = requireObject(body.bundle, 'bundle');
-  assertBundleMatchesSelected(bundle, selected);
+  const signedPrice = requireObject(body.signedPrice ?? body.signed_price ?? bundle.signedPrice ?? bundle.signed_price, 'signed_price');
+  const settlementBundle = { ...bundle, signed_price: signedPrice };
   const accounts = await deriveSyndicateAccounts(programId, requireObject(body.match, 'match'));
   const protocol = accounts.protocol;
   const match = accounts.match;
-  const actionLog = accounts.actionLog;
   const seats = accounts.seats;
-  const settlementArgs = encodeSettleArgsFromBundle(bundle);
-  const submitSettlementIx = (priceUpdateAccount: any) => new TransactionInstruction({
+  const settlementArgs = encodeSettleArgsFromBundle(settlementBundle);
+  const submitSettlementIx = new TransactionInstruction({
     programId,
     keys: [
       { pubkey: signer.publicKey, isSigner: true, isWritable: false },
       { pubkey: protocol, isSigner: false, isWritable: false },
       { pubkey: match, isSigner: false, isWritable: true },
-      { pubkey: actionLog, isSigner: false, isWritable: false },
-      { pubkey: priceUpdateAccount, isSigner: false, isWritable: false },
       ...seats.map((seat) => ({ pubkey: seat, isSigner: false, isWritable: true })),
     ],
     data: Buffer.concat([discriminator('global:submit_settlement'), settlementArgs]),
   });
-  const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: false });
-  await builder.addPostPriceUpdates(selected.priceUpdateData);
-  let priceUpdateAccount: any = null;
-  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount: (feedId: string) => any) => {
-    priceUpdateAccount = getPriceUpdateAccount(selected.feedIdHex);
-    if (!priceUpdateAccount) throw new Error(`Pyth builder did not expose price update account for ${selected.feedIdHex}`);
-    return [{
-      instruction: submitSettlementIx(priceUpdateAccount),
-      signers: [],
-      computeUnits: envInt('SETTLEMENT_SUBMIT_COMPUTE_UNITS', 200_000),
-    }];
-  });
-  priceUpdateAccount = priceUpdateAccount ?? builder.getPriceUpdateAccount(selected.feedIdHex);
-  const txs = await builder.buildVersionedTransactions({
-    computeUnitPriceMicroLamports: config.computeUnitPriceMicroLamports,
-    tightComputeBudget: true,
-  });
-  if (txs.length !== 1 && !(body.allowTwoStepFallback ?? config.allowTwoStepFallback)) {
-    throw new HttpError(409, `atomic Pyth settlement built ${txs.length} transactions and two-step fallback is disabled`);
+  const tx = new Transaction().add(submitSettlementIx);
+  const latest = await connection.getLatestBlockhash('confirmed');
+  tx.feePayer = signer.publicKey;
+  tx.recentBlockhash = latest.blockhash;
+  tx.sign(signer);
+  const sim = await connection.simulateTransaction(tx);
+  if (sim.value.err) {
+    throw new HttpError(422, `submit_settlement simulation failed: ${JSON.stringify(sim.value.err)}`);
   }
-  const signatures = [];
-  let computeUnits = null;
-  let transactionSize = null;
-  let mode: 'atomic' | 'two_step' = txs.length === 1 ? 'atomic' : 'two_step';
-  if (txs.length === 1) {
-    const sent = await sendVersionedTx(connection, signer, txs[0], config.confirmationTimeoutMs);
-    signatures.push(sent.signature);
-    computeUnits = sent.computeUnits;
-    transactionSize = sent.transactionSize;
-  } else {
-    for (const [index, txWithSigners] of txs.slice(0, -1).entries()) {
-      const sent = await sendVersionedTx(connection, signer, txWithSigners, config.confirmationTimeoutMs);
-      signatures.push(sent.signature);
-      if (index === txs.length - 2) {
-        computeUnits = sent.computeUnits;
-        transactionSize = sent.transactionSize;
-      }
-    }
-    priceUpdateAccount = builder.getPriceUpdateAccount(selected.feedIdHex);
-    if (!priceUpdateAccount) {
-      throw new HttpError(422, `Pyth builder did not expose price update account for ${selected.feedIdHex} after posting`);
-    }
-    await assertPriceUpdateOwner(connection, priceUpdateAccount, config.receiverProgramId);
-    const submitTx = new (await import('@solana/web3.js')).Transaction().add(submitSettlementIx(priceUpdateAccount));
-    const latest = await connection.getLatestBlockhash('confirmed');
-    submitTx.feePayer = signer.publicKey;
-    submitTx.recentBlockhash = latest.blockhash;
-    submitTx.sign(signer);
-    const sim = await connection.simulateTransaction(submitTx);
-    if (sim.value.err) {
-      throw new HttpError(422, `submit_settlement simulation failed: ${JSON.stringify(sim.value.err)}`);
-    }
-    const signature = await connection.sendRawTransaction(submitTx.serialize(), {
-      skipPreflight: false,
-      preflightCommitment: 'processed',
-    });
-    await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
-    signatures.push(signature);
-    computeUnits = sim.value.unitsConsumed ?? computeUnits;
-    transactionSize = submitTx.serialize().length;
-  }
-  const txSig = signatures[signatures.length - 1];
+  const serialized = tx.serialize();
+  const txSig = await connection.sendRawTransaction(serialized, {
+    skipPreflight: false,
+    preflightCommitment: 'processed',
+  });
+  await withTimeout(connection.confirmTransaction({ signature: txSig, ...latest }, 'confirmed'), config.confirmationTimeoutMs, `confirmation timeout for ${txSig}`);
   if (config.secondaryRpcUrl) await verifyOnSecondary(config, txSig);
   return {
     tx_sig: txSig,
     txSig,
-    pyth_price_update_account: priceUpdateAccount.toBase58(),
-    priceUpdateAccount: priceUpdateAccount.toBase58(),
-    selected: candidateJson(selected),
-    receiverProgramId: config.receiverProgramId,
-    wormholeProgramId: config.wormholeProgramId,
-    pushOracleProgramId: config.pushOracleProgramId,
-    hermesResponseHash: selected.hermesResponseHash,
-    binaryUpdateHash: selected.binaryUpdateHash,
-    computeUnits,
-    transactionSize,
-    transactionCount: txs.length,
-    mode,
-    pythStack: config.pythStack,
+    signedPrice,
+    computeUnits: sim.value.unitsConsumed ?? null,
+    transactionSize: serialized.length,
+    transactionCount: 1,
+    mode: 'signed_price',
   };
 }
 
@@ -393,213 +345,6 @@ async function voidMatch(config: Config, body: any) {
   return { tx_sig: signature, txSig: signature, computeUnits: sim.value.unitsConsumed ?? null, transactionSize: tx.serialize().length };
 }
 
-async function syncActionLog(config: Config, body: any) {
-  const { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram } = await import('@solana/web3.js');
-  const signer = Keypair.fromSecretKey(Uint8Array.from(readKeypair(config.signerKeypairPath)));
-  const connection = new Connection(config.primaryRpcUrl, 'confirmed');
-  const programId = new PublicKey(body.programId ?? config.programId);
-  const matchContext = requireObject(body.match, 'match');
-  const accounts = await deriveSyndicateAccounts(programId, matchContext);
-  const onchainMatchId = parseU64(matchContext.onchainMatchId ?? matchContext.onchain_match_id, 'match.onchainMatchId');
-  const signingMatchId = parseU64(body.signingMatchId ?? body.signing_match_id ?? onchainMatchId, 'signingMatchId');
-  const entries = requireArray(body.entries, 'entries');
-  const signatures: string[] = [];
-
-  if (body.init) {
-    const init = requireObject(body.init, 'init');
-    const sealSeq = requireArray(init.sealSeq ?? init.seal_seq, 'init.sealSeq').map((v: unknown, i: number) =>
-      parseU64(v, `init.sealSeq[${i}]`),
-    );
-    while (sealSeq.length < 5) sealSeq.push(0n);
-    const initData = Buffer.concat([
-      anchorDiscriminator('global:init_action_log'),
-      encodeInitActionLogParams({
-        button: numberField(init, 'button'),
-        smallBlind: parseU64(field(init, 'smallBlind', 'small_blind'), 'init.smallBlind'),
-        bigBlind: parseU64(field(init, 'bigBlind', 'big_blind'), 'init.bigBlind'),
-        roundCount: numberField(init, 'roundCount', 'round_count'),
-        settleDeadlineTs: parseU64(field(init, 'settleDeadlineTs', 'settle_deadline_ts'), 'init.settleDeadlineTs'),
-        sealSeq,
-      }),
-    ]);
-    const seatWallets = matchContext.seatWallets ?? matchContext.seat_wallets ?? [];
-    const seatPubkeys = seatWallets.map((w: unknown) => new PublicKey(requiredString(w, 'seat wallet')));
-    const tx = new Transaction().add(new TransactionInstruction({
-      programId,
-      keys: [
-        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: accounts.protocol, isSigner: false, isWritable: false },
-        { pubkey: accounts.match, isSigner: false, isWritable: true },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ...seatPubkeys.map((pk) => ({ pubkey: pk, isSigner: false, isWritable: false })),
-      ],
-      data: initData,
-    }));
-    signatures.push(await sendLegacyTx(connection, signer, tx, config.confirmationTimeoutMs));
-  }
-
-  const ixSysvar = new PublicKey(IX_SYSVAR_ID);
-  const ed25519Program = new PublicKey(ED25519_PROGRAM_ID);
-
-  for (const entry of entries) {
-    const kind = requiredString(entry.kind ?? entry.type, 'entry.kind');
-    const tx = new Transaction();
-    let ed25519IxIndex = 0;
-    if (entry.signature) {
-      const wallet = requiredString(entry.wallet, 'entry.wallet');
-      const seatPubkey = decodeWalletPubkey(wallet);
-      let message: Uint8Array;
-      if (kind === 'player.action') {
-        message = buildActionIntentMessage({
-          matchId: signingMatchId,
-          onchainMatchId,
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          wallet,
-          nonce: parseU64(field(entry, 'nonce'), 'entry.nonce'),
-          prevHeadHex: requiredString(field(entry, 'prevHeadHex', 'prev_head_hex'), 'entry.prevHeadHex'),
-          actionTag: actionTagFromName(requiredString(field(entry, 'action', 'action_tag'), 'entry.action')),
-          amount: parseU64(field(entry, 'amount') ?? 0, 'entry.amount'),
-        });
-      } else if (kind === 'default.registered') {
-        message = buildDefaultPolicyMessage({
-          matchId: signingMatchId,
-          onchainMatchId,
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          wallet,
-          policyTag: numberField(entry, 'policyTag', 'policy_tag'),
-        });
-      } else if (kind === 'prediction.commitment') {
-        message = buildPredictionCommitmentMessage({
-          matchId: signingMatchId,
-          onchainMatchId,
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          wallet,
-          sealSeq: parseU64(field(entry, 'sealSeq', 'seal_seq'), 'entry.sealSeq'),
-          commitmentHex: requiredString(field(entry, 'commitmentHex', 'commitment_hex'), 'entry.commitmentHex'),
-        });
-      } else {
-        throw new HttpError(400, `unsupported signed entry kind: ${kind}`);
-      }
-      const ed = buildEd25519VerifyInstruction({
-        publicKey: seatPubkey,
-        message,
-        signature: decodeBase64Signature(requiredString(entry.signature, 'entry.signature')),
-      });
-      tx.add(new TransactionInstruction({
-        programId: ed25519Program,
-        keys: ed.keys,
-        data: ed.data,
-      }));
-    }
-
-    let programData: Buffer;
-    let programKeys: { pubkey: any; isSigner: boolean; isWritable: boolean }[];
-    if (kind === 'player.action') {
-      programData = Buffer.concat([
-        anchorDiscriminator('global:append_player_action'),
-        encodeAppendPlayerActionArgs({
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          nonce: parseU64(field(entry, 'nonce'), 'entry.nonce'),
-          actionTag: actionTagFromName(requiredString(field(entry, 'action', 'action_tag'), 'entry.action')),
-          amount: parseU64(field(entry, 'amount') ?? 0, 'entry.amount'),
-          ed25519IxIndex,
-        }),
-      ]);
-      programKeys = [
-        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-        { pubkey: accounts.protocol, isSigner: false, isWritable: false },
-        { pubkey: accounts.match, isSigner: false, isWritable: false },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-        { pubkey: ixSysvar, isSigner: false, isWritable: false },
-      ];
-    } else if (kind === 'timeout.default') {
-      programData = Buffer.concat([
-        anchorDiscriminator('global:append_timeout_action'),
-        encodeAppendTimeoutActionArgs(numberField(entry, 'seatIndex', 'seat_index')),
-      ]);
-      programKeys = [
-        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-        { pubkey: accounts.protocol, isSigner: false, isWritable: false },
-        { pubkey: accounts.match, isSigner: false, isWritable: false },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-      ];
-    } else if (kind === 'default.registered') {
-      programData = Buffer.concat([
-        anchorDiscriminator('global:register_default_policy'),
-        encodeRegisterDefaultPolicyArgs({
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          policyTag: numberField(entry, 'policyTag', 'policy_tag'),
-          ed25519IxIndex,
-        }),
-      ]);
-      programKeys = [
-        { pubkey: new PublicKey(requiredString(entry.wallet, 'entry.wallet')), isSigner: false, isWritable: false },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-        { pubkey: accounts.match, isSigner: false, isWritable: false },
-        { pubkey: ixSysvar, isSigner: false, isWritable: false },
-      ];
-    } else if (kind === 'prediction.commitment') {
-      const commitment = Buffer.from(
-        requiredString(field(entry, 'commitmentHex', 'commitment_hex'), 'entry.commitmentHex').replace(/^0x/, ''),
-        'hex',
-      );
-      if (commitment.length !== 32) throw new HttpError(400, 'commitment must be 32 bytes');
-      programData = Buffer.concat([
-        anchorDiscriminator('global:register_prediction_commitment'),
-        encodeRegisterPredictionCommitmentArgs({
-          seatIndex: numberField(entry, 'seatIndex', 'seat_index'),
-          sealSeq: parseU64(field(entry, 'sealSeq', 'seal_seq'), 'entry.sealSeq'),
-          commitment: Uint8Array.from(commitment),
-          ed25519IxIndex,
-        }),
-      ]);
-      programKeys = [
-        { pubkey: new PublicKey(requiredString(entry.wallet, 'entry.wallet')), isSigner: false, isWritable: false },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-        { pubkey: accounts.match, isSigner: false, isWritable: false },
-        { pubkey: ixSysvar, isSigner: false, isWritable: false },
-      ];
-    } else {
-      throw new HttpError(400, `unsupported action-log entry kind: ${kind}`);
-    }
-    tx.add(new TransactionInstruction({ programId, keys: programKeys, data: programData }));
-    signatures.push(await sendLegacyTx(connection, signer, tx, config.confirmationTimeoutMs));
-  }
-
-  if (body.finalize) {
-    const finalize = requireObject(body.finalize, 'finalize');
-    const rootHex = requiredString(finalize.eventRootHex ?? finalize.event_root_hex, 'finalize.eventRootHex');
-    const root = Buffer.from(rootHex.replace(/^0x/, ''), 'hex');
-    if (root.length !== 32) throw new HttpError(400, 'eventRoot must be 32 bytes');
-    const tx = new Transaction().add(new TransactionInstruction({
-      programId,
-      keys: [
-        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-        { pubkey: accounts.protocol, isSigner: false, isWritable: false },
-        { pubkey: accounts.match, isSigner: false, isWritable: false },
-        { pubkey: accounts.actionLog, isSigner: false, isWritable: true },
-      ],
-      data: Buffer.concat([anchorDiscriminator('global:finalize_action_log'), root]),
-    }));
-    signatures.push(await sendLegacyTx(connection, signer, tx, config.confirmationTimeoutMs));
-  }
-
-  return { tx_sigs: signatures, count: signatures.length };
-}
-
-async function sendLegacyTx(connection: any, signer: any, tx: any, confirmationTimeoutMs: number): Promise<string> {
-  const latest = await connection.getLatestBlockhash('confirmed');
-  tx.feePayer = signer.publicKey;
-  tx.recentBlockhash = latest.blockhash;
-  tx.sign(signer);
-  const sim = await connection.simulateTransaction(tx);
-  if (sim.value.err) throw new HttpError(422, `transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, preflightCommitment: 'processed' });
-  await withTimeout(connection.confirmTransaction({ signature, ...latest }, 'confirmed'), confirmationTimeoutMs, `confirmation timeout for ${signature}`);
-  return signature;
-}
-
 export async function deriveSyndicateAccounts(programId: any, matchContext: any) {
   const { PublicKey } = await import('@solana/web3.js');
   const onchainMatchId = parseU64(matchContext.onchainMatchId ?? matchContext.onchain_match_id, 'match.onchainMatchId');
@@ -607,7 +352,6 @@ export async function deriveSyndicateAccounts(programId: any, matchContext: any)
   matchSeed.writeBigUInt64LE(onchainMatchId, 0);
   const [protocol] = PublicKey.findProgramAddressSync([Buffer.from('protocol')], programId);
   const [match] = PublicKey.findProgramAddressSync([Buffer.from('match'), matchSeed], programId);
-  const [actionLog] = PublicKey.findProgramAddressSync([Buffer.from('actionlog'), match.toBuffer()], programId);
   const seatWallets = matchContext.seatWallets ?? matchContext.seat_wallets ?? [];
   if (!Array.isArray(seatWallets)) throw new HttpError(400, 'match.seatWallets must be an array');
   const seats = seatWallets.map((wallet: unknown) => {
@@ -615,107 +359,27 @@ export async function deriveSyndicateAccounts(programId: any, matchContext: any)
     const [seat] = PublicKey.findProgramAddressSync([Buffer.from('seat'), match.toBuffer(), player.toBuffer()], programId);
     return seat;
   });
-  return { protocol, match, actionLog, seats };
+  return { protocol, match, seats };
 }
 
 export function encodeSettleArgsFromBundle(bundle: any): Buffer {
-  const oracle = requireObject(bundle.oraclePrice ?? bundle.oracle_price, 'bundle.oracle_price');
+  const signedPrice = requireObject(bundle.signedPrice ?? bundle.signed_price, 'bundle.signed_price');
   const result = requireObject(bundle.result, 'bundle.result');
-  const revealed = requireArray(bundle.revealed ?? bundle.revealed_predictions, 'bundle.revealed');
-  const vrfSeedHex = field(bundle, 'vrfSeedHex', 'vrf_seed_hex') ?? field(bundle, 'vrfSeed', 'vrf_seed') ?? '00'.repeat(32);
-  const vrfSeed = Buffer.from(String(vrfSeedHex).replace(/^0x/, ''), 'hex');
-  if (vrfSeed.length !== 32) throw new HttpError(400, 'vrf_seed must be 32 bytes');
+  const payouts = requireArray(bundle.payouts, 'bundle.payouts');
+  // SettleArgs v1: signed_price, rake_collected, payouts (engine-indexed per-seat amounts).
   return Buffer.concat([
-    vrfSeed,
-    feedIdBytes(field(oracle, 'feedId', 'feed_id')),
-    i64(parseI64(field(oracle, 'price'), 'oracle.price')),
-    u64(parseU64(field(oracle, 'publishTime', 'publish_time'), 'oracle.publishTime')),
-    u64(parseU64(field(oracle, 'confidence'), 'oracle.confidence')),
-    i32(numberField(oracle, 'exponent')),
-    i64(parseI64(field(result, 'settlementPrice', 'settlement_price'), 'result.settlementPrice')),
-    u64(parseU64(field(result, 'oraclePublishTime', 'oracle_publish_time'), 'result.oraclePublishTime')),
-    vec(requireArray(result.potAwards ?? result.pot_awards, 'result.potAwards').map((award) => Buffer.concat([
-      u16(numberField(award, 'seatIndex', 'seat_index')),
-      u64(parseU64(field(award, 'amount'), 'award.amount')),
-    ]))),
-    vec(requireArray(result.uncalledReturns ?? result.uncalled_returns, 'result.uncalledReturns').map((ret) => Buffer.concat([
-      u16(numberField(ret, 'seatIndex', 'seat_index')),
-      u64(parseU64(field(ret, 'amount'), 'return.amount')),
-    ]))),
+    addressBytes(field(signedPrice, 'token')),
+    uint256Bytes(field(signedPrice, 'priceInWad', 'price_in_wad'), 'signed_price.price_in_wad'),
+    u64(parseU64(field(signedPrice, 'timestampMs', 'timestamp'), 'signed_price.timestamp')),
+    u8(numberField(signedPrice, 'v')),
+    fixedHexBytes(field(signedPrice, 'r'), 32, 'signed_price.r'),
+    fixedHexBytes(field(signedPrice, 's'), 32, 'signed_price.s'),
     u64(parseU64(field(result, 'rakeCollected', 'rake_collected'), 'result.rakeCollected')),
-    vec(revealed.map((r) => {
-      const blindingHex = requiredString(field(r, 'blinding', 'blinding_hex') ?? field(r, 'blindingHex', 'blinding_hex'), 'revealed.blinding');
-      const blinding = Buffer.from(blindingHex.replace(/^0x/, ''), 'hex');
-      if (blinding.length !== 32) throw new HttpError(400, 'revealed.blinding must be 32 bytes');
-      return Buffer.concat([
-        u16(numberField(r, 'seatIndex', 'seat_index')),
-        i64(parseI64(field(r, 'prediction'), 'revealed.prediction')),
-        blinding,
-      ]);
-    })),
+    vec(payouts.map((p) => Buffer.concat([
+      u8(numberField(p, 'engineSeat', 'engine_seat')),
+      u64(parseU64(field(p, 'amount'), 'payout.amount')),
+    ]))),
   ]);
-}
-
-function assertSelectedMatchesRules(selected: PythCandidate, rules: any) {
-  const feedIdHex = normalizeFeedIdHex(rules.feedIdHex ?? rules.feed_id_hex);
-  const scheduledEndTs = Number(parseU64(rules.scheduledEndTs ?? rules.scheduled_end_ts, 'pyth.rules.scheduledEndTs'));
-  const window = Number(parseU64(rules.oracleDelayWindowSec ?? rules.oracle_delay_window_sec, 'pyth.rules.oracleDelayWindowSec'));
-  const maxConfidence = parseU64(rules.maxConfidence ?? rules.max_confidence, 'pyth.rules.maxConfidence');
-  const expectedExponent = Number(rules.expectedExponent ?? rules.expected_exponent);
-  if (selected.feedIdHex !== feedIdHex) throw new HttpError(422, 'selected Pyth feed does not match rules');
-  if (selected.publishTime < scheduledEndTs || selected.publishTime > scheduledEndTs + window) {
-    throw new HttpError(422, 'selected Pyth publish time is outside settlement window');
-  }
-  if (selected.exponent !== expectedExponent) throw new HttpError(422, 'selected Pyth exponent does not match rules');
-  if (selected.confidence > maxConfidence) throw new HttpError(422, 'selected Pyth confidence exceeds rules');
-}
-
-function assertBundleMatchesSelected(bundle: any, selected: PythCandidate) {
-  const oracle = requireObject(bundle.oraclePrice ?? bundle.oracle_price, 'bundle.oracle_price');
-  if (normalizeFeedIdHex(field(oracle, 'feedId', 'feed_id')) !== selected.feedIdHex) {
-    throw new HttpError(422, 'bundle oracle feed does not match selected Pyth proof');
-  }
-  if (parseI64(field(oracle, 'price'), 'oracle.price') !== selected.price) {
-    throw new HttpError(422, 'bundle oracle price does not match selected Pyth proof');
-  }
-  if (Number(parseU64(field(oracle, 'publishTime', 'publish_time'), 'oracle.publishTime')) !== selected.publishTime) {
-    throw new HttpError(422, 'bundle oracle publish time does not match selected Pyth proof');
-  }
-  if (parseU64(field(oracle, 'confidence'), 'oracle.confidence') !== selected.confidence) {
-    throw new HttpError(422, 'bundle oracle confidence does not match selected Pyth proof');
-  }
-  if (Number(field(oracle, 'exponent')) !== selected.exponent) {
-    throw new HttpError(422, 'bundle oracle exponent does not match selected Pyth proof');
-  }
-}
-
-async function assertPriceUpdateOwner(connection: any, priceUpdateAccount: any, expectedReceiverProgramId: string) {
-  const { PublicKey } = await import('@solana/web3.js');
-  const account = await connection.getAccountInfo(priceUpdateAccount);
-  if (!account) throw new HttpError(422, `Pyth price update account ${priceUpdateAccount.toBase58()} not found`);
-  const expected = new PublicKey(expectedReceiverProgramId);
-  if (!account.owner.equals(expected)) {
-    throw new HttpError(422, `Pyth price update owner ${account.owner.toBase58()} != ${expected.toBase58()}`);
-  }
-}
-
-async function selectedFromBody(config: Config, body: any): Promise<PythCandidate> {
-  if (body.selected) return reviveCandidate(body.selected);
-  if (body.pyth?.selected) return reviveCandidate(body.pyth.selected);
-  const resolve = await resolvePyth(config, body.pyth ?? body);
-  if (!resolve.available) throw new HttpError(424, resolve.reason);
-  return reviveCandidate(resolve.selected);
-}
-
-async function sendVersionedTx(connection: any, signer: any, txWithSigners: any, confirmationTimeoutMs: number) {
-  const { tx, signers = [] } = txWithSigners;
-  tx.sign([signer, ...signers]);
-  const sim = await connection.simulateTransaction(tx, { sigVerify: true });
-  if (sim.value.err) throw new HttpError(422, `transaction simulation failed: ${JSON.stringify(sim.value.err)}`);
-  const serialized = tx.serialize();
-  const signature = await connection.sendRawTransaction(serialized, { skipPreflight: false, preflightCommitment: 'processed' });
-  await withTimeout(connection.confirmTransaction(signature, 'confirmed'), confirmationTimeoutMs, `confirmation timeout for ${signature}`);
-  return { signature, computeUnits: sim.value.unitsConsumed ?? null, transactionSize: serialized.length };
 }
 
 async function verifyOnSecondary(config: Config, txSig: string) {
@@ -723,31 +387,6 @@ async function verifyOnSecondary(config: Config, txSig: string) {
   const secondary = new Connection(config.secondaryRpcUrl, 'confirmed');
   const status = await secondary.getSignatureStatus(txSig, { searchTransactionHistory: true });
   if (!status.value) throw new HttpError(503, `secondary RPC did not observe signature ${txSig}`);
-}
-
-function candidateJson(candidate: PythCandidate) {
-  return {
-    ...candidate,
-    price: candidate.price.toString(),
-    confidence: candidate.confidence.toString(),
-  };
-}
-
-function reviveCandidate(value: any): PythCandidate {
-  return {
-    ...value,
-    feedIdHex: normalizeFeedIdHex(value.feedIdHex),
-    price: BigInt(value.price),
-    confidence: BigInt(value.confidence),
-    exponent: Number(value.exponent),
-    publishTime: Number(value.publishTime),
-    requestedTimestamp: Number(value.requestedTimestamp ?? value.publishTime),
-    binaryDataHex: requireArray(value.binaryDataHex, 'selected.binaryDataHex'),
-    priceUpdateData: requireArray(value.priceUpdateData, 'selected.priceUpdateData'),
-    hermesResponseHash: requiredString(value.hermesResponseHash, 'selected.hermesResponseHash'),
-    binaryUpdateHash: requiredString(value.binaryUpdateHash, 'selected.binaryUpdateHash'),
-    hermesUrl: value.hermesUrl ?? DEFAULT_PYTH_HERMES_URL,
-  };
 }
 
 function readKeypair(path: string): number[] {
@@ -839,6 +478,12 @@ function parseU64(value: unknown, name: string): bigint {
   return parsed;
 }
 
+function numberArg(value: unknown, name: string): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number.parseInt(value, 10);
+  throw new HttpError(400, `${name} must be an integer`);
+}
+
 function parseI64(value: unknown, name: string): bigint {
   const parsed = parseIntegerBigInt(value, name);
   if (parsed < -(2n ** 63n) || parsed > 2n ** 63n - 1n) throw new HttpError(400, `${name} must fit i64`);
@@ -856,6 +501,51 @@ function feedIdBytes(value: unknown): Buffer {
   return Buffer.from(normalizeFeedIdHex(value).slice(2), 'hex');
 }
 
+function tokenFeedIdHex(value: unknown): string {
+  return `0x${Buffer.concat([addressBytes(value), Buffer.alloc(12)]).toString('hex')}`;
+}
+
+function validateSignedPriceResponse(signedPrice: any, symbol: string, timestampSec: number, feedIdHex?: unknown) {
+  const returnedSymbol = requiredString(field(signedPrice, 'symbol'), 'signed_price.symbol').toUpperCase();
+  if (returnedSymbol !== symbol) throw new HttpError(422, 'signed price symbol mismatch');
+  const timestampMs = Number(parseU64(field(signedPrice, 'timestampMs', 'timestamp'), 'signed_price.timestamp'));
+  if (Math.floor(timestampMs / 1000) !== timestampSec) throw new HttpError(422, 'signed price timestamp mismatch');
+  const price = parseIntegerBigInt(field(signedPrice, 'priceInWad', 'price_in_wad'), 'signed_price.price_in_wad');
+  if (price <= 0n) throw new HttpError(422, 'signed price must be positive');
+  if (feedIdHex !== undefined && normalizeFeedIdHex(feedIdHex) !== tokenFeedIdHex(field(signedPrice, 'token'))) {
+    throw new HttpError(422, 'signed price token does not match feed id');
+  }
+}
+
+function addressBytes(value: unknown): Buffer {
+  return fixedHexBytes(value, 20, 'signed_price.token');
+}
+
+function fixedHexBytes(value: unknown, length: number, name: string): Buffer {
+  const raw = requiredString(value, name).replace(/^0x/, '');
+  if (!/^[0-9a-fA-F]+$/.test(raw)) throw new HttpError(400, `${name} must be hex`);
+  const out = Buffer.from(raw, 'hex');
+  if (out.length !== length) throw new HttpError(400, `${name} must be ${length} bytes`);
+  return out;
+}
+
+function uint256Bytes(value: unknown, name: string): Buffer {
+  let parsed: bigint;
+  if (typeof value === 'string' && /^0x[0-9a-fA-F]+$/.test(value)) {
+    parsed = BigInt(value);
+  } else {
+    parsed = parseIntegerBigInt(value, name);
+  }
+  if (parsed < 0n || parsed > 2n ** 256n - 1n) throw new HttpError(400, `${name} must fit uint256`);
+  const out = Buffer.alloc(32);
+  let cursor = parsed;
+  for (let i = 31; i >= 0; i -= 1) {
+    out[i] = Number(cursor & 0xffn);
+    cursor >>= 8n;
+  }
+  return out;
+}
+
 function vec(items: Buffer[]): Buffer {
   const len = Buffer.alloc(4);
   len.writeUInt32LE(items.length, 0);
@@ -871,6 +561,11 @@ function u16(value: number): Buffer {
   const out = Buffer.alloc(2);
   out.writeUInt16LE(value, 0);
   return out;
+}
+
+function u8(value: number): Buffer {
+  if (!Number.isInteger(value) || value < 0 || value > 0xff) throw new HttpError(400, 'value must fit u8');
+  return Buffer.from([value]);
 }
 
 function u64(value: bigint): Buffer {

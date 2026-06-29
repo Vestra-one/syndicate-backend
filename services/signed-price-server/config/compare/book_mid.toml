@@ -1,0 +1,83 @@
+# Comparison test: book_mid feed on :18081
+
+[server]
+listen_addr = ":18081"
+max_connections = 100
+read_buffer_size = 1024
+write_buffer_size = 1024
+shutdown_timeout = 30
+
+[signing]
+num_workers = 0
+trade_queue_size = 100000
+signed_queue_size = 100000
+
+[store]
+history_capacity = 10000
+
+[book_mid]
+emit_interval_ms = 50
+max_book_age_ms = 10000
+
+[hub]
+client_queue_size = 100000
+client_send_buffer_size = 4096
+ping_interval = 30
+write_timeout = 10
+
+[[currency_pairs]]
+base = "BTC"
+quote = "USDT"
+token = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+providers = ["binance"]
+provider_price_modes = { binance = "book_mid" }
+
+[[currency_pairs]]
+base = "ETH"
+quote = "USDT"
+token = "0x4200000000000000000000000000000000000006"
+providers = ["binance"]
+provider_price_modes = { binance = "book_mid" }
+
+[[currency_pairs]]
+base = "USDC"
+quote = "USDT"
+token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+providers = ["binance"]
+provider_price_modes = { binance = "book_mid" }
+
+[[provider_endpoints]]
+name = "binance"
+websocket = "stream.binance.com:9443"
+rest = "https://api.binance.com"
+
+[[token_mappings]]
+symbol = "BTCUSDT"
+address = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+
+[[token_mappings]]
+symbol = "ETHUSDT"
+address = "0x4200000000000000000000000000000000000006"
+
+[[token_mappings]]
+symbol = "USDCUSDT"
+address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+[[token_mappings]]
+symbol = "BTCUSD"
+address = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+
+[[token_mappings]]
+symbol = "ETHUSD"
+address = "0x4200000000000000000000000000000000000006"
+
+[[token_mappings]]
+symbol = "USDCUSD"
+address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+[logging]
+level = "warn"
+format = "console"
+
+[metrics]
+path = "/metrics"

@@ -2880,6 +2880,7 @@ dependencies = [
  "async-nats",
  "async-trait",
  "deadpool-postgres",
+ "hex",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -70,8 +70,7 @@ export interface TableTerms {
   chipsToken: string;      // e.g. "USDC" — what you stake/win (decoupled from feed)
   decimals: number;        // fixed-point precision for prices on this feed
   oracleAdapter: 'pyth';
-  settlementMode: 'bounded-exact-after';
-  oracleDelayWindowSec: number; // default 5; first valid Pyth update after match end
+  settlementMode: 'exact-timestamp';
   oracleUnavailableMessage: string;
   buyIn: Chips;
   entryFee: Chips;         // taken at deposit; refunded on VOID/leave-before-LIVE

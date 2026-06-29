@@ -11,7 +11,6 @@ const I64_MAX = 2n ** 63n - 1n;
 export type PythRules = {
   feedIdHex: string;
   scheduledEndTs: number | string | bigint;
-  oracleDelayWindowSec: number | string | bigint;
   maxConfidence: number | string | bigint;
   expectedExponent: number;
 };
@@ -80,10 +79,10 @@ export async function fetchEarliestValidPythUpdate({
 }): Promise<PythCandidate | null> {
   if (!apiKey) throw new Error('PYTH_API_KEY is required for Pyth settlement');
   const normalized = normalizeRules(rules);
+  const ts = normalized.scheduledEndTs;
   const candidates: PythCandidate[] = [];
   if (fetchImpl) {
-    for (let ts = normalized.scheduledEndTs; ts <= normalized.windowEndTs; ts += 1) {
-      const url = buildHermesTimestampUrl(hermesUrl, ts, normalized.feedIdHex);
+    const url = buildHermesTimestampUrl(hermesUrl, ts, normalized.feedIdHex);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -97,18 +96,15 @@ export async function fetchEarliestValidPythUpdate({
       } finally {
         clearTimeout(timeout);
       }
-    }
     return selectEarliestValidPythUpdate(candidates, normalized);
   }
   const client = createHermesClient({ hermesUrl, apiKey, timeoutMs });
-  for (let ts = normalized.scheduledEndTs; ts <= normalized.windowEndTs; ts += 1) {
-    const response = await client.getPriceUpdatesAtTimestamp(
-      ts,
-      [normalized.feedIdHex],
-      { encoding: 'hex', parsed: true },
-    );
-    candidates.push(...extractHermesCandidates(response, ts, hermesUrl));
-  }
+  const response = await client.getPriceUpdatesAtTimestamp(
+    ts,
+    [normalized.feedIdHex],
+    { encoding: 'hex', parsed: true },
+  );
+  candidates.push(...extractHermesCandidates(response, ts, hermesUrl));
   return selectEarliestValidPythUpdate(candidates, normalized);
 }
 
@@ -135,7 +131,7 @@ export function extractHermesCandidates(response: any, requestedTimestamp: numbe
   });
 }
 
-export function selectEarliestValidPythUpdate(candidates: PythCandidate[], rulesInput: PythRules & { windowEndTs?: number }): PythCandidate | null {
+export function selectEarliestValidPythUpdate(candidates: PythCandidate[], rulesInput: PythRules): PythCandidate | null {
   const rules = normalizeRules(rulesInput);
   let selected: PythCandidate | null = null;
   for (const candidate of candidates) {
@@ -158,19 +154,14 @@ export function redactSecrets(value: unknown, secrets: string[]): string {
   return out;
 }
 
-function normalizeRules(input: PythRules & { windowEndTs?: number }) {
+function normalizeRules(input: PythRules) {
   const scheduled = BigInt(input.scheduledEndTs);
-  const windowEnd = input.windowEndTs === undefined
-    ? scheduled + BigInt(input.oracleDelayWindowSec)
-    : BigInt(input.windowEndTs);
-  if (windowEnd < scheduled) throw new Error('oracle window end precedes scheduled end');
-  if (scheduled > BigInt(Number.MAX_SAFE_INTEGER) || windowEnd > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error('Pyth timestamp window exceeds safe JavaScript integer range');
+  if (scheduled > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Pyth timestamp exceeds safe JavaScript integer range');
   }
   return {
     feedIdHex: normalizeFeedIdHex(input.feedIdHex),
     scheduledEndTs: Number(scheduled),
-    windowEndTs: Number(windowEnd),
     maxConfidence: BigInt(input.maxConfidence),
     expectedExponent: Number(input.expectedExponent),
   };
@@ -178,7 +169,7 @@ function normalizeRules(input: PythRules & { windowEndTs?: number }) {
 
 function isValidCandidate(candidate: PythCandidate, rules: ReturnType<typeof normalizeRules>): boolean {
   if (candidate.feedIdHex !== rules.feedIdHex) return false;
-  if (candidate.publishTime < rules.scheduledEndTs || candidate.publishTime > rules.windowEndTs) return false;
+  if (candidate.publishTime !== rules.scheduledEndTs) return false;
   if (candidate.exponent !== rules.expectedExponent) return false;
   if (candidate.confidence > rules.maxConfidence) return false;
   if (candidate.price < I64_MIN || candidate.price > I64_MAX) return false;

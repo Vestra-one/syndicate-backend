@@ -102,16 +102,19 @@ fn void_job(match_id: &str, idempotency_key: &str, event_root: [u8; 32]) -> Sett
         chain_context: SolanaMatchContext {
             onchain_match_id: 42,
             seat_wallets: Vec::new(),
+            buy_in_chips: 100,
         },
         pyth_context: PythSettlementContext {
             rules: PythFetchRequest {
+                symbol: "BTCUSD".into(),
                 feed_id: [7u8; 32],
                 scheduled_end_ts: 1_000,
-                oracle_delay_window_sec: 5,
                 max_confidence: 50,
                 expected_exponent: -8,
             },
             selected: None,
+            signed_price: None,
+            signed_price_source_url: None,
         },
         outcome: Outcome::Void(VoidReason::OracleDegraded),
     }

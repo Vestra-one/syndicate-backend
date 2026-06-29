@@ -15,6 +15,7 @@ pub struct ProtocolRoles {
     pub fee_admin: Pubkey,
     pub treasury_admin: Pubkey,
     pub upgrade_authority: Pubkey,
+    pub price_signer: [u8; 20],
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
@@ -24,84 +25,43 @@ pub struct CreateParams {
     pub entry_fee: u64,
     pub rake_bps: u32,
     pub rake_cap: u64,
+    pub nonseal_penalty_bps: u32,
     pub min_players: u8,
     pub max_players: u8,
     pub config_hash: [u8; 32],
-    pub price_feed_id: [u8; 32],
-    pub scheduled_end_ts: u64,
-    pub oracle_delay_window_sec: u64,
+    pub price_token: [u8; 20],
+    pub total_betting_duration_sec: u64,
+    pub seal_window_sec: u64,
+    pub begin_live_window_sec: u64,
+    pub fill_deadline_ts: u64,
     pub max_oracle_confidence: u64,
     pub oracle_exponent: i32,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct SetButtonSeedArgs {
-    pub vrf_seed: [u8; 32],
-    pub vrf_proof_hash: [u8; 32],
+pub struct BeginLiveArgs {
+    pub button_randomness: [u8; 32],
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct InitActionLogParams {
-    pub button: u8,
-    pub small_blind: u64,
-    pub big_blind: u64,
-    pub round_count: u8,
-    pub settle_deadline_ts: u64,
-    pub seal_seq: [u64; 5],
+pub struct SignedPriceDto {
+    pub token: [u8; 20],
+    pub price_in_wad: [u8; 32],
+    pub timestamp_ms: u64,
+    pub v: u8,
+    pub r: [u8; 32],
+    pub s: [u8; 32],
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct RegisterDefaultPolicyArgs {
-    pub seat_index: u16,
-    pub policy_tag: u8,
-    pub ed25519_ix_index: u8,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct AppendPlayerActionArgs {
-    pub seat_index: u16,
-    pub nonce: u64,
-    pub action_tag: u8,
+pub struct SeatPayout {
+    pub engine_seat: u8,
     pub amount: u64,
-    pub ed25519_ix_index: u8,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct AppendTimeoutActionArgs {
-    pub seat_index: u16,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Default)]
-pub enum OnChainDefaultPolicy {
-    #[default]
-    Unset,
-    CheckFold,
-    CheckCallAny,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone, Default)]
-pub struct SeatMeta {
-    pub player: Pubkey,
-    pub nonce: u64,
-    pub default_policy: OnChainDefaultPolicy,
-    pub default_set: bool,
-    pub prediction_commitment: [u8; 32],
-    pub seal_seq: u64,
-    pub commitment_set: bool,
-    pub occupied: bool,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct ActionLogAccount {
-    pub match_key: Pubkey,
-    pub head: [u8; 32],
-    pub event_root: [u8; 32],
-    pub finalized: bool,
-    pub action_count: u32,
-    pub player_count: u8,
-    pub scheduled_end_ts: u64,
-    pub settle_deadline_ts: u64,
-    pub engine_bytes: Vec<u8>,
-    pub seats: [SeatMeta; 5],
-    pub bump: u8,
+pub struct SettleArgs {
+    pub signed_price: SignedPriceDto,
+    pub rake_collected: u64,
+    pub payouts: Vec<SeatPayout>,
 }

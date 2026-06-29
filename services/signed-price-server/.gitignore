@@ -1,0 +1,38 @@
+# Binaries
+bin/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+price-bot
+
+# Test files
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
+data/
+
+# Temporary files
+tmp/
+temp/
+
+.cursor
+CLAUDE.md
