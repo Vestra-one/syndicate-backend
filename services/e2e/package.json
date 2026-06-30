@@ -5,6 +5,13 @@
   "private": true,
   "description": "End-to-end lifecycle verification (library smoke + devnet integration gate).",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "devnet": "node src/devnet-driver.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "@solana/spl-token": "^0.4.14",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0"
   }
 }
