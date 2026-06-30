@@ -78,12 +78,14 @@
 }
 
 .cs-logo {
-  display: block;
-  width: clamp(64px, 11vw, 96px);
+  position: fixed;
+  top: clamp(18px, 2.8vw, 32px);
+  left: clamp(18px, 3vw, 40px);
+  width: clamp(56px, 6.4vw, 84px);
   height: auto;
-  margin: 0 0 0.55em;
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.55))
-    drop-shadow(0 0 22px rgba(255, 176, 88, 0.22));
+  z-index: 10;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))
+    drop-shadow(0 0 14px rgba(255, 176, 88, 0.28));
   animation: cs-flicker 7s ease-in-out infinite;
 }
 

@@ -48,20 +48,21 @@ export function ComingSoon() {
       <div className="cs-scrim cs-scrim--top" aria-hidden="true" />
       <div className="cs-scrim cs-scrim--bottom" aria-hidden="true" />
 
+      {/* ── Brand mark — top-left ──────────────────────────── */}
+      <img
+        className="cs-logo cs-rise"
+        src="/logo.png"
+        alt="Satoshi's Table monogram"
+        width={64}
+        height={64}
+        style={delay(0)}
+      />
+
       {/* ── Hero ───────────────────────────────────────────── */}
       <header className="cs-top">
-        <p className="cs-eyebrow cs-rise" style={delay(0)}>
+        <p className="cs-eyebrow cs-rise" style={delay(1)}>
           <span className="cs-eyebrow-dot" /> Almost ready
         </p>
-
-        <img
-          className="cs-logo cs-rise"
-          src="/logo.png"
-          alt="Satoshi's Table monogram"
-          width={96}
-          height={96}
-          style={delay(1)}
-        />
 
         <h1 className="cs-wordmark cs-rise" style={delay(2)}>
           Satoshi&rsquo;s Table
