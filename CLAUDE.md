@@ -10,9 +10,11 @@
 ## Build commands
 
 ```bash
-# Solana contract — MUST use v1.53 (default v1.48 breaks edition2024 deps)
-cargo build-sbf --tools-version v1.53 -p syndicate-program
-cargo check -p syndicate-program          # faster check (from repo root)
+# Solana contract — MUST use v1.53 (default v1.48 breaks edition2024 deps).
+# Run from services/programs; cargo-build-sbf takes package args AFTER `--` (bare `-p` errors).
+cd services/programs
+cargo build-sbf --tools-version v1.53 -- -p syndicate-program
+cargo check -p syndicate-program          # faster check (also from services/programs — contract is excluded from the root workspace)
 
 # Rust workspace (excludes contract — different toolchain)
 cargo check --workspace

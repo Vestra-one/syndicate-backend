@@ -14,8 +14,19 @@ SOLANA_RPC_URL_PRIMARY
 SOLANA_CLUSTER          devnet | testnet | mainnet-beta
 PRICE_SIGNER_ADDRESS    20-byte ETH address; MUST equal the signed-price-server signing address
 CHIPS_TOKEN_MINT        SPL token mint for buy-ins (e.g. devnet USDC)
+BUY_IN_MIN/MAX,         match-creation bounds seeded on-chain (guide 01 §8) — the config service
+FILL_WINDOW_MIN/MAX_SEC must use the SAME values (see note below)
 settlement-admin-keypair.json
 ```
+
+> **Match-creation bounds (no discrete tiers).** The match creator picks any buy-in / fill-window
+> within `[min, max]`. The contract enforces the bounds seeded at `initialize_protocol`; the config
+> service enforces the off-chain pre-check via the constants `BUY_IN_MIN/MAX` and
+> `FILL_WINDOW_MIN/MAX_SEC` in `services/config/src/index.ts`. These are **compile-time constants**
+> (not env vars) — to change the range you edit `index.ts`, rebuild the `config`/`matchmaking`
+> images (`$COMPOSE_APP build config matchmaking`), AND run `set_match_bounds` on-chain (guide 01
+> §9.1) with the matching values. A mismatch means the off-chain pre-check and on-chain enforcement
+> disagree (a create that passes matchmaking can still fail on-chain with `InvalidConfig`).
 
 > **v1 oracle = signed-price-server.** Settlement reads a company-signed price from
 > `services/signed-price-server` (Go), reached by `settlement-chain` at `SIGNED_PRICE_SERVER_URL`.
@@ -411,6 +422,7 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 | Settlement always `VOID` / `signed price unavailable`                  | signed-price-server down or book stale: `curl 127.0.0.1:18088/health` (`"ok": true`); `docker logs` the `signed-price-server` service. settlement-chain reaches it at the internal DNS `http://signed-price-server:8080` (do not change to `127.0.0.1`). |
 | `signed-price-server` container keeps exiting                          | `ECDSA_PRIVATE_KEY` unset/invalid — set it in `app.env` (§4); `$COMPOSE_APP up -d signed-price-server`. |
 | Settlement rejected: `InvalidOracleProof`                              | On-chain `price_signer` ≠ the signed-price-server signing address. Re-run guide 01 §9 (`set_price_signer`) with the server's `[signing].address`.                                                                             |
+| `create_match` fails `InvalidConfig` for an in-UI buy-in / fill-window | On-chain bounds ≠ config-service constants. Align `BUY_IN_MIN/MAX` + `FILL_WINDOW_MIN/MAX_SEC` (`services/config/src/index.ts`) with the on-chain bounds via guide 01 §9.1 (`set_match_bounds`), then rebuild config/matchmaking. |
 | OOM during build                                                       | Add swap (guide 02 §9); rebuild                                                                                                                                                                                               |
 | `network syndicate-localnet_default not found`                         | Run `$COMPOSE_INFRA up -d` first                                                                                                                                                                                              |
 

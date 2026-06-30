@@ -41,10 +41,15 @@ export SOLANA_RPC_URL=https://api.devnet.solana.com
 - **Declared program id (all clusters):** `8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX`
   (`declare_id!` in `lib.rs`, `[programs.*]` in `Anchor.toml`).
 - **Build the `.so` with platform-tools v1.53** — the default (v1.48) fails on `edition2024` deps:
-  `cargo build-sbf --tools-version v1.53 -p syndicate-program`.
+  `cargo build-sbf --tools-version v1.53 -- -p syndicate-program`.
 - Oracle: company-signed price verified in `signed_price.rs` against `ProtocolState.price_signer`.
   No Pyth program is deployed or referenced on-chain.
 - The settlement signer (backend) is the on-chain `settlement_admin` = `emergency_void_admin`.
+- **Match-creation bounds are operator-governed, not hardcoded.** `initialize_protocol` seeds
+  `buy_in_min/max` and `fill_window_min/max_sec` into `ProtocolState`; `create_match` rejects any
+  match whose buy-in or fill window falls outside them (no discrete tiers). Update later with
+  `set_match_bounds` (§9.1, `config_admin`). These MUST mirror the config-service constants
+  `BUY_IN_MIN/MAX` and `FILL_WINDOW_MIN/MAX_SEC` (`services/config/src/index.ts`).
 
 ---
 
@@ -122,7 +127,7 @@ cd services/programs
 
 # Build into the project target/ (not a sandbox CARGO_TARGET_DIR). v1.53 is required.
 unset CARGO_TARGET_DIR
-cargo build-sbf --tools-version v1.53 -p syndicate-program
+cargo build-sbf --tools-version v1.53 -- -p syndicate-program
 ```
 
 This produces `target/deploy/syndicate_program.so` and (first build)
@@ -148,7 +153,7 @@ Only if you hold the **upgrade authority** for that program (devnet authority is
 cd services/programs
 export SYNDICATE_PROGRAM_ID=8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX
 unset CARGO_TARGET_DIR
-cargo build-sbf --tools-version v1.53 -p syndicate-program
+cargo build-sbf --tools-version v1.53 -- -p syndicate-program
 solana program deploy target/deploy/syndicate_program.so \
   --program-id "$SYNDICATE_PROGRAM_ID" \
   --url "$SOLANA_RPC_URL" \
@@ -169,9 +174,9 @@ Use this if you do **not** hold the declared id's authority. You must update `de
 
 ```bash
 cd services/programs
-anchor keys sync                 # rewrites declare_id! + Anchor.toml to the local keypair's id
+anchor keys sync               
 unset CARGO_TARGET_DIR
-cargo build-sbf --tools-version v1.53 -p syndicate-program
+cargo build-sbf --tools-version v1.53 -- -p syndicate-program
 export SYNDICATE_PROGRAM_ID=$(solana address -k target/deploy/syndicate_program-keypair.json)
 echo "SYNDICATE_PROGRAM_ID=$SYNDICATE_PROGRAM_ID"
 ```
@@ -203,7 +208,18 @@ price's signature. Read it from the signed-price-server config you will run (gui
 
 ```bash
 # devnet signer address (services/signed-price-server/config/devnet.toml [signing].address):
-export PRICE_SIGNER_ADDRESS=0xa7BaE7da3E4950700BE9f107EB186e89a474d180   # EDIT for your deployment
+export PRICE_SIGNER_ADDRESS=0x29cf2F55722dBC71D5674D76553f17Ff28B939Aa   # EDIT for your deployment
+```
+
+Set the **match-creation bounds** seeded at init. These must equal the config-service constants
+(`BUY_IN_MIN/MAX`, `FILL_WINDOW_MIN/MAX_SEC` in `services/config/src/index.ts`) so the off-chain
+pre-check and the on-chain enforcement agree. Defaults below match the shipped config (USDC, 6 dp):
+
+```bash
+export BUY_IN_MIN=100000            
+export BUY_IN_MAX=1000000000        
+export FILL_WINDOW_MIN_SEC=20
+export FILL_WINDOW_MAX_SEC=5000
 ```
 
 Create the settlement signer and fund it:
@@ -241,7 +257,19 @@ const DEPLOYER_PUBKEY = PAYER.publicKey;
 const PRICE_SIGNER = Buffer.from(process.env.PRICE_SIGNER_ADDRESS.replace(/^0x/, ''), 'hex');
 if (PRICE_SIGNER.length !== 20) throw new Error('PRICE_SIGNER_ADDRESS must be 20 bytes');
 
-// ProtocolRoles is 8 pubkeys (32 bytes each) followed by price_signer ([u8; 20]).
+// MatchBounds (operator-governed, enforced in create_match). MUST equal the config-service
+// constants BUY_IN_MIN/MAX + FILL_WINDOW_MIN/MAX_SEC (services/config/src/index.ts).
+const BOUNDS = {
+  buy_in_min: BigInt(process.env.BUY_IN_MIN ?? '1000000'),            // $1
+  buy_in_max: BigInt(process.env.BUY_IN_MAX ?? '1000000000'),         // $1000
+  fill_window_min_sec: BigInt(process.env.FILL_WINDOW_MIN_SEC ?? '20'),
+  fill_window_max_sec: BigInt(process.env.FILL_WINDOW_MAX_SEC ?? '5000'),
+};
+function u64le(n) { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; }
+
+// initialize_protocol args (Borsh, in order): ProtocolRoles { 8 pubkeys (32B each), price_signer
+// ([u8; 20]) } then MatchBounds { buy_in_min, buy_in_max, fill_window_min_sec, fill_window_max_sec
+// — each u64 LE }.
 const PUBKEY_ROLES = {
   protocol_admin: DEPLOYER_PUBKEY,
   settlement_admin: SETTLEMENT_PUBKEY,
@@ -267,6 +295,10 @@ const data = Buffer.concat([
   disc('initialize_protocol'),
   ...ORDER.map((k) => PUBKEY_ROLES[k].toBuffer()),
   PRICE_SIGNER,
+  u64le(BOUNDS.buy_in_min),
+  u64le(BOUNDS.buy_in_max),
+  u64le(BOUNDS.fill_window_min_sec),
+  u64le(BOUNDS.fill_window_max_sec),
 ]);
 const ix = new TransactionInstruction({
   programId: PROGRAM_ID,
@@ -332,6 +364,55 @@ node set-price-signer.mjs
 
 ---
 
+## 9.1 Update match-creation bounds (optional / re-tune)
+
+`set_match_bounds` lets the `config_admin` widen or tighten the buy-in / fill-window ranges without
+re-initializing. New matches are validated against the updated bounds immediately. **Keep them in
+sync with the config-service constants** (`BUY_IN_MIN/MAX`, `FILL_WINDOW_MIN/MAX_SEC`) — redeploy
+the backend if you change them there.
+
+```bash
+# Same env as §8 (SOLANA_RPC_URL, SYNDICATE_PROGRAM_ID, DEPLOYER_KEYPAIR=config_admin,
+# BUY_IN_MIN/MAX, FILL_WINDOW_MIN/MAX_SEC).
+cd ~/synd-init
+cat > set-match-bounds.mjs <<'EOF'
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+const PROGRAM_ID = new PublicKey(process.env.SYNDICATE_PROGRAM_ID);
+const PAYER = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(process.env.DEPLOYER_KEYPAIR, 'utf8'))));
+const disc = (n) => createHash('sha256').update(`global:${n}`).digest().subarray(0, 8);
+const u64le = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; };
+const [protocolPda] = PublicKey.findProgramAddressSync([Buffer.from('protocol')], PROGRAM_ID);
+// MatchBounds: buy_in_min, buy_in_max, fill_window_min_sec, fill_window_max_sec (each u64 LE).
+const data = Buffer.concat([
+  disc('set_match_bounds'),
+  u64le(process.env.BUY_IN_MIN ?? '1000000'),
+  u64le(process.env.BUY_IN_MAX ?? '1000000000'),
+  u64le(process.env.FILL_WINDOW_MIN_SEC ?? '20'),
+  u64le(process.env.FILL_WINDOW_MAX_SEC ?? '5000'),
+]);
+const ix = new TransactionInstruction({
+  programId: PROGRAM_ID,
+  keys: [
+    { pubkey: PAYER.publicKey, isSigner: true, isWritable: false },
+    { pubkey: protocolPda, isSigner: false, isWritable: true },
+  ],
+  data,
+});
+const conn = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
+const sig = await conn.sendTransaction(new Transaction().add(ix), [PAYER]);
+await conn.confirmTransaction(sig, 'confirmed');
+console.log('set_match_bounds tx:', sig);
+EOF
+node set-match-bounds.mjs
+```
+
+> The contract rejects `buy_in_min == 0`, `buy_in_min > buy_in_max`, or `fill_window_min_sec >
+> fill_window_max_sec` (`InvalidConfig`).
+
+---
+
 ## 10. Hand-off checklist (→ guide 03)
 
 ```
@@ -342,6 +423,8 @@ SOLANA_CLUSTER           = devnet | testnet | mainnet-beta
 PRICE_SIGNER_ADDRESS     = <§8>        # must equal the signed-price-server signing address
 SIGNED_PRICE_SERVER_URL  = <guide 03>  # settlement-chain reaches the server at this URL
 CHIPS_TOKEN_MINT         = <SPL mint players deposit — e.g. devnet USDC>
+BUY_IN_MIN / BUY_IN_MAX  = <§8>        # seeded match-creation bounds; must equal config-service constants
+FILL_WINDOW_MIN/MAX_SEC  = <§8>        # "
 ```
 
 Secure file transfer (never paste in chat):

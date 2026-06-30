@@ -1,7 +1,7 @@
 # programs — Solana Contract
 
-**Build**: `cargo build-sbf --tools-version v1.53 -p syndicate-program` (must use v1.53; default v1.48 breaks edition2024)
-**Check**: `cargo check -p syndicate-program` (from repo root)
+**Build**: `cargo build-sbf --tools-version v1.53 -- -p syndicate-program` (run from `services/programs`; package args go AFTER `--` — bare `-p` errors with USAGE. v1.53 required; default v1.48 breaks edition2024)
+**Check**: `cargo check -p syndicate-program` (from `services/programs` — the contract is excluded from the root workspace)
 **Tests**: `cd litesvm-tests && cargo test`
 
 ## Key files

@@ -702,6 +702,14 @@
               "name": "ProtocolRoles"
             }
           }
+        },
+        {
+          "name": "bounds",
+          "type": {
+            "defined": {
+              "name": "MatchBounds"
+            }
+          }
         }
       ]
     },
@@ -971,6 +979,60 @@
           "type": {
             "defined": {
               "name": "RegisterPredictionCommitmentArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_match_bounds",
+      "docs": [
+        "Update the operator-governed match-creation bounds (config_admin). New matches must",
+        "pick a `buy_in` and fill window within these ranges; enforced in `validate_create_params`."
+      ],
+      "discriminator": [
+        131,
+        41,
+        16,
+        242,
+        108,
+        130,
+        31,
+        39
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "bounds",
+          "type": {
+            "defined": {
+              "name": "MatchBounds"
             }
           }
         }
@@ -1733,7 +1795,11 @@
             "type": "u64"
           },
           {
-            "name": "fill_deadline_ts",
+            "name": "fill_window_sec",
+            "docs": [
+              "Public-queue fill window (seconds). The on-chain `fill_deadline_ts` is derived as",
+              "`create_ts + fill_window_sec`; must lie within the operator-governed bounds."
+            ],
             "type": "u64"
           },
           {
@@ -2024,6 +2090,34 @@
       }
     },
     {
+      "name": "MatchBounds",
+      "docs": [
+        "Operator-governed match-creation bounds (see `ProtocolState`). Passed at",
+        "`initialize_protocol` and updatable via `set_match_bounds` (config_admin)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "buy_in_min",
+            "type": "u64"
+          },
+          {
+            "name": "buy_in_max",
+            "type": "u64"
+          },
+          {
+            "name": "fill_window_min_sec",
+            "type": "u64"
+          },
+          {
+            "name": "fill_window_max_sec",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "MatchStatus",
       "type": {
         "kind": "enum",
@@ -2158,6 +2252,27 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "buy_in_min",
+            "docs": [
+              "Operator-governed match-creation bounds (config_admin). A match's `buy_in` must lie in",
+              "`[buy_in_min, buy_in_max]` and its fill window in `[fill_window_min_sec, fill_window_max_sec]`,",
+              "enforced on-chain at create. Replaces the old discrete buy-in/fill-window tiers."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "buy_in_max",
+            "type": "u64"
+          },
+          {
+            "name": "fill_window_min_sec",
+            "type": "u64"
+          },
+          {
+            "name": "fill_window_max_sec",
+            "type": "u64"
           },
           {
             "name": "reserved",
