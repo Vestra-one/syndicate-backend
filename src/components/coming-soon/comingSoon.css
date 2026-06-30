@@ -77,6 +77,16 @@
   }
 }
 
+.cs-logo {
+  display: block;
+  width: clamp(64px, 11vw, 96px);
+  height: auto;
+  margin: 0 0 0.55em;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.55))
+    drop-shadow(0 0 22px rgba(255, 176, 88, 0.22));
+  animation: cs-flicker 7s ease-in-out infinite;
+}
+
 .cs-wordmark {
   margin: 0;
   font-family: var(--font-display);

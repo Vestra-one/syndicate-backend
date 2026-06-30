@@ -54,20 +54,29 @@ export function ComingSoon() {
           <span className="cs-eyebrow-dot" /> Almost ready
         </p>
 
-        <h1 className="cs-wordmark cs-rise" style={delay(1)}>
+        <img
+          className="cs-logo cs-rise"
+          src="/logo.png"
+          alt="Satoshi's Table monogram"
+          width={96}
+          height={96}
+          style={delay(1)}
+        />
+
+        <h1 className="cs-wordmark cs-rise" style={delay(2)}>
           Satoshi&rsquo;s Table
         </h1>
       </header>
 
       {/* ── Footer block: join the table ───────────────────── */}
       <footer className="cs-bottom">
-        <div className="cs-rule cs-rise" aria-hidden="true" style={delay(2)}>
+        <div className="cs-rule cs-rise" aria-hidden="true" style={delay(3)}>
           <span className="cs-rule-line" />
           <span className="cs-rule-gem">◆</span>
           <span className="cs-rule-line" />
         </div>
 
-        <div className="cs-cta cs-rise" style={delay(3)}>
+        <div className="cs-cta cs-rise" style={delay(4)}>
           <div className="cs-join">
             <p className="cs-join-lead">Pull up a chair</p>
             <p className="cs-join-sub">Come hang out while we get the table ready</p>
@@ -89,7 +98,7 @@ export function ComingSoon() {
           </nav>
         </div>
 
-        <p className="cs-foot cs-rise" style={delay(4)}>
+        <p className="cs-foot cs-rise" style={delay(5)}>
           <span>© 2026 Satoshi&rsquo;s Table</span>
           <span className="cs-foot-sep">·</span>
           <span>Please play responsibly</span>
