@@ -42,28 +42,18 @@ wasp salt patrol appear beyond photo sunset mandate arrest isolate dumb series
 
 
 -----------------devnet-------------
-Program Id: GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo
+Program Id: 2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT
+
+Signature: 4owHMCoqo7CKhLmBF2shdBgzCUfrBndfF4pidvqwoSr3ZGsTvVbbghwVKh8XUnE7EcuT372WSQPm6sbmKAxgHUp5
+
+
+Program Id: 2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT
 Owner: BPFLoaderUpgradeab1e11111111111111111111111
-ProgramData Address: ADwfQzSnEMyU7PTEmk2NJUNHxz1YhycdKMCXMhTuiamN
+ProgramData Address: B98eTqVeLpQrjvRXZeb587cwodhg6YYaChkHyeqTGPDN
 Authority: 2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt
-Last Deployed In Slot: 472623533
-Data Length: 662760 (0xa1ce8) bytes
-Balance: 4.61401368 SOL
-
-export DEPLOYER_KEYPAIR=$HOME/.config/solana/id.json
 node init-protocol.mjs
-PROTOCOL_STATE_PDA=6WGM9hepP99uzvRmcdkpYFm3fRx2Lp1KPHbxnfUigzM2
-initialize_protocol tx: pXRLJDR4piJbL3o9Sjw9aFqmpxtWLVsHSH4zjqEchthVmKSJDMTMaocqrxdUWUwseisUFdeDUtjWmjhuc7XVXY8
-
-
------------------devnet (v1 — Phase 03 rotation 2026-06-29)-------------
-# The old program GwzrCtondvENmbBkZCatGyXu1ST1ozVjwYS9Z9raqDmo had a pre-Task-6 protocol_state
-# (no price_signer) that could not be re-initialized in place. Rotated to a fresh program id so
-# all PDAs (incl. protocol_state) re-derive under the new layout. declare_id!, Anchor.toml, and the
-# litesvm harness PROGRAM_ID were updated in lockstep.
-Program Id: 8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX
-Upgrade Authority / Deployer: 2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt
-Protocol State PDA: EDwcfo4UjFp3kEwz9CqEAv2iojKinzaAmPLNLeZiAkXS  (initialized, new layout)
-# roles: all = deployer (devnet test); price_signer = a7BaE7da3E4950700BE9f107EB186e89a474d180 (placeholder)
-# Verified: initialize_protocol + create_and_deposit smoke PASS (match Filling, seat deposit ok).
-# SYNDICATE_PROGRAM_ID env for backend services must be set to 8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX.
+PROTOCOL_STATE_PDA=H8cduZVYKBAxBbFhQDJK1ugymjJ12Rx93rRNrLEauU5W
+initialize_protocol tx: 33MgnT1dnC3zHtXH8XcMVnbUWzykJ5xR4HYPu9QPRYTdorTEMKBWdHkYPEDxAayDFAxQtj8LHEXdyRrJq5N8GJ49
+Last Deployed In Slot: 472962914
+Data Length: 534000 (0x825f0) bytes
+Balance: 3.71784408 SOL

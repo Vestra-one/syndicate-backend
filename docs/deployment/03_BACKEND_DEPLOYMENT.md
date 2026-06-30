@@ -107,6 +107,8 @@ SOLANA_RPC_URL_SECONDARY=
 # v1 oracle: signed-price-server runs as a compose service; settlement-chain reaches it by
 # internal DNS (hardcoded in docker-compose.app.yml). You only set its signing key here.
 # ECDSA_PRIVATE_KEY's Ethereum address MUST equal the on-chain price_signer (guide 01 §8/§9).
+# NEVER commit a real key here — this is a tracked template. Put the real value only in
+# deploy/secrets/app.env (gitignored). Treat any key pasted into a tracked file as compromised.
 ECDSA_PRIVATE_KEY=REPLACE_ME
 
 # Vestigial Pyth boot requirements — NOT used for v1 settlement, but the Rust worker
@@ -196,6 +198,12 @@ services:
     restart: unless-stopped
   match-engine:
     restart: unless-stopped
+  config:
+    restart: unless-stopped
+  # Oracle. Only needs the restart policy — it reads ECDSA_PRIVATE_KEY from app.env via the base
+  # compose, and does NOT consume the Solana/Pyth cluster-env (do not add <<: *cluster-env here).
+  signed-price-server:
+    restart: unless-stopped
   match-orchestrator:
     restart: unless-stopped
     environment:
@@ -256,12 +264,27 @@ docker network inspect syndicate-localnet_default -f '{{range .Containers}}{{.Na
 
 ## 8. Database migrations
 
+The migrations are **not idempotent** and the runner stops on first error (`ON_ERROR_STOP=1`),
+so they must run **once on a clean schema**. The Docker Postgres is on host port **5433** — always
+pass `-p 5433` (omitting it defaults to 5432 and hits a different/absent Postgres:
+`password authentication failed`).
+
 ```bash
 DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
   ./scripts/db-migrate-local.sh
 
-PGPASSWORD=syndicate psql -h localhost -U syndicate -d syndicate_local -c '\dt' | head
+# Verify (note -p 5433 and 127.0.0.1 to avoid IPv6 ::1 → 5432):
+PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local -c '\dt' | head
 ```
+
+> **Re-running fails with `type "match_status" already exists`?** A previous run partially applied.
+> On a fresh DB (no real data) reset the schema and re-run:
+> ```bash
+> PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local \
+>   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+> DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
+> ```
+> Or wipe the volume entirely: `$COMPOSE_INFRA down -v && $COMPOSE_INFRA up -d` (destroys all infra data).
 
 ---
 

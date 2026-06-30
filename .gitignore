@@ -16,3 +16,6 @@ dist/
 .env.*
 *.key
 *.pem
+# Deployment secrets (app.env, settlement-admin-keypair.json, *.token) — guide 03 §3/§4
+deploy/secrets/
+*.token
