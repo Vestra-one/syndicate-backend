@@ -17,7 +17,8 @@ This runbook applies to bare-metal/VPS deployment on Netcup or Hetzner.
 
 | Secret | Environment | Storage | Rotation |
 |---|---|---|---|
-| Pyth API key | devnet/mainnet | `/etc/syndicate/settlement-worker.env` or encrypted vault | 90 days or provider incident |
+| Signed-price-server signing key (`ECDSA_PRIVATE_KEY`) | devnet/mainnet | signed-price-server host secrets only; address must equal on-chain `price_signer` | on suspected exposure or signer rotation (then `set_price_signer`) |
+| Pyth API key (`PYTH_API_KEY`) | devnet/mainnet | `/etc/syndicate/settlement-worker.env` | vestigial boot requirement only — not used for v1 settlement; any non-empty value |
 | Solana RPC credentials | devnet/mainnet | `/etc/syndicate/settlement-worker.env` | 90 days or provider incident |
 | Settlement-chain internal auth token | devnet/mainnet | `/etc/syndicate/settlement-chain.token`, mode `0640` | before mainnet and on host change |
 | Hot settlement/void signer keypair | devnet/mainnet | `/etc/syndicate/settlement-admin-keypair.json`, mode `0640`, root/syndicate only | on operator change or suspected exposure |
@@ -43,9 +44,9 @@ sudo install -o root -g syndicate -m 0640 /dev/null /etc/syndicate/action-feed.e
 
 Use `docs/deployment/env.example` as a schema only. Replace every `REPLACE_WITH_*` value before devnet or mainnet.
 
-Settlement automation no longer uses a prepared transaction JSON bundle. The Rust worker talks to the localhost-only `settlement-chain` adapter with `SETTLEMENT_CHAIN_AUTH_TOKEN_FILE`; the adapter reads the scoped hot settlement/void signer from `SETTLEMENT_SIGNER_KEYPAIR_PATH`, fetches Hermes/Pyth proofs with `PYTH_API_KEY`, builds transactions at runtime, simulates, submits, confirms, and returns receipts for persistence.
+Settlement automation no longer uses a prepared transaction JSON bundle. The Rust worker talks to the localhost-only `settlement-chain` adapter with `SETTLEMENT_CHAIN_AUTH_TOKEN_FILE`; the adapter reads the scoped hot settlement/void signer from `SETTLEMENT_SIGNER_KEYPAIR_PATH`, fetches the **company-signed price** from `services/signed-price-server` (secp256k1 / EIP-191) via `SIGNED_PRICE_SERVER_URL`, builds transactions at runtime, simulates, submits, confirms, and returns receipts for persistence.
 
-The Pyth API key previously shared in chat must be rotated before mainnet and stored only as `PYTH_API_KEY` in host secrets.
+The decisive oracle secret is the signed-price-server's `ECDSA_PRIVATE_KEY`: its Ethereum address must equal the on-chain `ProtocolState.price_signer` (set at `initialize_protocol`, rotatable with `set_price_signer`). `PYTH_API_KEY` is **not** part of the v1 settlement path — it remains only because the worker still reads it at boot; set any non-empty value and do not treat it as oracle-critical.
 
 ## Mainnet Authority Ceremony
 

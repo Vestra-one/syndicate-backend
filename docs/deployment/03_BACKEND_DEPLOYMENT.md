@@ -30,28 +30,30 @@ settlement-admin-keypair.json
 
 **Infra** (`deploy/docker-compose.localnet.yml`): Postgres 16, Redis 7, NATS JetStream, MinIO, Prometheus, Grafana.
 
-**App** (`deploy/docker-compose.app.yml`) — eight services:
+**App** (`deploy/docker-compose.app.yml`) — nine services:
 
 
-| Service            | Port (host)            | Health     |
-| ------------------ | ---------------------- | ---------- |
-| gateway            | 18081 (+19081 metrics) | `/healthz` |
-| matchmaking        | 18082                  | `/healthz` |
-| action-feed        | 18080                  | `/healthz` |
-| match-engine       | 18083                  | `/healthz` |
-| match-orchestrator | 18086                  | `/healthz` |
-| config             | 18085                  | `/healthz` |
-| settlement-chain   | 18790                  | `/health`  |
-| settlement-worker  | 18084                  | `/healthz` |
+| Service             | Port (host)              | Health     |
+| ------------------- | ------------------------ | ---------- |
+| gateway             | 18081 (+19081 metrics)   | `/healthz` |
+| matchmaking         | 18082                    | `/healthz` |
+| action-feed         | 18080                    | `/healthz` |
+| match-engine        | 18083                    | `/healthz` |
+| match-orchestrator  | 18086                    | `/healthz` |
+| config              | 18085                    | `/healthz` |
+| settlement-chain    | 18790                    | `/health`  |
+| settlement-worker   | 18084                    | `/healthz` |
+| signed-price-server | **127.0.0.1:18088** only | `/health`  |
 
 
-**Oracle (separate, NOT in the app compose):** `services/signed-price-server` (Go) listens on
-`:8080` (`/health`, `/prices`, `/prices/at`). It is **not** in `deploy/docker-compose.app.yml` —
-run it from its own `Dockerfile`/`make` (devnet config: `config/devnet.toml`) and point
-`SIGNED_PRICE_SERVER_URL` at it (§4). On a single VPS, `http://host.docker.internal:8080` reaches a
-host-run server from the app containers.
+**Oracle (`signed-price-server`, Go):** now a compose service. It joins the shared network so
+`settlement-chain` reaches it by internal DNS (`http://signed-price-server:8080`, hardcoded in the
+compose file). It is **not** published on the generic host `:8080` (avoids clashing with other
+services on the VPS and keeps it off the public internet); only a **loopback** port `127.0.0.1:18088`
+is published, for the Caddy reverse proxy (`price.devnet.*`, guide 04). It needs `ECDSA_PRIVATE_KEY`
+(§4) whose address equals the on-chain `price_signer`.
 
-Block public access to these ports at the Hetzner Cloud Firewall (SSH + 80/443 only). Services bind on the Docker host; use a reverse proxy later for gateway/action-feed.
+Block public access to these ports at the Hetzner Cloud Firewall (SSH + 80/443 only). Services bind on the Docker host; use a reverse proxy later for gateway / action-feed / signed-price feed.
 
 ---
 
@@ -102,8 +104,10 @@ CHIPS_TOKEN_MINT=REPLACE_ME
 SOLANA_RPC_URL_PRIMARY=https://api.devnet.solana.com
 SOLANA_RPC_URL_SECONDARY=
 
-# v1 oracle: settlement-chain proxies the signed-price-server (run separately, §1).
-SIGNED_PRICE_SERVER_URL=http://host.docker.internal:8080
+# v1 oracle: signed-price-server runs as a compose service; settlement-chain reaches it by
+# internal DNS (hardcoded in docker-compose.app.yml). You only set its signing key here.
+# ECDSA_PRIVATE_KEY's Ethereum address MUST equal the on-chain price_signer (guide 01 §8/§9).
+ECDSA_PRIVATE_KEY=REPLACE_ME
 
 # Vestigial Pyth boot requirements — NOT used for v1 settlement, but the Rust worker
 # panics at boot without them. Keep set; any non-empty PYTH_API_KEY is fine on devnet.
@@ -120,10 +124,11 @@ For **testnet**, set `SOLANA_CLUSTER=testnet`, `APP_ENV=testnet`, and
 nano deploy/secrets/app.env   # replace all REPLACE_ME values
 ```
 
-> `SIGNED_PRICE_SERVER_URL` defaults to `http://127.0.0.1:8080` if unset, which is wrong from inside
-> a container — set it to a host-reachable URL (`http://host.docker.internal:8080` for a host-run
-> server, or the server's container/DNS name). The on-chain `price_signer` (guide 01 §8) must match
-> that server's signing address or settlement is rejected.
+> The devnet `signed-price-server` config (`services/signed-price-server/config/devnet.toml`,
+> mounted by the compose service) has a fixed `[signing].address`. Either set `ECDSA_PRIVATE_KEY` to
+> the key for that address, or generate a fresh key, derive its address, and set it on-chain with
+> `set_price_signer` (guide 01 §9). A mismatch makes the contract reject settlement
+> (`InvalidOracleProof`).
 
 ### 4.2 Mainnet-beta
 
@@ -137,8 +142,9 @@ CHIPS_TOKEN_MINT=REPLACE_ME
 SOLANA_RPC_URL_PRIMARY=REPLACE_ME
 SOLANA_RPC_URL_SECONDARY=REPLACE_ME
 
-# v1 oracle: production signed-price-server (its signer must equal the on-chain price_signer).
-SIGNED_PRICE_SERVER_URL=REPLACE_ME
+# v1 oracle: production signed-price-server signing key (address == on-chain price_signer).
+# Mount your production [signing] config over the compose service's config (see §1 / docker-compose).
+ECDSA_PRIVATE_KEY=REPLACE_ME
 
 # Vestigial Pyth boot requirements (not used for settlement; worker panics without them).
 PYTH_RECEIVER_STACK=legacy
@@ -152,8 +158,9 @@ EOF
 nano deploy/secrets/app.env
 ```
 
-Use a **paid RPC** with failover on `SOLANA_RPC_URL_SECONDARY`. Run the production
-signed-price-server on a private network and reach it over TLS / an internal address.
+Use a **paid RPC** with failover on `SOLANA_RPC_URL_SECONDARY`. For mainnet, mount a production
+signed-price-server config (real exchange feed + `[signing].address`) over the compose service's
+`/app/config/config.toml`, and keep `ECDSA_PRIVATE_KEY` in host secrets only.
 
 ---
 
@@ -169,8 +176,9 @@ x-cluster-env: &cluster-env
   CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
   SOLANA_RPC_URL_PRIMARY: ${SOLANA_RPC_URL_PRIMARY}
   SOLANA_RPC_URL_SECONDARY: ${SOLANA_RPC_URL_SECONDARY}
-  # v1 oracle: settlement-chain proxies the signed-price-server at this URL.
-  SIGNED_PRICE_SERVER_URL: ${SIGNED_PRICE_SERVER_URL}
+  # NOTE: SIGNED_PRICE_SERVER_URL is hardcoded to the internal service DNS in
+  # docker-compose.app.yml (settlement-chain → http://signed-price-server:8080). Do NOT add it
+  # here — an empty override would clobber it. Set ECDSA_PRIVATE_KEY in app.env instead.
   # Vestigial Pyth boot requirements (not used for settlement; worker panics without them).
   PYTH_RECEIVER_STACK: ${PYTH_RECEIVER_STACK}
   PYTH_HERMES_URL: ${PYTH_HERMES_URL}
@@ -274,28 +282,24 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep syndicate-app
 docker exec syndicate-app-action-feed-1 getent hosts postgres
 ```
 
-### 9.1 Start the signed-price-server (oracle)
+### 9.1 The signed-price-server (oracle)
 
-`settlement-chain` proxies this for every settlement. Run it before driving any match to
-settlement (it is not part of `$COMPOSE_APP`). Example, host-run from its Dockerfile:
+It is part of `$COMPOSE_APP` (the `signed-price-server` service) — `$COMPOSE_APP build` and
+`up -d` above already built and started it. `settlement-chain` reaches it by internal DNS; the only
+host binding is the loopback `127.0.0.1:18088` used by Caddy (guide 04). Verify it directly:
 
 ```bash
-cd services/signed-price-server
-docker build -t syndicate-signed-price-server .
-# EDIT: ECDSA_PRIVATE_KEY (secp256k1, 0x-optional) whose ADDRESS == the on-chain price_signer (guide 01 §8).
-docker run -d --name signed-price-server -p 8080:8080 \
-  -e ECDSA_PRIVATE_KEY=<hex32> \
-  -e CONFIG_PATH=/app/config/config.toml \
-  -v "$PWD/config/devnet.toml:/app/config/config.toml:ro" \
-  syndicate-signed-price-server
-curl -s http://127.0.0.1:8080/health | jq .   # top-level "ok": true once the book is fresh
-
-# Native alternative (Go 1.24+): ECDSA_PRIVATE_KEY=<hex32> CONFIG_PATH=config/devnet.toml make run
+curl -s http://127.0.0.1:18088/health | jq .   # top-level "ok": true once the book is fresh
+docker logs $(docker ps -qf name=signed-price-server) 2>&1 | tail -n 10
 ```
 
-> The `config/devnet.toml` `[signing].address` is the address the contract's `price_signer` must
-> equal. If you generate a fresh `ECDSA_PRIVATE_KEY`, derive its address and set it on-chain via
-> guide 01 §9 (`set_price_signer`).
+If `ECDSA_PRIVATE_KEY` is unset the container exits at boot (`ECDSA_PRIVATE_KEY environment
+variable not set`) — set it in `app.env` (§4) and `$COMPOSE_APP up -d signed-price-server`.
+
+> The mounted `config/devnet.toml` `[signing].address` is the address the contract's `price_signer`
+> must equal. If you set a fresh `ECDSA_PRIVATE_KEY`, derive its address and update it on-chain via
+> guide 01 §9 (`set_price_signer`). To run a different feed config, change the volume mount on the
+> `signed-price-server` service in `deploy/docker-compose.app.yml`.
 
 Confirm `SIGNED_PRICE_SERVER_URL` in `app.env` resolves to this server from inside the app
 containers (e.g. `http://host.docker.internal:8080`).
@@ -312,7 +316,7 @@ echo "match-engine:";     curl -s http://127.0.0.1:18083/healthz; echo
 echo "match-orchestrator:"; curl -s http://127.0.0.1:18086/healthz; echo
 echo "settlement-chain:"; curl -s http://127.0.0.1:18790/health | jq .
 echo "settlement-worker:"; curl -s http://127.0.0.1:18084/healthz; echo
-echo "signed-price-server:"; curl -s http://127.0.0.1:8080/health | jq .
+echo "signed-price-server:"; curl -s http://127.0.0.1:18088/health | jq .
 ```
 
 `settlement-chain` `/health` must show your `programId`. The `signed-price-server` `/health` must
@@ -381,7 +385,8 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 | `settlement relay/poller error: error serializing parameter`           | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker`                                                                                                                                |
 | Wrong programId on `/health`                                           | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d`                                                                                                                                                                 |
 | Worker panics: `missing PYTH_API_KEY or PYTH_API_KEY_FILE`             | Vestigial boot requirement — set any non-empty `PYTH_API_KEY` and `PYTH_RECEIVER_STACK=legacy` in `app.env` (§4). Not used for v1 settlement.                                                                                 |
-| Settlement always `VOID` / `signed price unavailable`                  | signed-price-server unreachable or book stale: check `curl $SIGNED_PRICE_SERVER_URL/health` (`"ok": true`), and that `SIGNED_PRICE_SERVER_URL` resolves from inside the app containers (use `host.docker.internal`, not `127.0.0.1`). |
+| Settlement always `VOID` / `signed price unavailable`                  | signed-price-server down or book stale: `curl 127.0.0.1:18088/health` (`"ok": true`); `docker logs` the `signed-price-server` service. settlement-chain reaches it at the internal DNS `http://signed-price-server:8080` (do not change to `127.0.0.1`). |
+| `signed-price-server` container keeps exiting                          | `ECDSA_PRIVATE_KEY` unset/invalid — set it in `app.env` (§4); `$COMPOSE_APP up -d signed-price-server`. |
 | Settlement rejected: `InvalidOracleProof`                              | On-chain `price_signer` ≠ the signed-price-server signing address. Re-run guide 01 §9 (`set_price_signer`) with the server's `[signing].address`.                                                                             |
 | OOM during build                                                       | Add swap (guide 02 §9); rebuild                                                                                                                                                                                               |
 | `network syndicate-localnet_default not found`                         | Run `$COMPOSE_INFRA up -d` first                                                                                                                                                                                              |

@@ -20,10 +20,16 @@ Each public backend service gets its own hostname. The **`devnet.`** label is re
 | `wss://gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` | gateway (WebSocket) |
 | `https://api.devnet.satoshitable.fun` | `127.0.0.1:18080` | action-feed (REST) |
 | `https://config.devnet.satoshitable.fun` | `127.0.0.1:18085` | config (REST) |
+| `https://price.devnet.satoshitable.fun` | `127.0.0.1:18088` | signed-price feed — **read-only** (`/ws`, `/prices`, `/prices/at`, `/health`) |
 | `https://satoshitable.fun` | static files | marketing / coming soon |
 | `https://devnet.satoshitable.fun` | static files (optional) | devnet game client SPA |
 
 **Not exposed publicly** (localhost / ops only): match-engine, matchmaking, settlement-chain, settlement-worker, Postgres, Redis, Grafana, Prometheus.
+
+> **Signed-price feed is read-only.** The `price.devnet` vhost serves only the public price routes.
+> The Caddy block **404s `/internal/*` and `/metrics`** — the failover admin routes are
+> unauthenticated on devnet (`failover.enabled=false`), so they must never be reachable from the
+> internet. The signing key (`ECDSA_PRIVATE_KEY`) lives only in the container and is never served.
 
 Example calls the frontend will make:
 
@@ -31,6 +37,8 @@ Example calls the frontend will make:
 wss://gateway.devnet.satoshitable.fun
 https://api.devnet.satoshitable.fun/active-games
 https://config.devnet.satoshitable.fun/config/table?matchId=…
+wss://price.devnet.satoshitable.fun/ws?symbols=BTCUSD,ETHUSD,SOLUSD
+https://price.devnet.satoshitable.fun/prices/at?symbol=BTCUSD&timestamp=1751000000
 ```
 
 > **Why subdomains?** Clear service boundaries, simple Caddy routing (no path rewriting), and an obvious devnet namespace (`*.devnet.*`) separate from future mainnet hosts like `gateway.satoshitable.fun`.
@@ -66,6 +74,7 @@ Point devnet service hosts (and apex) at the VPS public IP.
 | `A` | `gateway.devnet` | `<SERVER_IP>` |
 | `A` | `api.devnet` | `<SERVER_IP>` |
 | `A` | `config.devnet` | `<SERVER_IP>` |
+| `A` | `price.devnet` | `<SERVER_IP>` |
 | `A` | `devnet` | `<SERVER_IP>` |
 | `A` | `@` | `<SERVER_IP>` |
 | `A` | `www` | `<SERVER_IP>` |
@@ -198,6 +207,7 @@ The example file (`deploy/caddy/Caddyfile`) implements:
 | `gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` |
 | `api.devnet.satoshitable.fun` | `127.0.0.1:18080` |
 | `config.devnet.satoshitable.fun` | `127.0.0.1:18085` |
+| `price.devnet.satoshitable.fun` | `127.0.0.1:18088` (`/internal/*` + `/metrics` → 404) |
 
 Caddy requests a separate TLS certificate per hostname (or uses applicable wildcard if configured).
 
@@ -223,6 +233,12 @@ curl -s https://api.devnet.satoshitable.fun/active-games | head -c 200; echo
 # Config catalog
 curl -s https://config.devnet.satoshitable.fun/config/catalog | head -c 200; echo
 
+# Signed-price feed (read-only) — health + a latest price; admin/metrics must 404
+curl -s https://price.devnet.satoshitable.fun/health | jq '.ok'
+curl -s "https://price.devnet.satoshitable.fun/prices?symbols=BTCUSD" | head -c 200; echo
+curl -s -o /dev/null -w "%{http_code}\n" https://price.devnet.satoshitable.fun/metrics            # expect 404
+curl -s -o /dev/null -w "%{http_code}\n" https://price.devnet.satoshitable.fun/internal/failover/status  # expect 404
+
 # WebSocket (requires wscat: npm i -g wscat)
 # wscat -c wss://gateway.devnet.satoshitable.fun
 # Expect: {"type":"challenge","nonce":"…"}
@@ -245,6 +261,8 @@ Give the frontend team these values (also in [../frontend/INTEGRATION_GUIDE.md](
 | `GATEWAY_WS_URL` | `wss://gateway.devnet.satoshitable.fun` |
 | `ACTION_FEED_URL` | `https://api.devnet.satoshitable.fun` |
 | `CONFIG_URL` | `https://config.devnet.satoshitable.fun` |
+| `PRICE_FEED_URL` | `https://price.devnet.satoshitable.fun` (REST: `/prices`, `/prices/at`) |
+| `PRICE_FEED_WS_URL` | `wss://price.devnet.satoshitable.fun/ws` (live ticker; `?symbols=BTCUSD,…`) |
 | `SOLANA_CLUSTER` | `devnet` |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` (or your provider) |
 | `PROGRAM_ID` | from `deploy/secrets/app.env` → `SYNDICATE_PROGRAM_ID` |
@@ -258,6 +276,8 @@ Example Vite `.env.production`:
 VITE_GATEWAY_WS_URL=wss://gateway.devnet.satoshitable.fun
 VITE_ACTION_FEED_URL=https://api.devnet.satoshitable.fun
 VITE_CONFIG_URL=https://config.devnet.satoshitable.fun
+VITE_PRICE_FEED_URL=https://price.devnet.satoshitable.fun
+VITE_PRICE_FEED_WS_URL=wss://price.devnet.satoshitable.fun/ws
 VITE_SOLANA_CLUSTER=devnet
 VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
 VITE_PROGRAM_ID=REPLACE_FROM_app.env
@@ -303,10 +323,10 @@ systemctl status caddy
 
 Use **different hostnames** — never reuse devnet subdomains for real money.
 
-| Cluster | Gateway | API (action-feed) | Config |
-|---------|---------|-------------------|--------|
-| **devnet** | `gateway.devnet.satoshitable.fun` | `api.devnet.satoshitable.fun` | `config.devnet.satoshitable.fun` |
-| **mainnet** | `gateway.satoshitable.fun` | `api.satoshitable.fun` | `config.satoshitable.fun` |
+| Cluster | Gateway | API (action-feed) | Config | Price feed |
+|---------|---------|-------------------|--------|------------|
+| **devnet** | `gateway.devnet.satoshitable.fun` | `api.devnet.satoshitable.fun` | `config.devnet.satoshitable.fun` | `price.devnet.satoshitable.fun` |
+| **mainnet** | `gateway.satoshitable.fun` | `api.satoshitable.fun` | `config.satoshitable.fun` | `price.satoshitable.fun` |
 
 Mainnet can run on the same VPS (different localhost ports + Compose project) or a separate host.
 
@@ -322,7 +342,9 @@ Mainnet can run on the same VPS (different localhost ports + Compose project) or
 | ACME / certificate fails | DNS missing for `*.devnet` or specific host; port 80 blocked; Cloudflare orange-cloud |
 | NXDOMAIN | Add `A *.devnet` or individual `A gateway.devnet` records (§2) |
 | Backend reachable on `:18081` from internet | Re-run §3 — bind to `127.0.0.1:` |
-| Browser CORS errors | Allow devnet SPA origin on API services (§8) or co-locate UI/API |
+| Browser CORS errors | Allow devnet SPA origin on API services (§8) or co-locate UI/API. The signed-price feed already returns `Access-Control-Allow-Origin: *` — do **not** add a CORS header in the `price.devnet` Caddy block (duplicate ACAO breaks the browser) |
+| `502` on `price.devnet…` | `curl http://127.0.0.1:18088/health` on VPS; `$COMPOSE_APP up -d signed-price-server` |
+| `price.devnet…/metrics` or `/internal/*` returns 200 | The `@ops` block is missing/edited — restore `respond @ops 404` in `deploy/caddy/Caddyfile` (§6) and `systemctl reload caddy` |
 
 ---
 

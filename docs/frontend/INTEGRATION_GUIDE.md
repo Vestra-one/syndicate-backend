@@ -46,15 +46,17 @@ Per environment (devnet staging / mainnet):
 | `GATEWAY_WS_URL` | `wss://gw.example.com` | Realtime socket |
 | `CONFIG_URL` | `https://config.example.com` | `GET /config/table?matchId=…` |
 | `ACTION_FEED_URL` | `https://feed.example.com` | History & discovery REST |
+| `PRICE_FEED_URL` | `https://price.devnet.satoshitable.fun` | Signed-price feed REST (`/prices`, `/prices/at`) — read-only |
+| `PRICE_FEED_WS_URL` | `wss://price.devnet.satoshitable.fun/ws` | Live price ticker (`?symbols=BTCUSD,…`) |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Tx build/send (client-side) |
-| `PROGRAM_ID` | `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS` | Team devnet staging id; yours may differ |
+| `PROGRAM_ID` | `8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX` | Team devnet staging id; yours may differ |
 | `CHIPS_TOKEN_MINT` | SPL mint pubkey | Betting token (e.g. USDC on devnet) |
 | `DRAND_API` | `https://api.drand.sh` | Time-lock beacon |
 | `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` | quicknet chain |
 
 **Do not hard-code:** blinds, timers, fees, geofence, the price-feed token, `config_hash` — these come from `TableTerms` / config templates (`GET /config/templates`).
 
-**Oracle:** settlement uses a **company-signed price** (secp256k1/EIP-191), produced backend-side by the signed-price-server. The frontend never fetches or signs prices. History may include a public `SignedPriceView` audit block after settlement. There is no Pyth/Hermes.
+**Oracle:** settlement uses a **company-signed price** (secp256k1/EIP-191), produced backend-side by the signed-price-server — the frontend never signs prices, and settlement is driven entirely backend-side. The FE **may read** the public signed-price feed for display only: a live ticker over `PRICE_FEED_WS_URL` (`/ws`) and exact-second lookups over `PRICE_FEED_URL` (`/prices`, `/prices/at`). Each payload carries the signer's `token/price_in_wad/timestamp/v/r/s` and can be verified client-side against the on-chain `price_signer`. History also includes a public `SignedPriceView` audit block after settlement. There is no Pyth/Hermes. The feed's admin/ops routes (`/internal/*`, `/metrics`) are not exposed.
 
 Refresh IDL after program upgrades (operator runs on build host):
 
@@ -146,7 +148,7 @@ backend opens at match end via drand; the user never manually reveals.
 
 ## 7. On-chain custody 🟢🔵
 
-Program id (devnet staging): **`FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS`**. Use your operator's id in production.
+Program id (devnet staging): **`8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX`**. Use your operator's id in production.
 
 | Instruction | Who signs | Frontend builds? |
 |-------------|-----------|------------------|
