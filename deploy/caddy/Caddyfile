@@ -1,30 +1,11 @@
-# Syndicate — satoshitable.fun (devnet service subdomains)
+# Syndicate — backend subdomains (satoshitable.fun)
+# Frontend (satoshitable.fun, www.satoshitable.fun) is hosted on Netlify — NOT here.
+# Caddy handles the four *.devnet.satoshitable.fun backend subdomains only.
 # Install: sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 # Guide: docs/deployment/04_DOMAIN_AND_TLS.md
 
 {
 	email hello@satoshitable.fun
-}
-
-# Redirect www → apex
-www.satoshitable.fun {
-	redir https://satoshitable.fun{uri} permanent
-}
-
-# Marketing / main site
-satoshitable.fun {
-	encode gzip zstd
-	root * /var/www/satoshitable
-	try_files {path} /index.html
-	file_server
-}
-
-# Devnet game client (optional — deploy SPA dist here)
-devnet.satoshitable.fun {
-	encode gzip zstd
-	root * /var/www/satoshitable-devnet
-	try_files {path} /index.html
-	file_server
 }
 
 # Gateway WebSocket
@@ -45,10 +26,11 @@ config.devnet.satoshitable.fun {
 	reverse_proxy 127.0.0.1:18085
 }
 
-# Signed-price feed (read-only public surface for the FE: live ticker + historical lookup).
-# Loopback offset port 18088 from docker-compose.app.yml (signed-price-server is NOT on host :8080).
-# /internal/* (failover admin — UNAUTHENTICATED on devnet) and /metrics are blocked from the public.
-# The server already returns `Access-Control-Allow-Origin: *`, so do NOT add a CORS header here.
+# Signed-price feed — read-only public surface (live ticker /ws + historical /prices/at).
+# Loopback offset port 18088 (docker-compose.app.yml). NOT on generic host :8080.
+# /internal/* (failover admin — UNAUTHENTICATED on devnet) and /metrics are blocked from public.
+# The server already returns `Access-Control-Allow-Origin: *`; do NOT add a CORS header here
+# (duplicate ACAO: * breaks browsers).
 price.devnet.satoshitable.fun {
 	encode gzip zstd
 	@ops path /internal/* /metrics

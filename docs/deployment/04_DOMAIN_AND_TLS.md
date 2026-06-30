@@ -1,276 +1,155 @@
-# 04 — Domain, TLS & Devnet Subdomains (`satoshitable.fun`)
+# 04 — Domain, TLS & Backend Subdomains
 
-> Run as the `deploy` user on the VPS **after** [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) §10 passes.
-> Backend services must already be healthy on localhost ports (`18081`, `18080`, `18085`, …).
+> **Run as the `deploy` user on the VPS after [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) §10 passes.**
 
-This guide wires **[satoshitable.fun](https://satoshitable.fun/)** to the Syndicate backend with:
+## What this guide does
 
-- **HTTPS** (Let's Encrypt via Caddy)
-- **Per-service devnet subdomains** under `*.devnet.satoshitable.fun` (mandatory devnet namespace)
-- Marketing UI at **`satoshitable.fun`** (optional devnet SPA at **`devnet.satoshitable.fun`**)
+Installs **Caddy** on the VPS and issues Let's Encrypt certificates for the four backend subdomains under `*.devnet.satoshitable.fun`.
+
+**Does NOT touch `satoshitable.fun`** — the frontend SPA is hosted on Netlify. Caddy only handles backend traffic.
 
 ---
 
-## 0. URL map (devnet)
+## 0. URL map
 
-Each public backend service gets its own hostname. The **`devnet.`** label is required for staging — do not point mainnet at these hosts later.
+| Public hostname | VPS port | Service |
+|-----------------|----------|---------|
+| `wss://gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` | Gateway (WebSocket) |
+| `https://api.devnet.satoshitable.fun` | `127.0.0.1:18080` | Action-feed (REST) |
+| `https://config.devnet.satoshitable.fun` | `127.0.0.1:18085` | Config (REST) |
+| `https://price.devnet.satoshitable.fun` | `127.0.0.1:18088` | Signed-price feed — read-only |
+| `https://satoshitable.fun` | — | Frontend SPA → **Netlify** (not this guide) |
 
-| Hostname | Backend (localhost) | Service |
-|----------|---------------------|---------|
-| `wss://gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` | gateway (WebSocket) |
-| `https://api.devnet.satoshitable.fun` | `127.0.0.1:18080` | action-feed (REST) |
-| `https://config.devnet.satoshitable.fun` | `127.0.0.1:18085` | config (REST) |
-| `https://price.devnet.satoshitable.fun` | `127.0.0.1:18088` | signed-price feed — **read-only** (`/ws`, `/prices`, `/prices/at`, `/health`) |
-| `https://satoshitable.fun` | static files | marketing / coming soon |
-| `https://devnet.satoshitable.fun` | static files (optional) | devnet game client SPA |
+**Not exposed publicly** (localhost / ops only): match-engine, matchmaking, settlement-chain, settlement-worker, Postgres, Redis.
 
-**Not exposed publicly** (localhost / ops only): match-engine, matchmaking, settlement-chain, settlement-worker, Postgres, Redis, Grafana, Prometheus.
-
-> **Signed-price feed is read-only.** The `price.devnet` vhost serves only the public price routes.
-> The Caddy block **404s `/internal/*` and `/metrics`** — the failover admin routes are
-> unauthenticated on devnet (`failover.enabled=false`), so they must never be reachable from the
-> internet. The signing key (`ECDSA_PRIVATE_KEY`) lives only in the container and is never served.
-
-Example calls the frontend will make:
-
-```text
-wss://gateway.devnet.satoshitable.fun
-https://api.devnet.satoshitable.fun/active-games
-https://config.devnet.satoshitable.fun/config/table?matchId=…
-wss://price.devnet.satoshitable.fun/ws?symbols=BTCUSD,ETHUSD,SOLUSD
-https://price.devnet.satoshitable.fun/prices/at?symbol=BTCUSD&timestamp=1751000000
-```
-
-> **Why subdomains?** Clear service boundaries, simple Caddy routing (no path rewriting), and an obvious devnet namespace (`*.devnet.*`) separate from future mainnet hosts like `gateway.satoshitable.fun`.
+> **Signed-price feed is read-only.** Caddy blocks `/internal/*` and `/metrics` with `404` — those failover admin routes are unauthenticated on devnet and must never reach the internet.
 
 ---
 
 ## 1. Prerequisites
 
-- [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) complete — `curl http://127.0.0.1:18081/healthz` returns `200`.
-- DNS control for `satoshitable.fun`.
-- Hetzner (or host) firewall allows **22, 80, 443** only ([02_VPS_SETUP.md](./02_VPS_SETUP.md) §4.2).
-- Backend Docker ports bound to **127.0.0.1** (§3 below).
+- Guide 03 complete — all backend containers healthy.
+- Netlify DNS: `*.devnet A <SERVER_IP>` wildcard already added (done).
+- Hetzner Cloud Firewall: inbound ports 22, 80, 443 **only** — verify this before continuing (§2).
+- The VPS does **not** need to serve `satoshitable.fun` or `www` — Netlify handles those.
 
 ---
 
-## 2. DNS records
+## 2. Verify firewall and DNS
 
-Point devnet service hosts (and apex) at the VPS public IP.
+### 2a. Hetzner Cloud Firewall
 
-**Option A — wildcard (recommended):** one record covers all devnet subdomains.
+Docker modifies iptables directly and bypasses UFW — the **Hetzner Cloud Firewall is the actual isolation layer**. Verify it in the Hetzner Cloud Console (`Firewall` → your server → `Inbound rules`):
 
-| Type | Name | Value | TTL |
-|------|------|-------|-----|
-| `A` | `@` | `<SERVER_IP>` | 300 |
-| `A` | `www` | `<SERVER_IP>` | 300 |
-| `A` | `devnet` | `<SERVER_IP>` | 300 |
-| `A` | `*.devnet` | `<SERVER_IP>` | 300 |
+| Port | Protocol | Allowed from |
+|------|----------|--------------|
+| 22 | TCP | Your IP (or `0.0.0.0/0` if you accept the risk) |
+| 80 | TCP | `0.0.0.0/0` (ACME challenge) |
+| 443 | TCP | `0.0.0.0/0` (HTTPS/WSS) |
 
-**Option B — explicit records** (if your DNS provider does not allow wildcards):
+All other ports (18080, 18081, 18085, 18088, 5432, 6379, …) must be **blocked**.
 
-| Type | Name | Value |
-|------|------|-------|
-| `A` | `gateway.devnet` | `<SERVER_IP>` |
-| `A` | `api.devnet` | `<SERVER_IP>` |
-| `A` | `config.devnet` | `<SERVER_IP>` |
-| `A` | `price.devnet` | `<SERVER_IP>` |
-| `A` | `devnet` | `<SERVER_IP>` |
-| `A` | `@` | `<SERVER_IP>` |
-| `A` | `www` | `<SERVER_IP>` |
-
-Optional IPv6: mirror with `AAAA` records.
-
-Verify propagation from your laptop:
+### 2b. DNS propagation
 
 ```bash
-# EDIT: <SERVER_IP>
-dig +short satoshitable.fun A
-dig +short gateway.devnet.satoshitable.fun A
-dig +short api.devnet.satoshitable.fun A
-dig +short config.devnet.satoshitable.fun A
-# All should return <SERVER_IP>
+# EDIT: replace with your VPS public IP
+SERVER_IP=1.2.3.4
+
+dig +short gateway.devnet.satoshitable.fun A   # expect $SERVER_IP
+dig +short api.devnet.satoshitable.fun A        # expect $SERVER_IP
+dig +short config.devnet.satoshitable.fun A     # expect $SERVER_IP
+dig +short price.devnet.satoshitable.fun A      # expect $SERVER_IP
 ```
 
-> **Cloudflare:** use **DNS only** (grey cloud) for `*.devnet` during first certificate issuance, or ensure HTTP-01 on port 80 reaches the VPS. SSL mode: **Full (strict)** after Caddy has certs.
+All four must return your VPS IP before proceeding. Netlify DNS typically propagates in under 5 minutes. If any returns empty, check the wildcard record in Netlify DNS dashboard: `*.devnet` → A → `<SERVER_IP>`.
 
 ---
 
-## 3. Bind backend ports to localhost only
-
-Guide [02_VPS_SETUP.md](./02_VPS_SETUP.md) §4.2 notes Docker bypasses UFW when ports publish on `0.0.0.0`. Restrict public-facing services to loopback before exposing Caddy.
-
-Edit `deploy/docker-compose.override.yml` (created in guide 03 §5). **Add** a `ports:` block under each public service:
-
-```yaml
-services:
-  gateway:
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:18081:8081"
-      - "127.0.0.1:19081:9081"
-  action-feed:
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:18080:8080"
-  config:
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:18085:8085"
-  # … keep existing restart / cluster-env on other services unchanged
-```
-
-Recreate the published services:
-
-```bash
-export COMPOSE_APP="docker compose --env-file deploy/secrets/app.env \
-  -f deploy/docker-compose.app.yml \
-  -f deploy/docker-compose.override.yml"
-
-$COMPOSE_APP up -d --force-recreate gateway action-feed config
-```
-
-Confirm they are **not** on `0.0.0.0`:
-
-```bash
-ss -tlnp | grep -E '18081|18080|18085'
-# Expect 127.0.0.1:18081 etc., not 0.0.0.0
-```
-
----
-
-## 4. Install Caddy
-
-Caddy obtains and renews Let's Encrypt certificates automatically.
+## 3. Install Caddy
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
   | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+
 sudo apt-get update
 sudo apt-get install -y caddy
-caddy version
+
+caddy version   # confirm installation
 ```
 
 ---
 
-## 5. Static site roots (optional)
+## 4. Deploy Caddyfile
 
-```bash
-# Marketing / coming soon
-sudo mkdir -p /var/www/satoshitable
-sudo chown deploy:deploy /var/www/satoshitable
-
-cat > /var/www/satoshitable/index.html <<'EOF'
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Satoshi's Table — coming soon</title>
-  </head>
-  <body>
-    <h1>Satoshi's Table</h1>
-    <p>Devnet client: <a href="https://devnet.satoshitable.fun">devnet.satoshitable.fun</a></p>
-  </body>
-</html>
-EOF
-
-# Devnet SPA (when ready)
-sudo mkdir -p /var/www/satoshitable-devnet
-sudo chown deploy:deploy /var/www/satoshitable-devnet
-```
-
-Deploy the Vite `dist/` build to `/var/www/satoshitable-devnet/` when the game client is ready.
-
----
-
-## 6. Caddy configuration
-
-Copy the repo example:
+The repo ships the correct Caddyfile for the four backend subdomains. Copy it, validate, and start Caddy:
 
 ```bash
 cd /opt/syndicate/backend
+
 sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl enable --now caddy
 sudo systemctl reload caddy
 ```
 
-The example file (`deploy/caddy/Caddyfile`) implements:
+The Caddyfile configures:
 
 | Virtual host | Upstream |
 |--------------|----------|
-| `satoshitable.fun` | static `/var/www/satoshitable` |
-| `devnet.satoshitable.fun` | static `/var/www/satoshitable-devnet` |
 | `gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` |
 | `api.devnet.satoshitable.fun` | `127.0.0.1:18080` |
 | `config.devnet.satoshitable.fun` | `127.0.0.1:18085` |
-| `price.devnet.satoshitable.fun` | `127.0.0.1:18088` (`/internal/*` + `/metrics` → 404) |
+| `price.devnet.satoshitable.fun` | `127.0.0.1:18088` (+ `/internal/*` and `/metrics` → 404) |
 
-Caddy requests a separate TLS certificate per hostname (or uses applicable wildcard if configured).
-
----
-
-## 7. Verify public endpoints
-
-From your **laptop**:
-
-```bash
-# TLS
-curl -sI https://satoshitable.fun/ | head -n 5
-curl -sI https://api.devnet.satoshitable.fun/healthz | head -n 5
-
-# Backend health
-curl -s https://api.devnet.satoshitable.fun/healthz
-curl -s https://config.devnet.satoshitable.fun/healthz
-curl -s http://127.0.0.1:18081/healthz   # gateway — run on VPS, or expose a health route later
-
-# Action-feed discovery
-curl -s https://api.devnet.satoshitable.fun/active-games | head -c 200; echo
-
-# Config catalog
-curl -s https://config.devnet.satoshitable.fun/config/catalog | head -c 200; echo
-
-# Signed-price feed (read-only) — health + a latest price; admin/metrics must 404
-curl -s https://price.devnet.satoshitable.fun/health | jq '.ok'
-curl -s "https://price.devnet.satoshitable.fun/prices?symbols=BTCUSD" | head -c 200; echo
-curl -s -o /dev/null -w "%{http_code}\n" https://price.devnet.satoshitable.fun/metrics            # expect 404
-curl -s -o /dev/null -w "%{http_code}\n" https://price.devnet.satoshitable.fun/internal/failover/status  # expect 404
-
-# WebSocket (requires wscat: npm i -g wscat)
-# wscat -c wss://gateway.devnet.satoshitable.fun
-# Expect: {"type":"challenge","nonce":"…"}
-```
-
-On the VPS during first cert fetch:
+Caddy requests a Let's Encrypt certificate for each hostname automatically. Watch the first issuance:
 
 ```bash
 sudo journalctl -u caddy -f
+# Look for: certificate obtained successfully
+# Ctrl-C when done
 ```
 
 ---
 
-## 8. Frontend environment (devnet handoff)
+## 5. Verify endpoints
 
-Give the frontend team these values (also in [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md)):
+Run these from your **laptop** after certificates are issued (allow ~30 s for first cert):
 
-| Key | Devnet value |
-|-----|--------------|
-| `GATEWAY_WS_URL` | `wss://gateway.devnet.satoshitable.fun` |
-| `ACTION_FEED_URL` | `https://api.devnet.satoshitable.fun` |
-| `CONFIG_URL` | `https://config.devnet.satoshitable.fun` |
-| `PRICE_FEED_URL` | `https://price.devnet.satoshitable.fun` (REST: `/prices`, `/prices/at`) |
-| `PRICE_FEED_WS_URL` | `wss://price.devnet.satoshitable.fun/ws` (live ticker; `?symbols=BTCUSD,…`) |
-| `SOLANA_CLUSTER` | `devnet` |
-| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` (or your provider) |
-| `PROGRAM_ID` | from `deploy/secrets/app.env` → `SYNDICATE_PROGRAM_ID` |
-| `CHIPS_TOKEN_MINT` | from `deploy/secrets/app.env` |
-| `DRAND_API` | `https://api.drand.sh` |
-| `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` |
+```bash
+# Action-feed
+curl -sf https://api.devnet.satoshitable.fun/healthz && echo OK
 
-Example Vite `.env.production`:
+# Config
+curl -sf https://config.devnet.satoshitable.fun/healthz && echo OK
+
+# Signed-price feed — health + price sample; admin routes must 404
+curl -sf https://price.devnet.satoshitable.fun/health | python3 -m json.tool
+curl -sf "https://price.devnet.satoshitable.fun/prices?symbols=BTCUSD" | head -c 200; echo
+curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/metrics            # 404
+curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/internal/failover/status  # 404
+
+# Gateway WebSocket (requires wscat: npm i -g wscat)
+wscat -c wss://gateway.devnet.satoshitable.fun
+# Expect: {"type":"challenge","nonce":"…"}  — Ctrl-C to exit
+```
+
+Run from the **VPS** for the gateway (no external route for gateway healthz):
+
+```bash
+curl -sf http://127.0.0.1:18081/healthz && echo OK
+```
+
+---
+
+## 6. Frontend environment (handoff)
+
+The frontend SPA on `satoshitable.fun` calls the backend subdomains — those are **cross-origin** requests. Add these env vars to the frontend Vite build:
 
 ```bash
 VITE_GATEWAY_WS_URL=wss://gateway.devnet.satoshitable.fun
@@ -280,76 +159,61 @@ VITE_PRICE_FEED_URL=https://price.devnet.satoshitable.fun
 VITE_PRICE_FEED_WS_URL=wss://price.devnet.satoshitable.fun/ws
 VITE_SOLANA_CLUSTER=devnet
 VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
-VITE_PROGRAM_ID=REPLACE_FROM_app.env
-VITE_CHIPS_TOKEN_MINT=REPLACE_FROM_app.env
+VITE_PROGRAM_ID=        # copy from deploy/secrets/app.env → SYNDICATE_PROGRAM_ID
+VITE_CHIPS_TOKEN_MINT=  # copy from deploy/secrets/app.env
 ```
 
-> Client code calls `${CONFIG_URL}/config/table?…` and `${ACTION_FEED_URL}/active-games`. Keep base URLs **without trailing slashes**.
+Also in [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md).
 
-### CORS (cross-subdomain)
-
-The game client on `devnet.satoshitable.fun` calls APIs on other subdomains — that is **cross-origin**. If the browser blocks requests, add `Access-Control-Allow-Origin` on gateway, action-feed, and config (allow `https://devnet.satoshitable.fun` and `https://satoshitable.fun`), or serve the SPA from the same host as one aggregated proxy. Track as a frontend-integration follow-up if needed.
+> **CORS:** `satoshitable.fun` calling `*.devnet.satoshitable.fun` is cross-origin. If the browser blocks requests, add `Access-Control-Allow-Origin: https://satoshitable.fun` on gateway, action-feed, and config. The signed-price feed already returns `Access-Control-Allow-Origin: *` — do **not** add a CORS header in the `price.devnet` Caddy block (duplicate `ACAO: *` breaks the browser).
 
 ---
 
-## 9. Hetzner Cloud Firewall (recheck)
-
-Inbound only:
-
-| Port | Purpose |
-|------|---------|
-| 22/tcp | SSH |
-| 80/tcp | ACME + HTTP→HTTPS redirect |
-| 443/tcp | HTTPS / WSS |
-
-Do **not** open `18080`, `18081`, etc.
-
----
-
-## 10. Day-2 operations
+## 7. Day-2 operations
 
 ```bash
+# Edit and reload Caddy config
 sudo nano /etc/caddy/Caddyfile
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 
-rsync -av ./dist/ deploy@<SERVER_IP>:/var/www/satoshitable-devnet/
+# Check Caddy status / cert renewal
 systemctl status caddy
+sudo journalctl -u caddy --since "1 hour ago"
 ```
 
 ---
 
-## 11. Future: mainnet on the same domain
+## 8. Future: mainnet on the same domain
 
 Use **different hostnames** — never reuse devnet subdomains for real money.
 
-| Cluster | Gateway | API (action-feed) | Config | Price feed |
-|---------|---------|-------------------|--------|------------|
+| Cluster | Gateway | API | Config | Price feed |
+|---------|---------|-----|--------|------------|
 | **devnet** | `gateway.devnet.satoshitable.fun` | `api.devnet.satoshitable.fun` | `config.devnet.satoshitable.fun` | `price.devnet.satoshitable.fun` |
 | **mainnet** | `gateway.satoshitable.fun` | `api.satoshitable.fun` | `config.satoshitable.fun` | `price.satoshitable.fun` |
 
-Mainnet can run on the same VPS (different localhost ports + Compose project) or a separate host.
-
 ---
 
-## 12. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `502` on `api.devnet…` | `curl http://127.0.0.1:18080/healthz` on VPS; `$COMPOSE_APP up -d action-feed` |
-| WebSocket fails | `dig gateway.devnet.satoshitable.fun`; check `docker logs syndicate-app-gateway-1` |
-| `404` on config | Use `https://config.devnet…/config/table` not `/table`; `CONFIG_URL=https://config.devnet.satoshitable.fun` |
-| ACME / certificate fails | DNS missing for `*.devnet` or specific host; port 80 blocked; Cloudflare orange-cloud |
-| NXDOMAIN | Add `A *.devnet` or individual `A gateway.devnet` records (§2) |
-| Backend reachable on `:18081` from internet | Re-run §3 — bind to `127.0.0.1:` |
-| Browser CORS errors | Allow devnet SPA origin on API services (§8) or co-locate UI/API. The signed-price feed already returns `Access-Control-Allow-Origin: *` — do **not** add a CORS header in the `price.devnet` Caddy block (duplicate ACAO breaks the browser) |
-| `502` on `price.devnet…` | `curl http://127.0.0.1:18088/health` on VPS; `$COMPOSE_APP up -d signed-price-server` |
-| `price.devnet…/metrics` or `/internal/*` returns 200 | The `@ops` block is missing/edited — restore `respond @ops 404` in `deploy/caddy/Caddyfile` (§6) and `systemctl reload caddy` |
+| `dig` returns empty for `*.devnet` | Check Netlify DNS dashboard: `*.devnet` A record → VPS IP |
+| ACME / cert fails (`journalctl -u caddy`) | Port 80 blocked on Hetzner Cloud Firewall; add inbound TCP 80 |
+| `502` on `api.devnet…` | `curl http://127.0.0.1:18080/healthz`; `$COMPOSE_APP up -d action-feed` |
+| `502` on `gateway.devnet…` | `curl http://127.0.0.1:18081/healthz`; `$COMPOSE_APP up -d gateway` |
+| `502` on `config.devnet…` | `curl http://127.0.0.1:18085/healthz`; `$COMPOSE_APP up -d config` |
+| `502` on `price.devnet…` | `curl http://127.0.0.1:18088/health`; `$COMPOSE_APP up -d signed-price-server` |
+| `price.devnet…/metrics` returns 200 | `@ops` block missing — restore `respond @ops 404` in Caddyfile and `systemctl reload caddy` |
+| Backend ports reachable from internet | Hetzner Cloud Firewall not configured — block all except 22/80/443 (§2a) |
+| Browser CORS errors from `satoshitable.fun` | Add `Access-Control-Allow-Origin: https://satoshitable.fun` on gateway/action-feed/config |
+| Websocket drops after 30 s | Caddy default idle timeout; add `transport http { read_timeout 0 }` under the gateway block if needed |
 
 ---
 
-## 13. Done
+## Done
 
-When §7 passes, devnet services are live on `*.devnet.satoshitable.fun` and the frontend team can wire against §8.
+When §5 passes, devnet backend services are live on `*.devnet.satoshitable.fun`.
 
-See also [README.md](./README.md) · [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) · [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md)
+See also: [README.md](./README.md) · [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md) · [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md)
