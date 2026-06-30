@@ -4,9 +4,9 @@
 
 ## What this guide does
 
-Installs **Caddy** on the VPS and issues Let's Encrypt certificates for the four backend subdomains under `*.devnet.satoshitable.fun`.
+Configures **nginx** (already running on the VPS) as a TLS-terminating reverse proxy for the four backend subdomains under `*.devnet.satoshitable.fun`, with **certbot** for Let's Encrypt certificates.
 
-**Does NOT touch `satoshitable.fun`** — the frontend SPA is hosted on Netlify. Caddy only handles backend traffic.
+**Does NOT touch `satoshitable.fun`** — the frontend SPA is hosted on Netlify.
 
 ---
 
@@ -22,16 +22,16 @@ Installs **Caddy** on the VPS and issues Let's Encrypt certificates for the four
 
 **Not exposed publicly** (localhost / ops only): match-engine, matchmaking, settlement-chain, settlement-worker, Postgres, Redis.
 
-> **Signed-price feed is read-only.** Caddy blocks `/internal/*` and `/metrics` with `404` — those failover admin routes are unauthenticated on devnet and must never reach the internet.
+> **Signed-price feed is read-only.** nginx blocks `/internal/*` and `/metrics` with `404` — those failover admin routes are unauthenticated on devnet and must never reach the internet.
 
 ---
 
 ## 1. Prerequisites
 
 - Guide 03 complete — all backend containers healthy.
-- Netlify DNS: `*.devnet A <SERVER_IP>` wildcard already added (done).
-- Hetzner Cloud Firewall: inbound ports 22, 80, 443 **only** — verify this before continuing (§2).
-- The VPS does **not** need to serve `satoshitable.fun` or `www` — Netlify handles those.
+- Netlify DNS: `*.devnet A <SERVER_IP>` wildcard already added.
+- Hetzner Cloud Firewall: inbound 22, 80, 443 only (§2).
+- nginx is already running on the VPS (confirmed by `systemctl is-active nginx`).
 
 ---
 
@@ -39,15 +39,15 @@ Installs **Caddy** on the VPS and issues Let's Encrypt certificates for the four
 
 ### 2a. Hetzner Cloud Firewall
 
-Docker modifies iptables directly and bypasses UFW — the **Hetzner Cloud Firewall is the actual isolation layer**. Verify it in the Hetzner Cloud Console (`Firewall` → your server → `Inbound rules`):
+Docker modifies iptables directly and bypasses UFW — the **Hetzner Cloud Firewall is the actual isolation layer**. In the Hetzner Cloud Console → Firewall → your server → Inbound rules, verify:
 
-| Port | Protocol | Allowed from |
-|------|----------|--------------|
-| 22 | TCP | Your IP (or `0.0.0.0/0` if you accept the risk) |
-| 80 | TCP | `0.0.0.0/0` (ACME challenge) |
-| 443 | TCP | `0.0.0.0/0` (HTTPS/WSS) |
+| Port | Protocol | Source |
+|------|----------|--------|
+| 22 | TCP | your IP |
+| 80 | TCP | `0.0.0.0/0` |
+| 443 | TCP | `0.0.0.0/0` |
 
-All other ports (18080, 18081, 18085, 18088, 5432, 6379, …) must be **blocked**.
+All other ports (18080, 18081, 18085, 18088, 5432, 6379, …) must be **absent** (blocked).
 
 ### 2b. DNS propagation
 
@@ -61,65 +61,60 @@ dig +short config.devnet.satoshitable.fun A     # expect $SERVER_IP
 dig +short price.devnet.satoshitable.fun A      # expect $SERVER_IP
 ```
 
-All four must return your VPS IP before proceeding. Netlify DNS typically propagates in under 5 minutes. If any returns empty, check the wildcard record in Netlify DNS dashboard: `*.devnet` → A → `<SERVER_IP>`.
+All four must return your VPS IP before proceeding.
 
 ---
 
-## 3. Install Caddy
+## 3. Deploy nginx vhost config
 
-```bash
-sudo apt-get update
-sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-
-sudo apt-get update
-sudo apt-get install -y caddy
-
-caddy version   # confirm installation
-```
-
----
-
-## 4. Deploy Caddyfile
-
-The repo ships the correct Caddyfile for the four backend subdomains. Copy it, validate, and start Caddy:
+The repo ships the nginx config for all four subdomains.
 
 ```bash
 cd /opt/syndicate/backend
 
-sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl enable --now caddy
-sudo systemctl reload caddy
+sudo cp deploy/nginx/syndicate-devnet.conf /etc/nginx/sites-available/syndicate-devnet
+sudo ln -s /etc/nginx/sites-available/syndicate-devnet /etc/nginx/sites-enabled/syndicate-devnet
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-The Caddyfile configures:
+Expected output from `nginx -t`: `syntax is ok` and `test is successful`.
 
-| Virtual host | Upstream |
-|--------------|----------|
-| `gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` |
-| `api.devnet.satoshitable.fun` | `127.0.0.1:18080` |
-| `config.devnet.satoshitable.fun` | `127.0.0.1:18085` |
-| `price.devnet.satoshitable.fun` | `127.0.0.1:18088` (+ `/internal/*` and `/metrics` → 404) |
+---
 
-Caddy requests a Let's Encrypt certificate for each hostname automatically. Watch the first issuance:
+## 4. Issue TLS certificates with certbot
+
+Install certbot and the nginx plugin, then issue certs for all four subdomains in one command:
 
 ```bash
-sudo journalctl -u caddy -f
-# Look for: certificate obtained successfully
-# Ctrl-C when done
+sudo apt-get install -y certbot python3-certbot-nginx
+
+sudo certbot --nginx \
+  -d gateway.devnet.satoshitable.fun \
+  -d api.devnet.satoshitable.fun \
+  -d config.devnet.satoshitable.fun \
+  -d price.devnet.satoshitable.fun \
+  --non-interactive --agree-tos \
+  -m hello@satoshitable.fun
+```
+
+certbot will:
+1. Issue a Let's Encrypt certificate covering all four domains
+2. Automatically edit the nginx config to add SSL directives
+3. Add HTTP→HTTPS redirects
+4. Set up a cron / systemd timer for automatic renewal
+
+Verify renewal works:
+
+```bash
+sudo certbot renew --dry-run
 ```
 
 ---
 
 ## 5. Verify endpoints
 
-Run these from your **laptop** after certificates are issued (allow ~30 s for first cert):
+Run from your **laptop**:
 
 ```bash
 # Action-feed
@@ -131,15 +126,15 @@ curl -sf https://config.devnet.satoshitable.fun/healthz && echo OK
 # Signed-price feed — health + price sample; admin routes must 404
 curl -sf https://price.devnet.satoshitable.fun/health | python3 -m json.tool
 curl -sf "https://price.devnet.satoshitable.fun/prices?symbols=BTCUSD" | head -c 200; echo
-curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/metrics            # 404
-curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/internal/failover/status  # 404
+curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/metrics            # expect 404
+curl -o /dev/null -w "%{http_code}\n" -s https://price.devnet.satoshitable.fun/internal/failover/status  # expect 404
 
 # Gateway WebSocket (requires wscat: npm i -g wscat)
 wscat -c wss://gateway.devnet.satoshitable.fun
 # Expect: {"type":"challenge","nonce":"…"}  — Ctrl-C to exit
 ```
 
-Run from the **VPS** for the gateway (no external route for gateway healthz):
+Run from the **VPS** for the gateway health check:
 
 ```bash
 curl -sf http://127.0.0.1:18081/healthz && echo OK
@@ -163,23 +158,26 @@ VITE_PROGRAM_ID=        # copy from deploy/secrets/app.env → SYNDICATE_PROGRAM
 VITE_CHIPS_TOKEN_MINT=  # copy from deploy/secrets/app.env
 ```
 
-Also in [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_GUIDE.md).
-
-> **CORS:** `satoshitable.fun` calling `*.devnet.satoshitable.fun` is cross-origin. If the browser blocks requests, add `Access-Control-Allow-Origin: https://satoshitable.fun` on gateway, action-feed, and config. The signed-price feed already returns `Access-Control-Allow-Origin: *` — do **not** add a CORS header in the `price.devnet` Caddy block (duplicate `ACAO: *` breaks the browser).
+> **CORS:** `satoshitable.fun` calling `*.devnet.satoshitable.fun` is cross-origin. If the browser blocks requests, add `add_header Access-Control-Allow-Origin "https://satoshitable.fun";` to the relevant nginx server blocks and reload nginx. The signed-price feed already returns `Access-Control-Allow-Origin: *` — do **not** add a CORS header in the price nginx block (duplicate header breaks browsers).
 
 ---
 
 ## 7. Day-2 operations
 
 ```bash
-# Edit and reload Caddy config
-sudo nano /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
+# Edit vhost config
+sudo nano /etc/nginx/sites-available/syndicate-devnet
+sudo nginx -t && sudo systemctl reload nginx
 
-# Check Caddy status / cert renewal
-systemctl status caddy
-sudo journalctl -u caddy --since "1 hour ago"
+# Check cert expiry
+sudo certbot certificates
+
+# Force renewal (normally automatic)
+sudo certbot renew
+
+# Tail nginx logs
+sudo tail -f /var/log/nginx/error.log
+sudo tail -f /var/log/nginx/access.log
 ```
 
 ---
@@ -200,15 +198,15 @@ Use **different hostnames** — never reuse devnet subdomains for real money.
 | Symptom | Fix |
 |---------|-----|
 | `dig` returns empty for `*.devnet` | Check Netlify DNS dashboard: `*.devnet` A record → VPS IP |
-| ACME / cert fails (`journalctl -u caddy`) | Port 80 blocked on Hetzner Cloud Firewall; add inbound TCP 80 |
+| certbot fails: `Connection refused` on port 80 | Hetzner Cloud Firewall missing inbound TCP 80 rule |
+| certbot fails: `DNS problem` | DNS not propagated yet — wait and retry |
 | `502` on `api.devnet…` | `curl http://127.0.0.1:18080/healthz`; `$COMPOSE_APP up -d action-feed` |
 | `502` on `gateway.devnet…` | `curl http://127.0.0.1:18081/healthz`; `$COMPOSE_APP up -d gateway` |
 | `502` on `config.devnet…` | `curl http://127.0.0.1:18085/healthz`; `$COMPOSE_APP up -d config` |
 | `502` on `price.devnet…` | `curl http://127.0.0.1:18088/health`; `$COMPOSE_APP up -d signed-price-server` |
-| `price.devnet…/metrics` returns 200 | `@ops` block missing — restore `respond @ops 404` in Caddyfile and `systemctl reload caddy` |
-| Backend ports reachable from internet | Hetzner Cloud Firewall not configured — block all except 22/80/443 (§2a) |
-| Browser CORS errors from `satoshitable.fun` | Add `Access-Control-Allow-Origin: https://satoshitable.fun` on gateway/action-feed/config |
-| Websocket drops after 30 s | Caddy default idle timeout; add `transport http { read_timeout 0 }` under the gateway block if needed |
+| `price.devnet…/metrics` returns 200 | `location ~* ^/(internal\|metrics)` block missing — check nginx config and reload |
+| WebSocket drops after 60 s | Add `proxy_read_timeout 3600s; proxy_send_timeout 3600s;` to the gateway server block |
+| Browser CORS errors from `satoshitable.fun` | Add `add_header Access-Control-Allow-Origin "https://satoshitable.fun";` to the relevant nginx blocks |
 
 ---
 
