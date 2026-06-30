@@ -21,7 +21,9 @@ What the contract **does** authenticate:
 
 1. **Who is in the match** — every seat is created by a transaction the player themselves
    signed (`deposit`), and settlement must reference exactly those seat PDAs.
-2. **The oracle price** — the Pyth price update must pass full Wormhole guardian verification.
+2. **The oracle price** — the company-signed price from `signed-price-server` must pass
+   secp256k1/EIP-191 signature recovery against `ProtocolState.price_signer` (a trusted 20-byte
+   Ethereum address). See `services/programs/src/signed_price.rs`.
 3. **The settlement arithmetic** — recomputed by the shared deterministic core and checked for
    conservation.
 4. **Authorization to submit** — only the `settlement_admin` key may call `submit_settlement`.
@@ -59,7 +61,7 @@ implements:
 flowchart LR
     P["Player (signs)"] -->|deposit buy-in + fee| V[("Match vault PDA")]
     A["settlement_admin (signs)"] -->|submit_settlement(SettleArgs)| PR["syndicate_program"]
-    PY["Pyth PriceUpdateV2"] -->|guardian-verified| PR
+    SP["signed-price-server (secp256k1/EIP-191)"] -->|company-signed price| PR
     PR -->|re-verify via shared core + conservation| PR
     PR -->|write per-seat payout| S["SeatAccount.payout"]
     P -->|claim / refund (signs)| V
@@ -126,10 +128,10 @@ outcomes enter the chain. Step by step:
    anything the player signed. The values come straight from `SettleArgs`
    (`services/programs/src/settle_args.rs:14`–`22`).
 
-5. **Oracle authenticity** — the Pyth `PriceUpdateV2` account must pass **full** Wormhole
-   guardian verification, match the bound feed id, and have a non-negative publish time
-   (`services/programs/src/pyth_receiver.rs:14`–`35`); and the price echoed in `SettleArgs`
-   must byte-equal the authenticated update (`lib.rs:261`–`266`). ✅ the price is trustless.
+5. **Oracle authenticity** — the company-signed price in `SettleArgs.signed_price` must pass
+   secp256k1/EIP-191 signature recovery (`services/programs/src/signed_price.rs`); the recovered
+   signer must equal `ProtocolState.price_signer`. ✅ the price cannot be forged without the
+   operator's signing key.
 
 6. **Deterministic re-verification** — rebuild the shared inputs from `args.players` and call
    `syndicate_shared::verify_settlement(&input, &claimed)` (`lib.rs:251`–`281`). This recomputes
@@ -153,7 +155,7 @@ prove the **inputs are authentic**. There is:
 - no `event_root` / hash-chain proof verified on-chain,
 
 …anywhere in the program. (Confirmed by searching the whole `services/programs` tree: the only
-signature verification present is Pyth's, in `pyth_receiver.rs`.)
+signature verification present is the secp256k1 company-signed price, in `signed_price.rs`.)
 
 `MatchAccount` does store a `config_hash` (`state.rs:51`), but that binds the *game parameters*
 (rake, feed, windows) for replay — it is **not** a commitment to the players' signed actions,
@@ -226,7 +228,7 @@ These are options, not changes made here:
 | --- | --- | --- |
 | Player deposited / owns their seat | ✅ Yes | `player: Signer` on `deposit`; seat PDA derivation |
 | Only the right party can submit settlement | ✅ Yes | `authority == settlement_admin` |
-| Oracle price is real | ✅ Yes | Pyth full Wormhole guardian verification |
+| Oracle price is real | ✅ Yes (trusted operator key) | secp256k1/EIP-191 against `ProtocolState.price_signer` (`signed_price.rs`) |
 | Payout math is correct for the given inputs | ✅ Yes | `syndicate_shared::verify_settlement` |
 | Money is conserved (no mint/burn, only depositors paid) | ✅ Yes | conservation checks |
 | **Player actions/intents were actually signed by the players** | ❌ **No** | none — inputs trusted from `settlement_admin` |
