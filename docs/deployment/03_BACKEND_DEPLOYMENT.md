@@ -109,9 +109,9 @@ Create **one** file for your cluster. Do not edit `docs/deployment/env.example` 
 cat > deploy/secrets/app.env <<'EOF'
 APP_ENV=devnet
 SOLANA_CLUSTER=devnet
-SYNDICATE_PROGRAM_ID=REPLACE_ME
-PROTOCOL_STATE_PDA=REPLACE_ME
-CHIPS_TOKEN_MINT=REPLACE_ME
+SYNDICATE_PROGRAM_ID=GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF
+PROTOCOL_STATE_PDA=7c6RkHEjeCJC1Z6dG5ttotxYmpiR6PAKSLn8iYf3D3mH
+CHIPS_TOKEN_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
 SOLANA_RPC_URL_PRIMARY=https://api.devnet.solana.com
 SOLANA_RPC_URL_SECONDARY=
 
@@ -120,7 +120,7 @@ SOLANA_RPC_URL_SECONDARY=
 # ECDSA_PRIVATE_KEY's Ethereum address MUST equal the on-chain price_signer (guide 01 §8/§9).
 # NEVER commit a real key here — this is a tracked template. Put the real value only in
 # deploy/secrets/app.env (gitignored). Treat any key pasted into a tracked file as compromised.
-ECDSA_PRIVATE_KEY=REPLACE_ME
+ECDSA_PRIVATE_KEY=0xf813cd2b4ee5a97379ec6d5319110e7365ca38b9fac2234b3db33f36ac3e155c
 
 # Vestigial Pyth boot requirements — NOT used for v1 settlement, but the Rust worker
 # panics at boot without them. Keep set; any non-empty PYTH_API_KEY is fine on devnet.
@@ -149,11 +149,11 @@ nano deploy/secrets/app.env   # replace all REPLACE_ME values
 cat > deploy/secrets/app.env <<'EOF'
 APP_ENV=mainnet
 SOLANA_CLUSTER=mainnet-beta
-SYNDICATE_PROGRAM_ID=REPLACE_ME
-PROTOCOL_STATE_PDA=REPLACE_ME
-CHIPS_TOKEN_MINT=REPLACE_ME
-SOLANA_RPC_URL_PRIMARY=REPLACE_ME
-SOLANA_RPC_URL_SECONDARY=REPLACE_ME
+SYNDICATE_PROGRAM_ID=GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF
+PROTOCOL_STATE_PDA=7c6RkHEjeCJC1Z6dG5ttotxYmpiR6PAKSLn8iYf3D3mH
+CHIPS_TOKEN_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+SOLANA_RPC_URL_PRIMARY=https://api.devnet.solana.com
+SOLANA_RPC_URL_SECONDARY=
 
 # v1 oracle: production signed-price-server signing key (address == on-chain price_signer).
 # Mount your production [signing] config over the compose service's config (see §1 / docker-compose).
