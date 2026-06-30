@@ -6,7 +6,9 @@
  * Source: GET ${VITE_PRICE_URL}/prices
  * The feed keys symbols WITHOUT a slash ("BTCUSD"); our feed ids use one ("BTC/USD").
  */
-const PRICE_URL = import.meta.env.VITE_PRICE_URL as string | undefined
+const PRICE_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+  ? '/price-proxy'
+  : (import.meta.env.VITE_PRICE_URL as string | undefined)
 
 export interface SignedPrice {
   token: string // 20-byte ERC-20 address, hex 0x…

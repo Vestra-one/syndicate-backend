@@ -1,6 +1,11 @@
 import type { LiveGame, UpcomingGame } from './protocol'
 
-const API_URL = import.meta.env.VITE_API_URL as string | undefined
+// In local dev with VITE_DEVNET_USER set, route through the Vite proxy
+// (/api-proxy/...) so auth is injected server-side and CORS preflight is avoided.
+// In production VITE_DEVNET_USER is unset so we hit the real API directly.
+const API_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+  ? '/api-proxy'
+  : (import.meta.env.VITE_API_URL as string | undefined)
 
 /** "Hot" popularity score — the default dashboard sort (§8). */
 export function ratedScore(g: LiveGame): number {

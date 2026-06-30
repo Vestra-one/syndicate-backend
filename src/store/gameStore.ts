@@ -76,8 +76,10 @@ interface GameState {
   playResolving: boolean // true while deciding join-vs-create
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
+  lastTxSig: string | null // most recent on-chain tx signature (for explorer link)
 
   // actions
+  fetchBalance: () => Promise<void>
   loadDiscovery: () => Promise<void>
   ingestLivePrice: (price: number, ts: number) => void
   setDashboardSort: (key: DashboardSortKey) => void
@@ -138,6 +140,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   playResolving: false,
   playMode: null,
   playError: null,
+  lastTxSig: null,
+
+  fetchBalance: async () => {
+    if (!adapters) adapters = createAdapters()
+    await refreshBalance(set)
+  },
 
   loadDiscovery: async () => {
     set({ discoveryStatus: 'loading' })
@@ -366,7 +374,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         decimals: p.decimals,
       })
       // Record the on-chain ids so subsequent ix (seal/claim) derive the right PDAs.
-      set((s) => ({ terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms }))
+      set((s) => ({ terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms, lastTxSig: txSig }))
       // Best-effort registry report so others can discover the room.
       void reportCreate({
         createTxSig: txSig,

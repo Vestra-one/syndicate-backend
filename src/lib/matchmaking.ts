@@ -8,7 +8,10 @@
  */
 import type { CreateRoomReport, DepositReport } from '@/lib/protocol'
 
-const MM_URL = import.meta.env.VITE_MATCHMAKING_URL as string | undefined
+const MM_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+  ? '/api-proxy'
+  : (import.meta.env.VITE_MATCHMAKING_URL as string | undefined)
+    ?? (import.meta.env.VITE_API_URL as string | undefined)
 
 interface ReportResult {
   ok: boolean

@@ -39,8 +39,10 @@ import { useGameStore } from '@/store/gameStore'
 // ---------------------------------------------------------------------------
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL as string
+// Derive program ID from the IDL's baked-in address so PDAs always match the
+// program Anchor calls. VITE_PROGRAM_ID can still override for local forks.
 const PROGRAM_ID = new PublicKey(
-  (import.meta.env.VITE_PROGRAM_ID as string) ?? '8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX',
+  (import.meta.env.VITE_PROGRAM_ID as string) ?? (IDL as { address: string }).address,
 )
 
 const CONFIRM_OPTS: ConfirmOptions = {
@@ -310,7 +312,7 @@ function createLiveChain(): ChainClient {
         beginLiveWindowSec: new BN(input.beginLiveWindowSec),
         fillDeadlineTs: new BN(fillDeadlineTs),
         maxOracleConfidence: new BN(0), // signed-price path; not Pyth-confidence gated
-        oracleExponent: -Math.abs(input.decimals), // price fixed-point exponent (decimals=8 → -8)
+        oracleExponent: -18, // signed_price::SIGNED_PRICE_EXPONENT — WAD-18 fixed-point, not feed decimals
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -337,8 +339,56 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
+      console.log('[createAndDeposit] ── params ──────────────────────────────────')
+      console.log('  program:           ', PROGRAM_ID.toBase58())
+      console.log('  protocolState:     ', protState.toBase58())
+      console.log('  matchAcct:         ', matchAcct.toBase58())
+      console.log('  mint (chips):      ', mintAddr.toBase58())
+      console.log('  configHash:        ', input.configHash)
+      console.log('  priceTokenHex:     ', input.priceTokenHex)
+      console.log('  matchId:           ', params.matchId.toString())
+      console.log('  buyIn:             ', params.buyIn.toString())
+      console.log('  entryFee:          ', params.entryFee.toString())
+      console.log('  rakeBps:           ', params.rakeBps)
+      console.log('  rakeCap:           ', params.rakeCap.toString())
+      console.log('  nonsealPenaltyBps: ', params.nonsealPenaltyBps)
+      console.log('  minPlayers:        ', params.minPlayers)
+      console.log('  maxPlayers:        ', params.maxPlayers)
+      console.log('  totalBettingDur:   ', params.totalBettingDurationSec.toString())
+      console.log('  sealWindowSec:     ', params.sealWindowSec.toString())
+      console.log('  beginLiveWindow:   ', params.beginLiveWindowSec.toString())
+      console.log('  fillDeadlineTs:    ', params.fillDeadlineTs.toString())
+      console.log('  maxOracleConf:     ', params.maxOracleConfidence.toString())
+      console.log('  oracleExponent:    ', params.oracleExponent)
+      console.log('  seatIndex:         ', input.seatIndex)
+      console.log('────────────────────────────────────────────────────────────')
+
+      // Simulate first via our own RPC to get the actual program logs before MetaMask sees it.
+      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash()
+      tx.recentBlockhash = blockhash
+      tx.lastValidBlockHeight = lastValidBlockHeight
+      tx.feePayer = authority
+      const simResult = await conn.simulateTransaction(tx)
+      if (simResult.value.err) {
+        console.error('[createAndDeposit] simulation error:', JSON.stringify(simResult.value.err))
+        console.error('[createAndDeposit] simulation logs:', simResult.value.logs)
+        throw new Error(
+          `Transaction simulation failed: ${JSON.stringify(simResult.value.err)}\n` +
+          (simResult.value.logs ?? []).join('\n')
+        )
+      }
+      console.log('[createAndDeposit] simulation OK, logs:', simResult.value.logs)
+
       const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
-      const sig = await sender.sendTransaction(tx, conn, { skipPreflight: false })
+      let sig: string
+      try {
+        sig = await sender.sendTransaction(tx, conn, { skipPreflight: true })
+      } catch (err: unknown) {
+        const logs: string[] = (err as { logs?: string[] })?.logs ?? []
+        console.error('[createAndDeposit] send failed. logs:', logs)
+        throw err
+      }
+
       await conn.confirmTransaction(sig, 'finalized')
       return { txSig: sig, matchPda: matchAcct.toBase58() }
     },

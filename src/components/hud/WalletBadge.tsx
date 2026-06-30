@@ -46,7 +46,7 @@ export function WalletBadge() {
     <div className="wallet panel wallet--connected">
       <span className="wallet-addr mono">{short}</span>
       <span className="wallet-amount mono">
-        {balance != null ? `${balance.toLocaleString()} ${token}` : '— ' + token}
+        {balance != null ? `${(balance / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${token}` : '— ' + token}
       </span>
     </div>
   )

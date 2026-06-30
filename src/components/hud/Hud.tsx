@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Brand } from './Brand'
 import { WalletBadge } from './WalletBadge'
 import { RoundStatus } from './RoundStatus'
@@ -7,7 +8,40 @@ import { Seats } from './Seats'
 import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
+import { useGameStore } from '@/store/gameStore'
 import './hud.css'
+
+function TxBanner() {
+  const lastTxSig = useGameStore((s) => s.lastTxSig)
+  const [dismissed, setDismissed] = useState(false)
+
+  // Reset dismissed when a new tx comes in
+  useEffect(() => {
+    if (lastTxSig) setDismissed(false)
+  }, [lastTxSig])
+
+  if (!lastTxSig || dismissed) return null
+
+  const explorerUrl = `https://explorer.solana.com/tx/${lastTxSig}?cluster=devnet`
+
+  return (
+    <div className="tx-banner">
+      <span className="tx-banner-dot" />
+      <span className="tx-banner-text">Table created on-chain</span>
+      <a
+        className="tx-banner-link"
+        href={explorerUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        View tx ↗
+      </a>
+      <button className="tx-banner-close" onClick={() => setDismissed(true)} aria-label="Dismiss">
+        ×
+      </button>
+    </div>
+  )
+}
 
 /**
  * The 2D overlay layer. Three rows (top / spacer / bottom) so the table stays
@@ -35,6 +69,7 @@ export function Hud() {
         <RoundStatus />
       </footer>
 
+      <TxBanner />
       <Lobby />
       <Resolution />
     </div>

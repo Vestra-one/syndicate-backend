@@ -7,7 +7,9 @@
  */
 import type { Chips, TableTerms } from '@/lib/protocol'
 
-const CONFIG_URL = import.meta.env.VITE_CONFIG_URL as string | undefined
+const CONFIG_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+  ? '/config-proxy'
+  : (import.meta.env.VITE_CONFIG_URL as string | undefined)
 
 /** Raw `config` block inside a template (superset of TableTerms). */
 interface TemplateConfig {
@@ -73,11 +75,12 @@ export interface CreateTableParams {
   decimals: number
 }
 
-let cache: ConfigTemplate[] | null = null
+let cache: { templates: ConfigTemplate[]; at: number } | null = null
+const CACHE_TTL_MS = 60_000
 
-/** Fetch (and cache) the allowlisted templates. Throws if config is unreachable. */
+/** Fetch (and cache for 1 min) the allowlisted templates. Throws if config is unreachable. */
 export async function fetchTemplates(): Promise<ConfigTemplate[]> {
-  if (cache) return cache
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.templates
   if (!CONFIG_URL) throw new Error('VITE_CONFIG_URL is not set — configure the config service URL')
   const res = await fetch(`${CONFIG_URL}/config/templates`, {
     headers: { Accept: 'application/json' },
@@ -85,8 +88,8 @@ export async function fetchTemplates(): Promise<ConfigTemplate[]> {
   })
   if (!res.ok) throw new Error(`/config/templates ${res.status}`)
   const data = (await res.json()) as { templates: ConfigTemplate[] }
-  cache = data.templates ?? []
-  return cache
+  cache = { templates: data.templates ?? [], at: Date.now() }
+  return cache.templates
 }
 
 /** Pick a template by feed (default BTC/USD) and tier (default lowest). */
@@ -152,7 +155,7 @@ export function templateToCreateParams(t: ConfigTemplate): CreateTableParams {
   }
 }
 
-/** The `/config/table` terms report decimals: 8; templates don't, so default to 8. */
+/** Display decimals for the betting fixed-point (not the oracle WAD exponent). */
 function priceDecimals(_c: TemplateConfig): number {
-  return 8
+  return 2
 }

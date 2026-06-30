@@ -18,6 +18,8 @@ export function Lobby() {
   const seated = useGameStore((s) => s.seated)
   const playMode = useGameStore((s) => s.playMode)
   const playResolving = useGameStore((s) => s.playResolving)
+  const playError = useGameStore((s) => s.playError)
+  const lastTxSig = useGameStore((s) => s.lastTxSig)
   const join = useGameStore((s) => s.joinTable)
   const create = useGameStore((s) => s.createTable)
 
@@ -31,6 +33,25 @@ export function Lobby() {
         <div className="lobby-card panel lobby-card--resolving">
           <div className="lobby-spinner" aria-hidden="true" />
           <div className="lobby-resolving-title">Getting ready…</div>
+        </div>
+      </div>
+    )
+  }
+
+  // Game creation failed — show error card so the user isn't left staring at a blank table.
+  if (playError && !playMode && !seated) {
+    return (
+      <div className="lobby">
+        <div className="lobby-card panel lobby-card--error">
+          <div className="lobby-error-icon" aria-hidden="true">✗</div>
+          <div className="lobby-error-title">Couldn't create table</div>
+          <div className="lobby-error-msg">{playError}</div>
+          <button
+            className="seal-btn lobby-error-dismiss"
+            onClick={() => useGameStore.setState({ playError: null })}
+          >
+            Dismiss
+          </button>
         </div>
       </div>
     )
