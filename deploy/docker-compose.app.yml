@@ -131,6 +131,24 @@ services:
     ports:
       - "18085:8085"
 
+  # v1 oracle. Joins the shared network so settlement-chain reaches it by service DNS
+  # (signed-price-server:8080). NOT published on the generic host :8080 — only a loopback
+  # offset port for the Caddy reverse proxy (price.devnet.*), so it cannot clash with other
+  # services on the VPS and is never directly reachable from the public internet.
+  signed-price-server:
+    build:
+      context: ../services/signed-price-server
+      dockerfile: Dockerfile
+    environment:
+      ECDSA_PRIVATE_KEY: ${ECDSA_PRIVATE_KEY:-}
+      CONFIG_PATH: /app/config/config.toml
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Devnet feed config (Coinbase book_mid). Swap the mount for your cluster's config.
+      - ../services/signed-price-server/config/devnet.toml:/app/config/config.toml:ro
+    ports:
+      - "127.0.0.1:18088:8080"
+
   settlement-chain:
     build:
       context: ..
@@ -142,6 +160,10 @@ services:
       <<: *app-env
       SETTLEMENT_CHAIN_HOST: 0.0.0.0
       SETTLEMENT_CHAIN_PORT: 8790
+      # Reach the oracle by internal service DNS (not host.docker.internal / generic :8080).
+      SIGNED_PRICE_SERVER_URL: http://signed-price-server:8080
+    depends_on:
+      - signed-price-server
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

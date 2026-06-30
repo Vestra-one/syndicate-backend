@@ -44,3 +44,14 @@ config.devnet.satoshitable.fun {
 	encode gzip zstd
 	reverse_proxy 127.0.0.1:18085
 }
+
+# Signed-price feed (read-only public surface for the FE: live ticker + historical lookup).
+# Loopback offset port 18088 from docker-compose.app.yml (signed-price-server is NOT on host :8080).
+# /internal/* (failover admin — UNAUTHENTICATED on devnet) and /metrics are blocked from the public.
+# The server already returns `Access-Control-Allow-Origin: *`, so do NOT add a CORS header here.
+price.devnet.satoshitable.fun {
+	encode gzip zstd
+	@ops path /internal/* /metrics
+	respond @ops 404
+	reverse_proxy 127.0.0.1:18088
+}
