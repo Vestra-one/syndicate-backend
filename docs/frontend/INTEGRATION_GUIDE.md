@@ -49,7 +49,7 @@ Per environment (devnet staging / mainnet):
 | `PRICE_FEED_URL` | `https://price.devnet.satoshitable.fun` | Signed-price feed REST (`/prices`, `/prices/at`) — read-only |
 | `PRICE_FEED_WS_URL` | `wss://price.devnet.satoshitable.fun/ws` | Live price ticker (`?symbols=BTCUSD,…`) |
 | `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Tx build/send (client-side) |
-| `PROGRAM_ID` | `8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX` | Team devnet staging id; yours may differ |
+| `PROGRAM_ID` | `2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT` | Team devnet staging id; yours may differ |
 | `CHIPS_TOKEN_MINT` | SPL mint pubkey | Betting token (e.g. USDC on devnet) |
 | `DRAND_API` | `https://api.drand.sh` | Time-lock beacon |
 | `DRAND_CHAIN_HASH` | `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971` | quicknet chain |
@@ -148,7 +148,7 @@ backend opens at match end via drand; the user never manually reveals.
 
 ## 7. On-chain custody 🟢🔵
 
-Program id (devnet staging): **`8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX`**. Use your operator's id in production.
+Program id (devnet staging): **`2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT`**. Use your operator's id in production.
 
 | Instruction | Who signs | Frontend builds? |
 |-------------|-----------|------------------|
@@ -214,8 +214,8 @@ When present, render `oracleProof` (`SignedPriceView`):
 - `v` / `rHex` / `sHex` — the secp256k1/EIP-191 signature
 - `settlementTxSignatures` — the settle tx that carried this price + payouts
 
-Canonical VOID when the oracle is unavailable: **`Pyth Oracle price for settlement is unavailable.`**
-(message string preserved for client compatibility; the underlying oracle is the signed-price-server).
+Canonical VOID when the oracle is unavailable: the backend emits `void` with a reason string such as
+`"OracleDegraded"` — the signed-price-server failed to produce a valid signed price (no Pyth).
 
 ---
 
@@ -230,7 +230,9 @@ Canonical VOID when the oracle is unavailable: **`Pyth Oracle price for settleme
 | Disconnect mid-hand | reconnect | Default policy protects free check |
 | Settled | `settled` | Resolution + enable `claim` |
 
-Every VOID = **full refund** including entry fee.
+VOID refund rules (see `VoidKind` in contract `state.rs`):
+- `FillingVoid` / `Emergency` — **full refund** to everyone (deposit + entry fee).
+- `UnderMinSealed` (too few sealed at `begin_live`) — sealers: full refund + pro-rata share of non-sealer penalty pool; non-sealers: `deposit − penalty` only (entry fee forfeited to treasury).
 
 ---
 
