@@ -6,14 +6,10 @@
  * Wallet adapter) and resolves once authenticated. After that, gameplay flows
  * as `ServerMessage`s to subscribers and `ClientMessage`s via `send`.
  *
- * Two implementations, chosen by env (see `createGateway`):
- *   - mockGateway: a full play-money match emulator (no backend needed)
- *   - wsGateway:   a real WebSocket to the Satoshi's Table gateway
+ * A real WebSocket to the Satoshi's Table gateway (no mock/demo transport).
  */
 import type { ClientMessage, ServerMessage } from '@/lib/protocol'
 import type { Adapters } from '@/lib/adapters'
-import { IS_DEMO } from '@/lib/adapters'
-import { createMockGateway } from './mockGateway'
 import { createWsGateway } from './wsGateway'
 
 export type GatewayListener = (msg: ServerMessage) => void
@@ -27,8 +23,11 @@ export interface Gateway {
   send(msg: ClientMessage): void
 }
 
-/** Pick the mock emulator or a real WS gateway based on env (mirrors adapter selection). */
+/** Open a real WebSocket gateway. Requires VITE_GATEWAY_WS_URL. */
 export function createGateway(adapters: Adapters): Gateway {
   const url = import.meta.env.VITE_GATEWAY_WS_URL as string | undefined
-  return IS_DEMO || !url ? createMockGateway(adapters) : createWsGateway(url, adapters)
+  if (!url) {
+    throw new Error('VITE_GATEWAY_WS_URL is not set — configure the gateway URL in .env')
+  }
+  return createWsGateway(url, adapters)
 }

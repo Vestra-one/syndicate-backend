@@ -1,13 +1,13 @@
 /**
  * Satoshi's Table — frontend ↔ backend protocol & shared types.
  *
- * The single source of wire types for the client. Mirrors the backend gateway
+ * Single source of wire types for the client. Mirrors the backend gateway
  * messages, the action-feed public events, the match-engine action set, and the
- * on-chain DTOs. Status tags: [live] · [contract] (backend wiring) · [client] duty.
+ * on-chain DTOs. Status: 🟢 live · 🟡 contract (backend wiring) · 🔵 client duty.
  *
  * Money convention: ALL amounts are integers in the betting token's smallest unit
  * (e.g. micro-USDC). ALL prices are fixed-point integers at the feed's `decimals`
- * (e.g. 63000.42 @ 2dp -> 6300042). Never use floats for money or prices.
+ * (e.g. 63000.42 @ 2dp → 6300042). Never use floats for money or prices.
  */
 
 // ---------------------------------------------------------------------------
@@ -15,55 +15,42 @@
 // ---------------------------------------------------------------------------
 
 export type MatchPhase =
-  | 'FILLING' // accepting deposits (seats open)
-  | 'SEALING' // seats frozen; predictions being time-lock sealed
-  | 'LIVE' // betting in progress
+  | 'FILLING'           // accepting deposits (seats open)
+  | 'SEALING'           // seats frozen; predictions being time-lock sealed
+  | 'LIVE'              // betting in progress
   | 'SETTLEMENT_WINDOW' // final window; oracle sampled
-  | 'DECRYPT' // time-lock opens; predictions decrypt
-  | 'SETTLED' // final; payouts claimable
-  | 'VOID' // aborted; full refund
+  | 'DECRYPT'           // time-lock opens; predictions decrypt
+  | 'SETTLED'           // final; payouts claimable
+  | 'VOID'              // aborted; full refund
 
-export type Chips = number // integer, token base units
+export type Chips = number      // integer, token base units
 export type FixedPrice = number // integer fixed-point at feed `decimals`
-export type Wallet = string // base58 Solana pubkey
-export type SeatIndex = number // 0..maxPlayers-1 (pseudonymous id in public feed)
+export type Wallet = string     // base58 Solana pubkey
+export type SeatIndex = number  // 0..maxPlayers-1
 
 // ---------------------------------------------------------------------------
-// Betting actions (match-engine)  [contract]
+// Betting actions (match-engine)  🟡
 // ---------------------------------------------------------------------------
 
 export type BettingAction =
   | { type: 'fold' }
   | { type: 'check' }
   | { type: 'call' }
-  | { type: 'betTo'; amount: Chips } // total street commitment after the bet
-  | { type: 'raiseTo'; amount: Chips } // total street commitment after the raise (>= minRaiseTo)
+  | { type: 'betTo'; amount: Chips }
+  | { type: 'raiseTo'; amount: Chips }
   | { type: 'allIn' }
 
-export type DefaultAction = 'check_fold' | 'check_call_any' // pre-signed timeout fallback
+export type DefaultAction = 'check_fold' | 'check_call_any'
 
 // ---------------------------------------------------------------------------
-// Gateway auth handshake  [live] (implemented today)
+// Gateway auth handshake  🟢
 // ---------------------------------------------------------------------------
 
-export interface ChallengeMsg {
-  type: 'challenge'
-  nonce: string
-}
+export interface ChallengeMsg { type: 'challenge'; nonce: string }
 /** signature = base64( ed25519_sign(wallet_privkey, utf8(nonce)) ) */
-export interface AuthMsg {
-  type: 'auth'
-  wallet: Wallet
-  signature: string
-}
-export interface AuthenticatedMsg {
-  type: 'authenticated'
-  wallet: Wallet
-}
-export interface ErrorMsg {
-  type: 'error'
-  reason: GatewayErrorReason
-}
+export interface AuthMsg { type: 'auth'; wallet: Wallet; signature: string }
+export interface AuthenticatedMsg { type: 'authenticated'; wallet: Wallet }
+export interface ErrorMsg { type: 'error'; reason: GatewayErrorReason }
 
 export type GatewayErrorReason =
   | 'geo-blocked'
@@ -73,22 +60,21 @@ export type GatewayErrorReason =
   | string
 
 // ---------------------------------------------------------------------------
-// Table / lobby / match views  [contract]
+// Table / lobby / match views  🟡
 // ---------------------------------------------------------------------------
 
 export interface TableTerms {
   tableId: string
-  priceFeedId: string // e.g. "BTC/USD" — the instrument predicted
-  supportedFeeds: string[] // launch defaults: BTC/USD, ETH/USD, SOL/USD
-  chipsToken: string // e.g. "USDC" — what you stake/win (decoupled from feed)
-  decimals: number // fixed-point precision for prices on this feed
-  oracleAdapter: 'pyth'
-  settlementMode: 'bounded-exact-after'
-  oracleDelayWindowSec: number // default 5; first valid Pyth update after match end
+  priceFeedId: string       // e.g. "BTC/USD"
+  supportedFeeds: string[]
+  chipsToken: string        // e.g. "USDC"
+  decimals: number
+  oracleAdapter: 'signed-price'
+  settlementMode: 'exact-timestamp'
   oracleUnavailableMessage: string
   buyIn: Chips
-  entryFee: Chips // taken at deposit; refunded on VOID/leave-before-LIVE
-  rakeBps: number // pot rake at settlement
+  entryFee: Chips
+  rakeBps: number
   rakeCap: Chips
   smallBlind: Chips
   bigBlind: Chips
@@ -99,16 +85,45 @@ export interface TableTerms {
   actionTimerSec: number
   timeBankSec: number
   settlementWindowSec: number
-  geofenceBlocklist: string[] // server-driven; launch default includes "IN"
+  geofenceBlocklist: string[]
   allowDuplicateWalletPerMatch: false
-  /** drand round the prediction must be sealed toward (match end). */
+  fillWindowSec?: number
+  practiceMode?: boolean
   timelockTargetRound: number
+  onchainMatchId?: string
+  matchPda?: string
+}
+
+export interface QueueStatus {
+  active: boolean
+  playersWaiting: number
+  seated: number
+  minPlayers: number
+  maxPlayers: number
+  fillDeadline: number | null
+  matchId?: string
+  onchainMatchId?: string
+  matchPda?: string
+}
+
+export interface RoomLobby {
+  roomCode: string
+  matchId: string
+  onchainMatchId?: string
+  matchPda?: string
+  seated: number
+  minPlayers: number
+  maxPlayers: number
+  canHostStart: boolean
+  fillDeadline: number
+  isHost: boolean
+  phase: MatchPhase
 }
 
 export interface SeatView {
   seat: SeatIndex
-  wallet?: Wallet // present only for self; pseudonymous (omitted) for others
-  stack: Chips // remaining
+  wallet?: Wallet
+  stack: Chips
   committedThisStreet: Chips
   totalContribution: Chips
   folded: boolean
@@ -118,49 +133,31 @@ export interface SeatView {
 export interface MatchStateView {
   matchId: string
   phase: MatchPhase
-  round: number // 1..roundCount
+  round: number
   pot: Chips
-  currentBet: Chips // highest street commitment
+  currentBet: Chips
   buttonSeat: SeatIndex
   toActSeat: SeatIndex | null
   seats: SeatView[]
-  feedPrice: FixedPrice // latest market price (drives the chart)
-  // self-centric helpers (only for the authenticated player):
+  feedPrice: FixedPrice
   yourSeat?: SeatIndex
   yourStack?: Chips
-  yourExposure?: Chips // total committed this match
+  yourExposure?: Chips
 }
 
 // ---------------------------------------------------------------------------
-// Public action-feed events (mirrors services/action-feed)  [contract]
-// Spectators & players receive these. NEVER contains sealed predictions
-// (before time-lock open), queued intents, or wallets — seat-indexed only.
+// Public action-feed events  🟡
 // ---------------------------------------------------------------------------
 
 export type PublicEvent =
-  | {
-      kind: 'action'
-      matchId: string
-      seat: SeatIndex
-      action: string
-      amount: Chips
-      feedPrice: FixedPrice
-      pot: Chips
-      ts: number
-    }
+  | { kind: 'action'; matchId: string; seat: SeatIndex; action: string; amount: Chips; feedPrice: FixedPrice; pot: Chips; ts: number }
   | { kind: 'fold'; matchId: string; seat: SeatIndex; ts: number }
   | { kind: 'round'; matchId: string; round: number; ts: number }
-  | {
-      kind: 'settlement'
-      matchId: string
-      settlementPrice: FixedPrice
-      awards: { seat: SeatIndex; amount: Chips }[]
-      ts: number
-    }
-  | { kind: 'reveal'; matchId: string; seat: SeatIndex; prediction: FixedPrice; ts: number } // only after time-lock open
+  | { kind: 'settlement'; matchId: string; settlementPrice: FixedPrice; awards: { seat: SeatIndex; amount: Chips }[]; ts: number }
+  | { kind: 'reveal'; matchId: string; seat: SeatIndex; prediction: FixedPrice; ts: number }
 
 // ---------------------------------------------------------------------------
-// Resolution  [contract]
+// Resolution  🟡
 // ---------------------------------------------------------------------------
 
 export interface SettlementView {
@@ -169,21 +166,29 @@ export interface SettlementView {
   awards: { seat: SeatIndex; amount: Chips }[]
   uncalledReturns: { seat: SeatIndex; amount: Chips }[]
   rakeCollected: Chips
-  /** opened post-match for everyone (incl. folders) — the emotional/audit reveal. */
+  oracleProof?: SignedPriceView
   revealedPredictions: { seat: SeatIndex; prediction: FixedPrice }[]
 }
 
+export interface SignedPriceView {
+  adapter: 'signed-price'
+  tokenHex: string
+  priceInWadHex: string
+  timestampMs: number
+  v: number
+  rHex: string
+  sHex: string
+  signerHex: string
+  settlementTxSignatures: string[]
+  price: FixedPrice
+}
+
 export type VoidReason =
-  | 'EngineIncomplete'
-  | 'OracleDegraded'
-  | 'TimelockUnavailable'
-  | 'MissingPrediction'
-  | 'ConservationFailure'
-  | 'NotEnoughPlayers'
-  | string
+  | 'EngineIncomplete' | 'OracleDegraded' | 'TimelockUnavailable'
+  | 'MissingPrediction' | 'ConservationFailure' | 'NotEnoughPlayers' | string
 
 // ---------------------------------------------------------------------------
-// Dashboard / discovery  [contract]
+// Dashboard / discovery  🟡
 // ---------------------------------------------------------------------------
 
 export interface LiveGame {
@@ -205,6 +210,7 @@ export interface MatchHistorySummary {
   startedAt: number
   lastEventTs: number
   settlementPrice?: FixedPrice
+  oracleProof?: SignedPriceView
   replayBundleUri?: string
   summary: { finalPot: Chips; awardTotal: Chips; actionCount: number; revealCount: number }
 }
@@ -237,61 +243,152 @@ export interface LeaderboardEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Client -> server  (after auth)  [contract]
+// Lobby listings (matchmaking REST + WS)  🟡
+// ---------------------------------------------------------------------------
+
+export interface RoomListing {
+  roomCode: string
+  matchId: string
+  onchainMatchId?: string
+  feedId: string
+  tierId: string
+  configHash?: string
+  buyIn?: Chips
+  seated: number
+  minPlayers: number
+  maxPlayers: number
+  fillDeadline: number
+}
+
+export interface RoomsUpdate {
+  kind: 'upsert' | 'started'
+  roomCode?: string
+  matchId: string
+  feedId?: string
+  tierId?: string
+  configHash?: string
+  buyIn?: Chips
+  seated: number
+  maxPlayers?: number
+  fillDeadline?: number
+  version: number
+}
+
+/** POST /rooms — host reports a verified create_and_deposit txhash. */
+export interface CreateRoomReport {
+  createTxSig: string
+  matchPda: string
+  onchainMatchId: string
+  configHash: string
+  wallet: Wallet
+  seatIndex?: SeatIndex
+  maxPlayers?: number
+}
+
+/** POST /matches/:matchId/deposits — joiner reports a verified deposit txhash. */
+export interface DepositReport {
+  depositTxSig: string
+  wallet: Wallet
+  seatIndex?: SeatIndex
+}
+
+// ---------------------------------------------------------------------------
+// Client → server  (after auth)  🟡
 // ---------------------------------------------------------------------------
 
 export type ClientMessage =
   | AuthMsg
-  | { type: 'subscribe'; matchId: string } // spectate
-  | { type: 'sealPrediction'; matchId: string; ciphertext: string } // tlock ciphertext, base64 [client]
-  | { type: 'act'; matchId: string; action: BettingAction; signature: string } // signed intent [client]
+  | { type: 'subscribe'; matchId: string }
+  | {
+      type: 'sealPrediction'
+      matchId: string
+      seatIndex: SeatIndex
+      ciphertext: string
+      commitmentHex: string
+      targetRound: number
+      blindingHex: string
+      signature: string
+    }
+  | { type: 'act'; matchId: string; action: BettingAction; signature: string }
   | { type: 'setDefault'; matchId: string; default: DefaultAction }
+  | { type: 'subscribeLobby'; feed?: string; template?: string; buyIn?: Chips }
+  | { type: 'unsubscribeLobby' }
   | { type: 'ping' }
 
 // ---------------------------------------------------------------------------
-// Server -> client
+// Server → client
 // ---------------------------------------------------------------------------
 
 export type ServerMessage =
-  | ChallengeMsg
-  | AuthenticatedMsg
-  | ErrorMsg // [live]
-  | { type: 'tableTerms'; terms: TableTerms } // [contract]
-  | { type: 'matchState'; state: MatchStateView } // [contract]
-  | { type: 'yourTurn'; matchId: string; toCall: Chips; minRaiseTo: Chips; deadline: number } // [contract]
-  | { type: 'event'; event: PublicEvent } // [contract] (broadcast path [live])
-  | { type: 'activeGames'; games: LiveGame[] } // [contract]
-  | { type: 'matchHistory'; matches: MatchHistorySummary[] } // [contract]
-  | { type: 'profile'; profile: PublicProfile } // [contract]
-  | { type: 'leaderboard'; entries: LeaderboardEntry[] } // [contract]
-  | { type: 'settled'; result: SettlementView } // [contract]
-  | { type: 'void'; matchId: string; reason: VoidReason } // [contract]
+  | ChallengeMsg | AuthenticatedMsg | ErrorMsg
+  | { type: 'tableTerms'; terms: TableTerms }
+  | { type: 'matchState'; state: MatchStateView; sealEndsAt?: number; bettingEndsAt?: number; matchEndsAt?: number }
+  | { type: 'yourTurn'; matchId: string; toCall: Chips; minRaiseTo: Chips; yourTurnDeadline?: number; sealEndsAt?: number; bettingEndsAt?: number; matchEndsAt?: number }
+  | { type: 'event'; event: PublicEvent }
+  | { type: 'activeGames'; games: LiveGame[] }
+  | { type: 'matchHistory'; matches: MatchHistorySummary[] }
+  | { type: 'profile'; profile: PublicProfile }
+  | { type: 'leaderboard'; entries: LeaderboardEntry[] }
+  | { type: 'settled'; result: SettlementView }
+  | { type: 'void'; matchId: string; reason: VoidReason }
+  | { type: 'lobbyState'; lobby: RoomLobby }
+  | { type: 'lobbyList'; rooms: RoomListing[] }
+  | { type: 'roomsUpdated'; update: RoomsUpdate }
+  | { type: 'queueStatus'; status: QueueStatus }
+  | { type: 'pong' }
+
+/** Every server envelope is stamped with the gateway clock for clock-sync. */
+export type ServerEnvelope = ServerMessage & { serverTime: number }
+
+/** Compute remaining ms on an absolute deadline using the synced server clock. */
+export function remainingMs(deadline: number, serverTime: number, localNow: number): number {
+  const localOffset = localNow - serverTime
+  return Math.max(0, deadline - (Date.now() - localOffset))
+}
 
 // ---------------------------------------------------------------------------
-// On-chain DTOs (Anchor program)  [contract][client]
-// The client builds these via @solana/web3.js + the Anchor IDL; the wallet signs.
+// On-chain DTOs  🟡🔵
 // ---------------------------------------------------------------------------
 
-export interface DepositArgs {
-  matchId: string
+export interface CreateAndDepositArgs {
+  onchainMatchId: string
+  configHash: string
+  priceTokenHex: string
   seatIndex: SeatIndex
-} // transfers buyIn + entryFee
-export interface ClaimArgs {
-  matchId: string
-} // pull payout after SETTLED (idempotent)
-export interface RefundArgs {
-  matchId: string
-} // reclaim deposit + entry fee after VOID
+}
+export interface DepositArgs { matchId: string; seatIndex: SeatIndex }
+export interface RegisterPredictionCommitmentArgs {
+  onchainMatchId: string
+  commitmentHex: string
+  timelockTargetRound: number
+}
+export interface ClaimArgs { matchId: string }
+export interface RefundArgs { matchId: string }
 
-/** PDA seeds (for deriving accounts client-side; the IDL also encodes these). */
+/** PDA seeds (for deriving accounts client-side; mirrors IDL seeds). */
 export const PDA_SEEDS = {
-  match: (matchId: string) => ['match', matchId],
-  vault: (matchPda: string) => ['vault', matchPda],
-  seat: (matchPda: string, player: Wallet) => ['seat', matchPda, player],
+  match: (onchainMatchId: string) => ['match', u64LeBytes(onchainMatchId)] as const,
+  vault: (matchPda: string) => ['vault', matchPda] as const,
+  seat: (matchPda: string, player: Wallet) => ['seat', matchPda, player] as const,
+  seatIndex: (matchPda: string, seatIndex: number) => ['seat-index', matchPda, u16LeBytes(seatIndex)] as const,
 } as const
 
+function u64LeBytes(id: string): Uint8Array {
+  let v = BigInt(id)
+  const out = new Uint8Array(8)
+  for (let i = 0; i < 8; i++) { out[i] = Number(v & 0xffn); v >>= 8n }
+  return out
+}
+
+function u16LeBytes(n: number): Uint8Array {
+  const out = new Uint8Array(2)
+  out[0] = n & 0xff
+  out[1] = (n >> 8) & 0xff
+  return out
+}
+
 // ---------------------------------------------------------------------------
-// drand quicknet (client-side time-lock)  [client]
+// drand quicknet (client-side time-lock)  🔵
 // ---------------------------------------------------------------------------
 
 export const DRAND = {
@@ -299,7 +396,6 @@ export const DRAND = {
   chainHash: '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971', // quicknet
 } as const
 
-/** Round at/after a unix time, given chain genesis + period (matches backend round_at). */
 export function roundAt(genesisTime: number, period: number, unixTime: number): number {
   if (period === 0 || unixTime <= genesisTime) return 1
   return Math.floor((unixTime - genesisTime + period - 1) / period) + 1

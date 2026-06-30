@@ -1,0 +1,2491 @@
+{
+  "address": "8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX",
+  "metadata": {
+    "name": "syndicate_program",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Syndicate Solana/Anchor on-chain program: vault custody, deposits/claims/refunds, fees, and v1 backend-trusted settlement with conservation + signed-price checks."
+  },
+  "instructions": [
+    {
+      "name": "begin_live",
+      "docs": [
+        "Advance Sealing → Live (plan_v2 §1/§3/§5). Operator-gated. Requires the seal",
+        "deadline reached. Drops + penalizes non-sealers (penalty → `dead_money`, entry",
+        "fee → `forfeited_fees`); if fewer than `min_players` sealed, VOIDs with the",
+        "penalty pool split among sealers. Otherwise re-indexes sealers into contiguous",
+        "engine seats, derives the dealer button from the committed drand round's",
+        "randomness, and stamps `live_start_ts` + `scheduled_end_ts`.",
+        "",
+        "All seat accounts (exactly `player_count`) are passed as `remaining_accounts`."
+      ],
+      "discriminator": [
+        62,
+        129,
+        92,
+        247,
+        194,
+        206,
+        244,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "BeginLiveArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "claim",
+      "docs": [
+        "Pull-based, idempotent claim of a settled seat's payout."
+      ],
+      "discriminator": [
+        62,
+        198,
+        214,
+        193,
+        213,
+        159,
+        108,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "seat"
+          ]
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "seat.seat_index",
+                "account": "SeatAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_and_deposit",
+      "docs": [
+        "Atomic create + seat the creator in a single instruction (plan_v2 §3 convenience).",
+        "Equivalent to `[create_match, deposit]` in one tx — same shared logic — but a single",
+        "instruction guarantees atomicity regardless of how a client assembles the tx. The",
+        "creator (`authority`) is both the payer and the first depositor."
+      ],
+      "discriminator": [
+        149,
+        232,
+        62,
+        162,
+        238,
+        69,
+        34,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.match_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "arg",
+                "path": "seat_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "CreateParams"
+            }
+          }
+        },
+        {
+          "name": "seat_index",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "create_match",
+      "docs": [
+        "Create a match. **Permissionless** (plan_v2 §3): any signer may create; the",
+        "signer becomes `m.authority` but that grants NO lifecycle power — `lock`/",
+        "`begin_live`/`submit_settlement` remain gated to operator ROLE keys, so the",
+        "operator monopoly on progression is preserved automatically. Clients submit",
+        "`[create_match, deposit]` in one transaction so the creator is seated atomically."
+      ],
+      "discriminator": [
+        107,
+        2,
+        184,
+        145,
+        70,
+        142,
+        17,
+        165
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.match_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "CreateParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "deposit",
+      "docs": [
+        "Deposit buy-in + entry fee → seat eligibility (the anti-spam gate, `05 §4`)."
+      ],
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "arg",
+                "path": "seat_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "seat_index",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "initialize_protocol",
+      "docs": [
+        "Initialize the global protocol role registry and pause flags."
+      ],
+      "discriminator": [
+        188,
+        233,
+        252,
+        106,
+        134,
+        146,
+        202,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roles",
+          "type": {
+            "defined": {
+              "name": "ProtocolRoles"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "docs": [
+        "Lock the match: enough players present → seats frozen, status → Sealing. Records",
+        "`lock_ts` and derives `seal_deadline_ts`. The dealer button uses backend-native",
+        "randomness submitted at `begin_live` (plan_v2 §3), so no drand round is committed",
+        "here. Operator-gated."
+      ],
+      "discriminator": [
+        21,
+        19,
+        208,
+        43,
+        237,
+        62,
+        255,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "refund",
+      "docs": [
+        "Pull-based, idempotent refund on VOID. The amount depends on `void_kind`",
+        "(plan_v2 §5): pre-LIVE voids fully refund (deposit + entry fee); an UnderMinSealed",
+        "void refunds sealers in full plus their pro-rata share of the non-sealer penalty",
+        "pool, while non-sealers get `deposit - penalty` (entry fee forfeited)."
+      ],
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "seat"
+          ]
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat_index_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116,
+                  45,
+                  105,
+                  110,
+                  100,
+                  101,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "seat.seat_index",
+                "account": "SeatAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "player_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register_prediction_commitment",
+      "discriminator": [
+        107,
+        200,
+        111,
+        18,
+        196,
+        192,
+        155,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "signer": true,
+          "relations": [
+            "seat"
+          ]
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seat",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  97,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RegisterPredictionCommitmentArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_pauses",
+      "docs": [
+        "Pause/unpause new exposure or settlement submission. Claims/refunds remain live."
+      ],
+      "discriminator": [
+        48,
+        80,
+        200,
+        227,
+        66,
+        244,
+        226,
+        122
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "pause_new_matches",
+          "type": "bool"
+        },
+        {
+          "name": "pause_settlement",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_price_signer",
+      "docs": [
+        "Rotate the Ethereum/secp256k1 address trusted for signed settlement prices."
+      ],
+      "discriminator": [
+        95,
+        60,
+        180,
+        216,
+        70,
+        79,
+        14,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "price_signer",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit_settlement",
+      "docs": [
+        "Submit the final settlement (v1: backend-trusted payouts).",
+        "",
+        "Verifies the signed price at exactly `scheduled_end_ts`, writes per-seat payouts",
+        "supplied by the backend, and enforces conservation. Does NOT replay action logs.",
+        "",
+        "TODO(v1+): restore on-chain action-log replay + `verify_settlement` — see crate header.",
+        "Pass the sealed seats as `remaining_accounts`."
+      ],
+      "discriminator": [
+        255,
+        231,
+        47,
+        245,
+        40,
+        161,
+        95,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "SettleArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "void",
+      "docs": [
+        "Operator emergency void (oracle/timelock fault, incident). Status → Void with",
+        "`Emergency` kind: full refund to all, penalties waived (plan_v2 §5)."
+      ],
+      "discriminator": [
+        55,
+        130,
+        74,
+        24,
+        235,
+        14,
+        16,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "void_before_start",
+      "docs": [
+        "Permissionless void of an abandoned pre-LIVE match (plan_v2 §3) — no operator",
+        "needed, so funds can never strand. Filling past `fill_deadline_ts`, or Sealing",
+        "past `seal_deadline_ts + SEAL_VOID_GRACE_SEC` (operator failed to begin_live).",
+        "Either way no game ran, so it is a full refund (no penalty)."
+      ],
+      "discriminator": [
+        2,
+        178,
+        183,
+        84,
+        166,
+        189,
+        225,
+        110
+      ],
+      "accounts": [
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "void_live_after_deadline",
+      "docs": [
+        "Permissionless void of a stuck LIVE match (plan_v2 §H capital-safety backstop).",
+        "Reads ONLY the `MatchAccount` — it does NOT depend on the `ActionLog`, which under",
+        "the batch-at-settlement model may not exist yet between `begin_live` and",
+        "settlement. Anyone may call once `now >= scheduled_end_ts + SETTLE_VOID_GRACE_SEC`,",
+        "guaranteeing funds can never strand if the operator vanishes after the match goes",
+        "live. Settlement was never recorded, so this is a full refund to all (penalties",
+        "waived): `VoidKind::Emergency`."
+      ],
+      "discriminator": [
+        202,
+        139,
+        76,
+        194,
+        185,
+        149,
+        173,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_fees",
+      "docs": [
+        "Withdraw fees to the protocol treasury. Settled → all entry fees + rake",
+        "(`total_fees`). UnderMinSealed void → only the forfeited non-sealer entry fees",
+        "(plus the whole penalty pool if zero sealers remained to receive it). Other void",
+        "kinds waive all fees (nothing to withdraw). Idempotent via `fees_withdrawn`."
+      ],
+      "discriminator": [
+        198,
+        212,
+        171,
+        109,
+        144,
+        215,
+        174,
+        89
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "match_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "match_account.match_id",
+                "account": "MatchAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "MatchAccount",
+      "discriminator": [
+        235,
+        36,
+        243,
+        39,
+        81,
+        16,
+        144,
+        87
+      ]
+    },
+    {
+      "name": "ProtocolState",
+      "discriminator": [
+        33,
+        51,
+        173,
+        134,
+        35,
+        140,
+        195,
+        248
+      ]
+    },
+    {
+      "name": "SeatAccount",
+      "discriminator": [
+        251,
+        85,
+        162,
+        147,
+        128,
+        212,
+        122,
+        178
+      ]
+    },
+    {
+      "name": "SeatIndexAccount",
+      "discriminator": [
+        34,
+        229,
+        251,
+        206,
+        174,
+        117,
+        219,
+        201
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "BadStatus",
+      "msg": "Action not allowed in the current match status."
+    },
+    {
+      "code": 6001,
+      "name": "MatchFull",
+      "msg": "Match is full."
+    },
+    {
+      "code": 6002,
+      "name": "NotEnoughPlayers",
+      "msg": "Not enough players to start."
+    },
+    {
+      "code": 6003,
+      "name": "SettlementMismatch",
+      "msg": "Settlement re-verification failed; funds will NOT be released (04 §18)."
+    },
+    {
+      "code": 6004,
+      "name": "ConservationViolation",
+      "msg": "Conservation check failed: payouts + fees != deposits."
+    },
+    {
+      "code": 6005,
+      "name": "InvalidSettlementInput",
+      "msg": "Oracle/settlement inputs invalid or insufficient."
+    },
+    {
+      "code": 6006,
+      "name": "InvalidOracleProof",
+      "msg": "Signed price proof is missing, unauthenticated, or not from the whitelisted signer."
+    },
+    {
+      "code": 6007,
+      "name": "AlreadyClaimed",
+      "msg": "Seat already claimed."
+    },
+    {
+      "code": 6008,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow."
+    },
+    {
+      "code": 6009,
+      "name": "Unauthorized",
+      "msg": "Unauthorized."
+    },
+    {
+      "code": 6010,
+      "name": "Paused",
+      "msg": "Protocol action is paused."
+    },
+    {
+      "code": 6011,
+      "name": "InvalidSeat",
+      "msg": "Seat index is invalid or duplicated."
+    },
+    {
+      "code": 6012,
+      "name": "SeatSetMismatch",
+      "msg": "Settlement did not include exactly the occupied seats."
+    },
+    {
+      "code": 6013,
+      "name": "InvalidActionInput",
+      "msg": "Invalid signed action input."
+    },
+    {
+      "code": 6014,
+      "name": "InvalidActionLog",
+      "msg": "Action log is invalid or not initialized."
+    },
+    {
+      "code": 6015,
+      "name": "InvalidSignature",
+      "msg": "Ed25519 signature verification failed."
+    },
+    {
+      "code": 6016,
+      "name": "NotYourTurn",
+      "msg": "Not this player's turn."
+    },
+    {
+      "code": 6017,
+      "name": "ActionLogNotFinalized",
+      "msg": "Action log is not finalized."
+    },
+    {
+      "code": 6018,
+      "name": "EngineNotComplete",
+      "msg": "Engine replay is not complete."
+    },
+    {
+      "code": 6019,
+      "name": "PredictionCommitmentMismatch",
+      "msg": "Prediction reveal does not match signed commitment."
+    },
+    {
+      "code": 6020,
+      "name": "SettlementDeadlinePassed",
+      "msg": "Settlement deadline passed; use void/refund path."
+    },
+    {
+      "code": 6021,
+      "name": "FeesAlreadyWithdrawn",
+      "msg": "Match fees were already withdrawn."
+    },
+    {
+      "code": 6022,
+      "name": "ButtonNotSet",
+      "msg": "Dealer button has not been recorded."
+    },
+    {
+      "code": 6023,
+      "name": "SealWindowClosed",
+      "msg": "Seal window has closed; commitment rejected (after seal_deadline_ts)."
+    },
+    {
+      "code": 6024,
+      "name": "SealDeadlineNotReached",
+      "msg": "Seal deadline has not been reached; cannot begin live yet."
+    },
+    {
+      "code": 6025,
+      "name": "FillDeadlineNotReached",
+      "msg": "Fill deadline has not been reached; cannot permissionlessly void yet."
+    },
+    {
+      "code": 6026,
+      "name": "SettleGraceNotElapsed",
+      "msg": "Settlement grace has not elapsed; cannot permissionlessly void the live match yet."
+    },
+    {
+      "code": 6027,
+      "name": "BeginLiveWindowPassed",
+      "msg": "begin_live window elapsed; the operator did not start the match in time (void only)."
+    },
+    {
+      "code": 6028,
+      "name": "AlreadySealed",
+      "msg": "Seat has already recorded a seal commitment."
+    },
+    {
+      "code": 6029,
+      "name": "InvalidDrandRound",
+      "msg": "drand button round is invalid (must publish after the seal deadline)."
+    },
+    {
+      "code": 6030,
+      "name": "InvalidButtonRandomness",
+      "msg": "drand button randomness is missing or does not match the committed round."
+    },
+    {
+      "code": 6031,
+      "name": "OracleToleranceTooWide",
+      "msg": "Oracle tolerance window is too wide; must be tight (single-update)."
+    },
+    {
+      "code": 6032,
+      "name": "InvalidConfig",
+      "msg": "Invalid match configuration parameter."
+    },
+    {
+      "code": 6033,
+      "name": "RefundUnavailable",
+      "msg": "Refund not available for this seat in the current void kind."
+    }
+  ],
+  "types": [
+    {
+      "name": "BeginLiveArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "button_randomness",
+            "docs": [
+              "Backend-native CSPRNG randomness (server-attested, plan_v2 §3) used to derive the",
+              "dealer button over the sealed seats. Recorded for audit; not on-chain verified —",
+              "the button only sets blind/action order, so this is a deliberate low-risk choice."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_id",
+            "type": "u64"
+          },
+          {
+            "name": "buy_in",
+            "type": "u64"
+          },
+          {
+            "name": "entry_fee",
+            "type": "u64"
+          },
+          {
+            "name": "rake_bps",
+            "type": "u32"
+          },
+          {
+            "name": "rake_cap",
+            "type": "u64"
+          },
+          {
+            "name": "nonseal_penalty_bps",
+            "type": "u32"
+          },
+          {
+            "name": "min_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "config_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price_token",
+            "docs": [
+              "20-byte token/feed identifier signed by the signed-price-server."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "total_betting_duration_sec",
+            "docs": [
+              "Total wall-clock betting span (Σ street durations + observation), bound in config.",
+              "`scheduled_end_ts` is derived on-chain at begin_live (= live_start + this)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "seal_window_sec",
+            "type": "u64"
+          },
+          {
+            "name": "begin_live_window_sec",
+            "docs": [
+              "Max delay after seal deadline for the operator to call begin_live (0 → default 5s)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fill_deadline_ts",
+            "type": "u64"
+          },
+          {
+            "name": "max_oracle_confidence",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_exponent",
+            "type": "i32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchAccount",
+      "docs": [
+        "One match. Holds the fee config, the bound-config hash (replay anchor), on-chain",
+        "timing (`lock_ts`/`seal_deadline_ts`/`live_start_ts`/`scheduled_end_ts`), the drand",
+        "button commitment, the non-sealer penalty pool, and running totals. Custody of funds",
+        "lives in the associated `vault` token account PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "match_id",
+            "type": "u64"
+          },
+          {
+            "name": "buy_in",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "MatchStatus"
+              }
+            }
+          },
+          {
+            "name": "config_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price_token",
+            "docs": [
+              "20-byte token/feed identifier signed by the signed-price-server."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "fill_deadline_ts",
+            "docs": [
+              "Fill deadline; after this, permissionless `void_before_start` if still Filling."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lock_ts",
+            "docs": [
+              "Set at `lock`: Clock::now when Filling -> Sealing."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "seal_deadline_ts",
+            "docs": [
+              "`lock_ts + seal_window_sec`; seals must be recorded at or before this."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "live_start_ts",
+            "docs": [
+              "Set at `begin_live`: Clock::now when Sealing -> Live."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "scheduled_end_ts",
+            "docs": [
+              "`live_start_ts + total_betting_duration_sec`; oracle window anchor."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_betting_duration_sec",
+            "docs": [
+              "Bound at create: total wall-clock betting span (Σ street durations + observation)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "seal_window_sec",
+            "docs": [
+              "Bound at create: SEALING window length."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "begin_live_window_sec",
+            "docs": [
+              "Bound at create: max delay after `seal_deadline_ts` within which the operator must",
+              "call `begin_live` (default 5s). Keeps `scheduled_end_ts` tightly pinned to the seal",
+              "round so a timelock target can't be decrypted mid-match (plan_v2 §I hardening)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_oracle_confidence",
+            "type": "u64"
+          },
+          {
+            "name": "oracle_exponent",
+            "type": "i32"
+          },
+          {
+            "name": "signed_price_hash",
+            "docs": [
+              "EIP-191 hash of the signed server price accepted at settlement."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "signed_price_timestamp_ms",
+            "docs": [
+              "Signed server timestamp accepted at settlement, in Unix milliseconds."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entry_fee",
+            "type": "u64"
+          },
+          {
+            "name": "rake_bps",
+            "type": "u32"
+          },
+          {
+            "name": "rake_cap",
+            "type": "u64"
+          },
+          {
+            "name": "nonseal_penalty_bps",
+            "docs": [
+              "Non-sealer penalty in basis points of `buy_in` (plan_v2 §5). Bound in config_hash."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "min_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "player_count",
+            "type": "u8"
+          },
+          {
+            "name": "sealed_count",
+            "docs": [
+              "Seats that recorded a seal commitment by `seal_deadline_ts` (set at begin_live)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "next_seal_seq",
+            "docs": [
+              "Monotonic seal-order counter assigned on-chain (arrival order) so a player cannot",
+              "claim `seal_seq = 0` to grab tie-remainders. Each commitment takes the current",
+              "value, then increments."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_deposited",
+            "type": "u64"
+          },
+          {
+            "name": "total_fees",
+            "type": "u64"
+          },
+          {
+            "name": "forfeited_fees",
+            "docs": [
+              "Non-sealer entry fees forfeited to treasury (withdrawable post-terminal)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dead_money",
+            "docs": [
+              "Non-sealer penalty pool: Live -> injected into the main pot at settlement;",
+              "UnderMinSealed void -> split pro-rata among sealers (plan_v2 §4/§5)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "settled_payout",
+            "type": "u64"
+          },
+          {
+            "name": "button_randomness",
+            "docs": [
+              "Operator-supplied CSPRNG randomness recorded at `begin_live` for audit. Backend-",
+              "native (NOT drand): the dealer button only sets blind/action order, so this is a",
+              "deliberately low-stakes, server-attested value rather than a verified beacon."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "button",
+            "docs": [
+              "Dealer button seat index (engine index), derived from `button_randomness`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "button_set",
+            "type": "bool"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "fees_withdrawn",
+            "type": "bool"
+          },
+          {
+            "name": "void_kind",
+            "type": {
+              "defined": {
+                "name": "VoidKind"
+              }
+            }
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MatchStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Filling"
+          },
+          {
+            "name": "Sealing"
+          },
+          {
+            "name": "Live"
+          },
+          {
+            "name": "Settled"
+          },
+          {
+            "name": "Void"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolRoles",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "emergency_void_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "config_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "upgrade_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_signer",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolState",
+      "docs": [
+        "Global protocol controls and role registry."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "emergency_void_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "config_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "upgrade_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_signer",
+            "docs": [
+              "Ethereum/secp256k1 address allowed to attest settlement prices."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "pause_new_matches",
+            "type": "bool"
+          },
+          {
+            "name": "pause_settlement",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                12
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RegisterPredictionCommitmentArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "commitment",
+            "docs": [
+              "Hash of the time-lock ciphertext (the prediction commitment)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timelock_target",
+            "docs": [
+              "drand round the prediction is time-lock encrypted to (must publish after match end)."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatAccount",
+      "docs": [
+        "One player's seat in a match. The seal commitment is recorded here DURING Sealing",
+        "(before LIVE), gated by `seal_deadline_ts` — the §207 fix. `payout` is written at",
+        "verified settlement; `refund` pays per `MatchAccount::void_kind`. Pull-based,",
+        "idempotent via `claimed`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "deposit",
+            "type": "u64"
+          },
+          {
+            "name": "entry_fee_paid",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "prediction_commitment",
+            "docs": [
+              "Hash of the time-lock ciphertext (prediction commitment)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timelock_target",
+            "docs": [
+              "drand round the prediction is time-lock encrypted to (match end)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "seal_seq",
+            "docs": [
+              "Deterministic seal order (earlier seal => smaller). Tiebreak for remainders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "commitment_set",
+            "docs": [
+              "True once a valid commitment was recorded at or before `seal_deadline_ts`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "is_non_sealer",
+            "docs": [
+              "True if this seat had the seal window but did not commit (dropped + penalized)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "penalty",
+            "docs": [
+              "Penalty forfeited to the pot/sealers if `is_non_sealer` (= buy_in * penalty_bps)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "engine_seat",
+            "docs": [
+              "Contiguous engine seat index assigned to a sealer at begin_live; `NO_ENGINE_SEAT`",
+              "for dropped non-sealers. The engine + settlement index by this, not `seat_index`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "gets_remainder",
+            "docs": [
+              "On an UnderMinSealed void, the one sealer that receives the penalty-pool remainder."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatIndexAccount",
+      "docs": [
+        "One PDA per occupied seat index, preventing duplicate seat numbers in a match."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "match_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "seat_index",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeatPayout",
+      "docs": [
+        "Per-sealer payout indexed by engine seat (contiguous 0..sealed_count)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "engine_seat",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettleArgs",
+      "docs": [
+        "Settlement args — v1 trusts backend-computed payouts; the chain enforces conservation",
+        "and signed-price authenticity only. See `submit_settlement` TODO(v1+) for restoring",
+        "on-chain action-log replay + `verify_settlement`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "signed_price",
+            "type": {
+              "defined": {
+                "name": "SignedPriceDto"
+              }
+            }
+          },
+          {
+            "name": "rake_collected",
+            "type": "u64"
+          },
+          {
+            "name": "payouts",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "SeatPayout"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SignedPriceDto",
+      "docs": [
+        "EIP-191/secp256k1 signed price payload emitted by the signed-price-server.",
+        "",
+        "The signed bytes are exactly:",
+        "`token(20) || price_in_wad(32 byte uint256 BE) || timestamp_ms(32 byte uint256 BE)`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "price_in_wad",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timestamp_ms",
+            "type": "u64"
+          },
+          {
+            "name": "v",
+            "type": "u8"
+          },
+          {
+            "name": "r",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "s",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "VoidKind",
+      "docs": [
+        "Why a match voided. Drives the per-seat refund computation (plan_v2 §5), so a",
+        "pull-based `refund` can pay the exact amount without scanning every seat."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "None"
+          },
+          {
+            "name": "FillingVoid"
+          },
+          {
+            "name": "UnderMinSealed"
+          },
+          {
+            "name": "Emergency"
+          }
+        ]
+      }
+    }
+  ]
+}

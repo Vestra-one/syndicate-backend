@@ -1,13 +1,10 @@
 /**
- * Client-duty integration surfaces (the [client] items from the integration guide).
+ * Client-duty integration surfaces (the 🔵 items from the integration guide).
  *
- * The store and UI depend ONLY on these interfaces. Each has a demo
- * implementation (./demo) for play-money / no-backend development and a live
- * implementation (./live) wired to real wallets, drand, and Solana. The active
- * set is chosen by env flag in `createAdapters`.
+ * The store and UI depend ONLY on these interfaces.  There is a single live
+ * implementation (./live) wired to real wallets, drand, and Solana.
  */
 import type { Chips, FixedPrice, SeatIndex } from '@/lib/protocol'
-import { createDemoAdapters } from './demo'
 import { createLiveAdapters } from './live'
 
 /** ed25519 signer — the player's identity and intent authority. */
@@ -26,10 +23,32 @@ export interface Tlock {
   seal(price: FixedPrice, targetRound: number, chainHash: string, api: string): Promise<string>
 }
 
+/** Numeric on-chain CreateParams + the price token a host commits at create time. */
+export interface CreateAndDepositInput {
+  onchainMatchId: string
+  configHash: string // 64-char hex (32 bytes)
+  priceTokenHex: string // 0x… (20 bytes)
+  seatIndex: SeatIndex
+  buyIn: Chips
+  entryFee: Chips
+  rakeBps: number
+  rakeCap: Chips
+  nonsealPenaltyBps: number
+  minPlayers: number
+  maxPlayers: number
+  totalBettingDurationSec: number
+  sealWindowSec: number
+  beginLiveWindowSec: number
+  fillWindowSec: number
+  decimals: number
+}
+
 /** On-chain custody. The client builds; the wallet signs. Returns tx signatures. */
 export interface ChainClient {
   /** Spendable chip balance in token base units (for the wallet badge). */
   chipBalance(): Promise<Chips>
+  /** Host: open a match AND seat the creator in one tx. Resolves on finality → { txSig, matchPda }. */
+  createAndDeposit(input: CreateAndDepositInput): Promise<{ txSig: string; matchPda: string }>
   /** buy-in + entry fee; resolves on finality (seat is then granted). */
   deposit(matchId: string, seatIndex: SeatIndex, amount: Chips): Promise<string>
   /** pull payout after SETTLED (idempotent). */
@@ -44,10 +63,7 @@ export interface Adapters {
   chain: ChainClient
 }
 
-/** True when no live gateway is configured — we run fully in play-money demo mode. */
-export const IS_DEMO = !import.meta.env.VITE_GATEWAY_WS_URL
-
-/** Pick demo vs live adapters from env. Demo when no gateway URL is set. */
+/** Build the live adapter set (real wallet, drand, Solana custody). */
 export function createAdapters(): Adapters {
-  return IS_DEMO ? createDemoAdapters() : createLiveAdapters()
+  return createLiveAdapters()
 }

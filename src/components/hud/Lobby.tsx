@@ -1,31 +1,74 @@
+import { useWallet } from '@solana/wallet-adapter-react'
+import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 
 /**
- * The lobby (§4): the table terms a player sees before committing, and the
- * explicit deposit that takes their seat. Surfaces the full financial picture
- * up front (§10.1 — never surprise the user with a cost). Shown during FILLING
- * until the player takes their seat; once deposited, the seat is granted on
- * finality and the match proceeds to sealing.
+ * The lobby (§4) — the bridge between "Play Now" and a seated player.
+ *
+ * Resolving → a calm "finding you a table" state while we check the lobby.
+ * Resolved   → the table terms + the explicit commit:
+ *                join   → deposit into an existing open table
+ *                create → open a new table on-chain and seat yourself
+ *
+ * The full cost is always shown BEFORE any wallet signature (§10.1).
  */
 export function Lobby() {
   const terms = useGameStore((s) => s.terms)
   const match = useGameStore((s) => s.match)
   const seated = useGameStore((s) => s.seated)
+  const playMode = useGameStore((s) => s.playMode)
+  const playResolving = useGameStore((s) => s.playResolving)
   const join = useGameStore((s) => s.joinTable)
+  const create = useGameStore((s) => s.createTable)
 
-  // Only while we can still take a seat: terms known, in FILLING, not yet seated.
-  if (!terms || seated) return null
+  const { connected, connecting } = useWallet()
+  const { setVisible } = useWalletModal()
+
+  // Resolving: we're deciding join-vs-create — show a reassuring interstitial.
+  if (playResolving) {
+    return (
+      <div className="lobby">
+        <div className="lobby-card panel lobby-card--resolving">
+          <div className="lobby-spinner" aria-hidden="true" />
+          <div className="lobby-resolving-title">Finding you a table…</div>
+          <p className="lobby-note eyebrow">
+            Checking for an open game. If there isn't one, we'll start a fresh table for you.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Nothing to commit to yet, or already seated → hide.
+  if (!terms || seated || !playMode) return null
+  // If we have a live match that's past filling, the lobby is done.
   if (match && match.phase !== 'FILLING') return null
 
   const filled = match?.seats.length ?? 0
   const total = terms.buyIn + terms.entryFee
+  const isCreate = playMode === 'create'
+  const walletReady = connected
+
+  const handleCommit = () => {
+    if (!walletReady) {
+      setVisible(true)
+      return
+    }
+    if (isCreate) void create()
+    else void join()
+  }
+
+  // Display amounts in whole tokens (USDC has 6 decimals; price decimals differ).
+  const fmt = (base: number) => (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
 
   return (
     <div className="lobby">
       <div className="lobby-card panel">
         <div className="lobby-head">
           <div>
-            <div className="eyebrow">join table · {terms.tableId}</div>
+            <div className="eyebrow">
+              {isCreate ? 'start a new table' : 'join table'} · {terms.tableId}
+            </div>
             <div className="lobby-feed">{terms.priceFeedId}</div>
           </div>
           <div className="lobby-players">
@@ -37,27 +80,52 @@ export function Lobby() {
         </div>
 
         <div className="lobby-grid">
-          <Term label="buy-in" value={`${terms.buyIn} ${terms.chipsToken}`} />
-          <Term label="entry fee" value={`${terms.entryFee} ${terms.chipsToken}`} />
-          <Term label="blinds" value={`${terms.smallBlind} / ${terms.bigBlind}`} />
-          <Term label="rake" value={`${terms.rakeBps / 100}% · cap ${terms.rakeCap}`} />
+          <Term label="buy-in" value={`${fmt(terms.buyIn)} ${terms.chipsToken}`} />
+          <Term label="entry fee" value={`${fmt(terms.entryFee)} ${terms.chipsToken}`} />
+          <Term label="blinds" value={`${fmt(terms.smallBlind)} / ${fmt(terms.bigBlind)}`} />
+          <Term label="rake" value={`${terms.rakeBps / 100}% · cap ${fmt(terms.rakeCap)}`} />
           <Term label="rounds" value={`${terms.roundCount} betting rounds`} />
-          <Term label="action timer" value={`${terms.actionTimerSec}s + ${terms.timeBankSec}s bank`} />
+          <Term
+            label="action timer"
+            value={`${terms.actionTimerSec}s + ${terms.timeBankSec}s bank`}
+          />
         </div>
 
+        {/* Cost disclosure — always shown before any commitment (§10.1) */}
         <div className="lobby-cost">
           <span className="eyebrow">total to take your seat</span>
           <span className="lobby-cost-amount mono">
-            {total} {terms.chipsToken}
+            {fmt(total)} {terms.chipsToken}
           </span>
         </div>
 
-        <button className="seal-btn lobby-join" onClick={() => join()}>
-          Take your seat · deposit {total} {terms.chipsToken}
-        </button>
-        <p className="lobby-note eyebrow">
-          Entry fee is refunded if the table voids or you leave before it goes live.
-        </p>
+        {walletReady ? (
+          <>
+            <button className="seal-btn lobby-join" onClick={handleCommit}>
+              {isCreate
+                ? `Create table · deposit ${fmt(total)} ${terms.chipsToken}`
+                : `Take your seat · deposit ${fmt(total)} ${terms.chipsToken}`}
+            </button>
+            <p className="lobby-note eyebrow">
+              {isCreate
+                ? "You'll be the host and first seat. Entry fee is refunded if the table voids."
+                : 'Entry fee is refunded if the table voids or you leave before it goes live.'}
+            </p>
+          </>
+        ) : (
+          <>
+            <button
+              className="seal-btn lobby-join lobby-connect"
+              onClick={handleCommit}
+              disabled={connecting}
+            >
+              {connecting ? 'Connecting wallet…' : '◎ Connect wallet to continue'}
+            </button>
+            <p className="lobby-note eyebrow">
+              You'll approve one transaction of {fmt(total)} {terms.chipsToken} after connecting.
+            </p>
+          </>
+        )}
       </div>
     </div>
   )
