@@ -30,6 +30,13 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
   const matchWatchers = new Map<string, Set<string>>();
   /** wallets subscribed to the global lobby feed (pushed on registry mutation). */
   const lobbySubscribers = new Set<string>();
+  /**
+   * matchId → wallets watching that specific FILLING room. Used for the FILLING→LIVE handoff:
+   * when the room's `started` mutation arrives, these wallets are upgraded to the live match feed
+   * with no client round-trip. Distinct from `lobbySubscribers` (the global browse feed) so only
+   * observers who opened *this* room get its live events — not every lobby browser.
+   */
+  const roomWatchers = new Map<string, Set<string>>();
 
   /** Stamp every outbound envelope with server time so clients can sync their clock. */
   const send = (wallet: string, msg: Record<string, unknown>) => push(wallet, { ...msg, serverTime: now() });
@@ -39,6 +46,26 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
       if (channel === ROOMS_CHANNEL) {
         // Last-writer-wins on the client via the included version; pull is the fallback.
         for (const wallet of lobbySubscribers) send(wallet, { type: 'roomsUpdated', update: payload });
+        // FILLING→LIVE handoff: when a watched room starts, move its watchers onto the live match
+        // feed and tell them to switch views. Idempotent — clearing the entry makes a replayed
+        // `started` (last-writer-wins) a no-op; `ensureSubscribed` is itself idempotent.
+        const p = (payload ?? {}) as { kind?: string; matchId?: string };
+        if (p.kind === 'started' && p.matchId) {
+          const watchers = roomWatchers.get(p.matchId);
+          if (watchers && watchers.size > 0) {
+            void deps.subscriber!.ensureSubscribed(p.matchId);
+            let live = matchWatchers.get(p.matchId);
+            if (!live) {
+              live = new Set();
+              matchWatchers.set(p.matchId, live);
+            }
+            for (const wallet of watchers) {
+              live.add(wallet);
+              send(wallet, { type: 'matchStarted', matchId: p.matchId });
+            }
+            roomWatchers.delete(p.matchId);
+          }
+        }
         return;
       }
       const watchers = matchWatchers.get(channel);
@@ -89,6 +116,32 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
 
     if (type === 'unsubscribeLobby') {
       lobbySubscribers.delete(wallet);
+      return;
+    }
+
+    // Watch a specific FILLING room so the observer is auto-upgraded to the live feed when it
+    // starts (see the ROOMS_CHANNEL `started` handoff above). Lobby mutations for the room still
+    // arrive via the global `roomsUpdated` fan-out; this only registers the start-time upgrade.
+    if (type === 'subscribeRoom') {
+      const matchId = String(msg.matchId ?? '');
+      if (!matchId) return;
+      let watchers = roomWatchers.get(matchId);
+      if (!watchers) {
+        watchers = new Set();
+        roomWatchers.set(matchId, watchers);
+      }
+      watchers.add(wallet);
+      if (deps.subscriber) await deps.subscriber.ensureChannelSubscribed(ROOMS_CHANNEL);
+      return;
+    }
+
+    if (type === 'unsubscribeRoom') {
+      const matchId = String(msg.matchId ?? '');
+      const watchers = roomWatchers.get(matchId);
+      if (watchers) {
+        watchers.delete(wallet);
+        if (watchers.size === 0) roomWatchers.delete(matchId);
+      }
       return;
     }
 

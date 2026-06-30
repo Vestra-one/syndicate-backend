@@ -19,30 +19,44 @@ import {
 } from './index.ts';
 import { MemoryObjectStore, type ObjectStore } from './object-store.ts';
 import { getProfileMetadata, toPublicProfile, upsertProfileMetadata } from './profiles.ts';
+import {
+  applyLobbyUpdate,
+  listForming,
+  type FormingGame,
+  type FormingGamesState,
+  type RoomsChannelPayload,
+} from './lobby.ts';
 
 export interface ActionFeedReadServerOptions {
   port?: number;
   host?: string;
   state?: ProjectionState;
   objectStore?: ObjectStore;
+  /** Optional clock injection for deadline filtering of forming games (tests). */
+  now?: () => number;
 }
 
 export class ActionFeedReadServer {
   readonly state: ProjectionState;
   readonly objectStore: ObjectStore;
   readonly ready: Promise<void>;
+  /** Pre-LIVE (FILLING) matches, fed by the ROOMS_CHANNEL bridge (lobby.ts). */
+  readonly formingGames: FormingGamesState = new Map();
 
+  private now: () => number;
   private server = createHttpServer((req, res) => void this.route(req, res));
   private wsClients = new Map<Socket, { matchId?: string }>();
   private metrics = {
     httpRequestsTotal: 0,
     wsBroadcastsTotal: 0,
     replayUploadsTotal: 0,
+    lobbyBroadcastsTotal: 0,
   };
 
   constructor(opts: ActionFeedReadServerOptions = {}) {
     this.state = opts.state ?? createProjectionState('action_feed_api');
     this.objectStore = opts.objectStore ?? new MemoryObjectStore();
+    this.now = opts.now ?? (() => Date.now());
     this.server.on('upgrade', (req, socket) => this.upgrade(req, socket));
     this.ready = new Promise((resolve, reject) => {
       const onError = (err: Error) => reject(err);
@@ -72,6 +86,38 @@ export class ActionFeedReadServer {
     }
   }
 
+  /**
+   * Resolve a wallet to its public handle for lobby display. In-memory only (profile metadata
+   * map + projection stats), with a truncated-wallet fallback mirroring `toPublicProfile`. MUST
+   * stay a cheap lookup — it runs per seat on every lobby mutation.
+   */
+  private resolveHandle(wallet: string): string {
+    const meta = getProfileMetadata(wallet);
+    if (meta?.handle) return meta.handle;
+    const stats = this.state.profileStats.get(wallet);
+    if (stats?.publicHandle) return stats.publicHandle;
+    return wallet.slice(0, 8);
+  }
+
+  /**
+   * Apply a ROOMS_CHANNEL lobby mutation and broadcast it to observers. Called by the Redis
+   * bridge (main.ts). The lobby roster intentionally carries wallet + handle (see lobby.ts) and
+   * is broadcast as `{ type: 'lobby' }`, distinct from redacted `{ type: 'event' }` gameplay.
+   */
+  applyRoomsPayload(payload: RoomsChannelPayload): void {
+    const result = applyLobbyUpdate(this.formingGames, payload, (w) => this.resolveHandle(w));
+    if (!result) return; // stale / malformed
+    this.broadcastLobby(result.game, result.evicted);
+  }
+
+  private broadcastLobby(game: FormingGame, evicted: boolean): void {
+    const frame = websocketTextFrame(JSON.stringify({ type: 'lobby', phase: evicted ? 'STARTED' : 'FILLING', game }));
+    this.metrics.lobbyBroadcastsTotal += 1;
+    for (const [socket, sub] of this.wsClients) {
+      if (!sub.matchId || sub.matchId === game.matchId) socket.write(frame);
+    }
+  }
+
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     this.metrics.httpRequestsTotal += 1;
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -93,6 +139,7 @@ export class ActionFeedReadServer {
     if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
     if (url.pathname === '/metrics') return text(res, 200, this.metricsText());
     if (url.pathname === '/active-games') return json(res, 200, { games: rankLiveGames([...this.state.liveGames.values()]) });
+    if (url.pathname === '/upcoming-games') return json(res, 200, { games: listForming(this.formingGames, this.now()) });
     if (url.pathname === '/matches/history') {
       const status = parseHistoryStatus(url.searchParams.get('status'));
       if (status === null) return json(res, 400, { error: 'invalid status filter' });
@@ -154,8 +201,10 @@ export class ActionFeedReadServer {
       `syndicate_action_feed_http_requests_total ${this.metrics.httpRequestsTotal}`,
       `syndicate_action_feed_ws_clients ${this.wsClients.size}`,
       `syndicate_action_feed_ws_broadcasts_total ${this.metrics.wsBroadcastsTotal}`,
+      `syndicate_action_feed_lobby_broadcasts_total ${this.metrics.lobbyBroadcastsTotal}`,
       `syndicate_action_feed_replay_uploads_total ${this.metrics.replayUploadsTotal}`,
       `syndicate_action_feed_live_games ${this.state.liveGames.size}`,
+      `syndicate_action_feed_forming_games ${this.formingGames.size}`,
       '',
     ].join('\n');
   }

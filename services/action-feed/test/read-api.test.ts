@@ -174,6 +174,96 @@ test('WebSocket read API broadcasts public events by match subscription', async 
   await server.close();
 });
 
+test('lobby bridge exposes forming games over HTTP and broadcasts them on /ws', async () => {
+  const server = new ActionFeedReadServer({ state: seededState(), now: () => 1000 });
+  await server.ready;
+  const base = `http://127.0.0.1:${server.port}`;
+
+  // Seed a profile handle so seat enrichment resolves to it (in-memory, no DB).
+  await fetch(`${base}/profiles/me`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ wallet: 'HOST', handle: 'host-handle' }),
+  });
+
+  const socket = connect(server.port, '127.0.0.1');
+  const received = new Promise<Record<string, unknown>>((resolve, reject) => {
+    let buffer = Buffer.alloc(0);
+    let upgraded = false;
+    let fired = false;
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error('timeout'));
+    }, 5000);
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!upgraded) {
+        const split = buffer.indexOf('\r\n\r\n');
+        if (split === -1) return;
+        assert.match(buffer.subarray(0, split).toString('utf8'), /101 Switching Protocols/);
+        buffer = buffer.subarray(split + 4);
+        upgraded = true;
+        if (!fired) {
+          fired = true;
+          server.applyRoomsPayload({
+            kind: 'upsert',
+            matchId: 'M-lobby',
+            roomCode: 'r9',
+            feedId: 'BTC/USD',
+            tierId: 'tier-low',
+            buyIn: 1000,
+            seated: 1,
+            seats: [{ seatIndex: 0, wallet: 'HOST', joinedTs: 11 }],
+            maxPlayers: 5,
+            fillDeadline: 9_000,
+            version: 1,
+          });
+        }
+      }
+      const message = readTextFrame(buffer);
+      if (message) {
+        clearTimeout(timer);
+        resolve(JSON.parse(message));
+      }
+    });
+    socket.on('error', reject);
+  });
+
+  socket.write([
+    'GET /ws HTTP/1.1',
+    `Host: 127.0.0.1:${server.port}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Key: ${makeWebSocketKey()}`,
+    'Sec-WebSocket-Version: 13',
+    '',
+    '',
+  ].join('\r\n'));
+
+  const msg = await received;
+  assert.equal(msg.type, 'lobby');
+  assert.equal((msg.game as { matchId: string }).matchId, 'M-lobby');
+  assert.deepEqual((msg.game as { seats: unknown[] }).seats, [
+    { seatIndex: 0, wallet: 'HOST', handle: 'host-handle', joinedTs: 11 },
+  ]);
+  socket.destroy();
+
+  // HTTP pull returns the same forming game.
+  const upcoming = await (await fetch(`${base}/upcoming-games`)).json();
+  assert.equal(upcoming.games.length, 1);
+  assert.equal(upcoming.games[0].matchId, 'M-lobby');
+
+  // Once started, the match leaves the forming model.
+  server.applyRoomsPayload({ kind: 'started', matchId: 'M-lobby', version: 2 });
+  const afterStart = await (await fetch(`${base}/upcoming-games`)).json();
+  assert.equal(afterStart.games.length, 0);
+
+  const metrics = await (await fetch(`${base}/metrics`)).text();
+  assert.match(metrics, /syndicate_action_feed_lobby_broadcasts_total/);
+
+  await server.close();
+});
+
 function readTextFrame(buffer: Buffer): string | null {
   if (buffer.length < 2) return null;
   let length = buffer[1] & 0x7f;

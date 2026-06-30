@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url';
+import { MatchSubscriber } from '../../gateway/src/matchSubscriber.ts';
 import { createProjectionState } from './index.ts';
+import { ROOMS_CHANNEL, type RoomsChannelPayload } from './lobby.ts';
 import { FilesystemObjectStore, MemoryObjectStore } from './object-store.ts';
 import { hydrateHistoricalGamesFromPsql, NatsTcpPublisher, ProjectionWorker, PsqlOutboxProjectionSource, PsqlProjectionSink } from './projector.ts';
 import { ActionFeedReadServer } from './server.ts';
@@ -19,6 +21,19 @@ export async function startActionFeedFromEnv(): Promise<ActionFeedReadServer> {
   const server = new ActionFeedReadServer({ port, host, objectStore, state });
   await server.ready;
   console.log(`action-feed read API listening on http://${host}:${server.port}`);
+
+  // Lobby / FILLING-phase bridge: subscribe to matchmaking's Redis `rooms` channel and project
+  // lobby mutations into the public forming-games model + `{ type: 'lobby' }` WS broadcast.
+  // Optional — without REDIS_URL the observer surface simply omits the pre-LIVE phase.
+  if (process.env.REDIS_URL) {
+    const subscriber = new MatchSubscriber(process.env.REDIS_URL);
+    subscriber.onMessage((channel, payload) => {
+      if (channel !== ROOMS_CHANNEL) return; // match-event channels are handled by the projector
+      server.applyRoomsPayload(payload as RoomsChannelPayload);
+    });
+    await subscriber.ensureChannelSubscribed(ROOMS_CHANNEL);
+    console.log(`action-feed lobby bridge subscribed to '${ROOMS_CHANNEL}'`);
+  }
 
   if (process.env.DATABASE_URL) {
     const worker = new ProjectionWorker({

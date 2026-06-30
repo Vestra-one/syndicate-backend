@@ -70,6 +70,13 @@ export type DepositResult =
   | { ok: true; wallet: string; seat: number; matchPda: string; onchainMatchId?: string }
   | { ok: false; reason: string };
 
+/** Anonymized-but-identifiable seat occupant for the lobby feed (UX-only). */
+export interface LobbySeat {
+  seatIndex: number;
+  wallet: string;
+  joinedTs: number;
+}
+
 export interface RoomListing {
   roomCode: string;
   matchId: string;
@@ -79,9 +86,15 @@ export interface RoomListing {
   configHash?: string;
   buyIn?: number;
   seated: number;
+  seats: LobbySeat[];
   minPlayers: number;
   maxPlayers: number;
   fillDeadline: number;
+}
+
+/** Map a table snapshot's seats to the lobby seat shape (UX-only; ordered by seat index). */
+function lobbySeats(table: TableSnapshot | undefined): LobbySeat[] {
+  return (table?.seats ?? []).map((s, seatIndex) => ({ seatIndex, wallet: s.wallet, joinedTs: s.finalityTs }));
 }
 
 export class MatchmakingRuntime {
@@ -265,6 +278,7 @@ export class MatchmakingRuntime {
       onchainMatchId: rec.onchainMatchId,
       matchPda: rec.matchPda,
       seated,
+      seats: lobbySeats(table),
       minPlayers: rec.minPlayers,
       maxPlayers: rec.maxPlayers,
       canHostStart: wallet === rec.host && seated >= rec.minPlayers,
@@ -300,6 +314,7 @@ export class MatchmakingRuntime {
         configHash: rec.configHash,
         buyIn: rec.buyIn,
         seated,
+        seats: lobbySeats(table),
         minPlayers: rec.minPlayers,
         maxPlayers: rec.maxPlayers,
         fillDeadline: rec.fillDeadlineMs,
@@ -603,6 +618,9 @@ export class MatchmakingRuntime {
   private async publishRoomsUpdate(rec: FormationRecord, kind: 'upsert' | 'started'): Promise<void> {
     if (!this.redis) return;
     try {
+      // One extra table load per lobby mutation; seat arrays are bounded by maxPlayers (2–5).
+      const table = await this.store.loadTable(rec.matchId);
+      const seats = lobbySeats(table);
       await this.redis.publish(
         ROOMS_CHANNEL,
         JSON.stringify({
@@ -614,6 +632,7 @@ export class MatchmakingRuntime {
           configHash: rec.configHash,
           buyIn: rec.buyIn,
           seated: rec.seatCount ?? 0,
+          seats,
           maxPlayers: rec.maxPlayers,
           fillDeadline: rec.fillDeadlineMs,
           version: (rec.createdAtMs ?? 0) + (rec.seatCount ?? 0),

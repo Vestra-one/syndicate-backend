@@ -97,6 +97,45 @@ test('subscribeLobby subscribes to the rooms channel and pushes a lobbyList', as
   assert.equal(list!.msg.serverTime, 42);
 });
 
+test('subscribeRoom registers the wallet and subscribes the rooms channel', async () => {
+  const { relay, channels } = makeRelay(() => 1);
+  await relay('w', { type: 'subscribeRoom', matchId: 'M1' });
+  assert.ok(channels.includes(ROOMS_CHANNEL), 'subscribed to rooms channel for the handoff');
+});
+
+test("a watched room's 'started' upgrades only its watchers to the live match feed", async () => {
+  const { relay, out, emit } = makeRelay(() => 99);
+  // Alice watches the specific forming room; Bob only browses the global lobby.
+  await relay('alice', { type: 'subscribeRoom', matchId: 'M1' });
+  await relay('bob', { type: 'subscribeLobby' });
+  out.length = 0;
+
+  emit(ROOMS_CHANNEL, { kind: 'started', matchId: 'M1', version: 2 });
+
+  // Alice is told to switch views; Bob (lobby-only) is not upgraded.
+  const aliceStarted = out.find((o) => o.wallet === 'alice' && o.msg.type === 'matchStarted');
+  assert.ok(aliceStarted, 'watcher receives matchStarted');
+  assert.equal(aliceStarted!.msg.matchId, 'M1');
+  assert.equal(out.some((o) => o.wallet === 'bob' && o.msg.type === 'matchStarted'), false, 'lobby-only browser not upgraded');
+
+  // A subsequent engine event on the match channel now reaches Alice (she is in matchWatchers).
+  out.length = 0;
+  emit('M1', { type: 'matchState', state: { phase: 'LIVE', round: 1, pot: 0 } });
+  const aliceState = out.find((o) => o.wallet === 'alice' && o.msg.type === 'matchState');
+  assert.ok(aliceState, 'live match events flow to the upgraded watcher with no re-subscribe');
+  assert.equal(out.some((o) => o.wallet === 'bob'), false, 'bob receives no match events');
+});
+
+test("a replayed 'started' is a no-op (idempotent handoff)", async () => {
+  const { relay, out, emit } = makeRelay(() => 1);
+  await relay('alice', { type: 'subscribeRoom', matchId: 'M1' });
+  out.length = 0;
+  emit(ROOMS_CHANNEL, { kind: 'started', matchId: 'M1', version: 2 });
+  emit(ROOMS_CHANNEL, { kind: 'started', matchId: 'M1', version: 2 });
+  const starts = out.filter((o) => o.msg.type === 'matchStarted');
+  assert.equal(starts.length, 1, 'matchStarted pushed exactly once');
+});
+
 test('a rooms-channel mutation is pushed as roomsUpdated to lobby subscribers only', async () => {
   const { relay, out, emit } = makeRelay(() => 77);
   // Not subscribed yet → no push.

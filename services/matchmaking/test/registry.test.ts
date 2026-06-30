@@ -75,6 +75,9 @@ test('verified create registers a room and persists match + creator seat', async
   assert.equal(rooms.length, 1);
   assert.equal(rooms[0].seated, 1);
   assert.equal(rooms[0].configHash, CONFIG_HASH);
+  // Gap 3: seat identity exposed for the lobby feed.
+  assert.deepEqual(rooms[0].seats, [{ seatIndex: 0, wallet: 'HOST', joinedTs: rooms[0].seats[0].joinedTs }]);
+  assert.equal(typeof rooms[0].seats[0].joinedTs, 'number');
 });
 
 test('non-allowlisted config_hash is rejected before any verify/persist', async () => {
@@ -160,6 +163,15 @@ test('verified deposit seats a joiner and bumps the registry count', async () =>
   assert.equal(seats.length, 2);
   const rooms = await rt.listRooms({});
   assert.equal(rooms[0].seated, 2);
+  // Gap 3: both seat occupants surface with wallet identity, ordered by seat index.
+  assert.equal(rooms[0].seats.length, 2);
+  assert.deepEqual(rooms[0].seats.map((s) => s.wallet).sort(), ['HOST', 'JOINER']);
+  assert.deepEqual(rooms[0].seats.map((s) => s.seatIndex), [0, 1]);
+
+  // The same identity is exposed on the single-room lobby pull (roomLobby).
+  const code = (created as { roomCode: string }).roomCode;
+  const lobby = (await rt.roomLobby(code, 'HOST')) as { seats: { wallet: string }[] };
+  assert.equal(lobby.seats.length, 2);
 });
 
 test('deposit against a match with no reported create is rejected', async () => {
