@@ -24,16 +24,13 @@ export function Lobby() {
   const { connected, connecting } = useWallet()
   const { setVisible } = useWalletModal()
 
-  // Resolving: we're deciding join-vs-create — show a reassuring interstitial.
+  // Resolving: connecting wallet + gateway — brief spinner
   if (playResolving) {
     return (
       <div className="lobby">
         <div className="lobby-card panel lobby-card--resolving">
           <div className="lobby-spinner" aria-hidden="true" />
-          <div className="lobby-resolving-title">Finding you a table…</div>
-          <p className="lobby-note eyebrow">
-            Checking for an open game. If there isn't one, we'll start a fresh table for you.
-          </p>
+          <div className="lobby-resolving-title">Getting ready…</div>
         </div>
       </div>
     )
@@ -67,9 +64,13 @@ export function Lobby() {
         <div className="lobby-head">
           <div>
             <div className="eyebrow">
-              {isCreate ? 'start a new table' : 'join table'} · {terms.tableId}
+              {isCreate ? 'create table' : 'join table'} · {terms.priceFeedId}
             </div>
-            <div className="lobby-feed">{terms.priceFeedId}</div>
+            <div className="lobby-feed">
+              {isCreate
+                ? "You'll be first in — others can join before it goes live."
+                : terms.tableId}
+            </div>
           </div>
           <div className="lobby-players">
             <span className="lobby-players-count mono">

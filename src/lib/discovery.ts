@@ -1,4 +1,4 @@
-import type { LiveGame } from './protocol'
+import type { LiveGame, UpcomingGame } from './protocol'
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined
 
@@ -24,6 +24,17 @@ export async function fetchActiveGames(): Promise<LiveGame[]> {
   })
   if (!res.ok) throw new Error(`/active-games ${res.status}`)
   const data = (await res.json()) as { games?: LiveGame[] } | LiveGame[]
-  // Accept both { games: [...] } and a raw array
+  return Array.isArray(data) ? data : (data.games ?? [])
+}
+
+export async function fetchUpcomingGames(): Promise<UpcomingGame[]> {
+  if (!API_URL) throw new Error('VITE_API_URL is not set — configure the API URL in .env')
+
+  const res = await fetch(`${API_URL}/upcoming-games`, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(8_000),
+  })
+  if (!res.ok) throw new Error(`/upcoming-games ${res.status}`)
+  const data = (await res.json()) as { games?: UpcomingGame[] } | UpcomingGame[]
   return Array.isArray(data) ? data : (data.games ?? [])
 }

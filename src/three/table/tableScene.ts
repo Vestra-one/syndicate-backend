@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { createPriceBoard } from './priceBoard'
 import { createPotPile } from './pot'
 import { bindTableView, unbindTableView } from './tableView'
 import roomBgUrl from '@/assets/room-bg.png'
@@ -38,6 +39,8 @@ export interface TableSceneHandle {
   feltY: number
   /** Drive the 3D coin pile at the centre of the felt from the live pot value. */
   setPot: (amount: number) => void
+  /** Show or hide the price-board cabinet (hidden on discovery, shown in-match). */
+  setPriceBoardVisible: (visible: boolean) => void
   dispose: () => void
 }
 
@@ -836,8 +839,21 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   ped.castShadow = true
   scene.add(ped)
 
-  // ---- pot (3D coin heap, dead centre of the felt) ----
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 0) })
+  // ---- price board (the cabinet that stands on the felt) ----
+  // A tabletop-scale cabinet resting its base on the felt, stood nearly upright
+  // (a hair of back-lean) so it foreshortens like a real object rather than a
+  // flat image aimed at the camera. Sits at the back so the pot reads in front.
+  const priceBoard = createPriceBoard()
+  const PB_SCALE = 0.8 // large enough that the chart stays legible
+  const PB_BASE_DROP = 1.94 // local distance from face centre to base underside
+  priceBoard.group.scale.setScalar(PB_SCALE)
+  priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
+  priceBoard.group.rotation.x = -0.06
+  scene.add(priceBoard.group)
+
+  // ---- pot (3D coin heap, centre-front of the felt) ----
+  // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1) })
   scene.add(potPile.group)
 
   // ---- floor ----
@@ -959,6 +975,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
     potPile.update(t)
+    priceBoard.update(t)
     composer.render()
   }
   function animate() {
@@ -988,6 +1005,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     cancelAnimationFrame(raf)
     unbindTableView()
     potPile.dispose()
+    priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
     composer.dispose()
@@ -1012,6 +1030,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     tableRadius: R_OUTER,
     feltY: yFelt,
     setPot: (amount: number) => potPile.setAmount(amount),
+    setPriceBoardVisible: (v: boolean) => { priceBoard.group.visible = v },
     dispose,
   }
 }

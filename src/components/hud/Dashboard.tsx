@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { ratedScore } from '@/lib/discovery'
-import type { DashboardSortKey, LiveGame } from '@/lib/protocol'
+import type { DashboardSortKey, LiveGame, UpcomingGame } from '@/lib/protocol'
 import './hud.css'
 
 const SORTS: { key: DashboardSortKey; label: string }[] = [
@@ -33,45 +33,119 @@ function liveFor(startedAt: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-/**
- * The live-games dashboard (§8): the home surface. A list of running tables
- * ranked by popularity, sortable by various metrics.  Clicking "Take a seat"
- * connects the wallet first (if needed) then enters the table.
- */
+function fillDeadlineLabel(ts?: number): string {
+  if (!ts) return '—'
+  const secs = Math.max(0, Math.round((ts - Date.now()) / 1000))
+  if (secs < 60) return `${secs}s left`
+  return `${Math.round(secs / 60)}m left`
+}
+
+function fmt(amount: number) {
+  return (amount / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function UpcomingRow({ game, onJoin }: { game: UpcomingGame; onJoin: () => void }) {
+  return (
+    <li className="dash-row dash-row--upcoming" onClick={onJoin}>
+      <span className={`dash-feed feed-${game.feed.split('/')[0].toLowerCase()}`}>
+        {game.feed}
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">buy-in</span>
+        <span className="mono">{fmt(game.buyIn)} USDC</span>
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">seats</span>
+        <span className="mono">{game.seated}/{game.maxPlayers}</span>
+      </span>
+      {game.fillDeadline ? (
+        <span className="dash-col">
+          <span className="eyebrow">closes</span>
+          <span className="mono">{fillDeadlineLabel(game.fillDeadline)}</span>
+        </span>
+      ) : null}
+      <span className="dash-join dash-join--upcoming">Join →</span>
+    </li>
+  )
+}
+
+function ActiveRow({ game, onWatch }: { game: LiveGame; onWatch: () => void }) {
+  return (
+    <li className="dash-row" onClick={onWatch}>
+      <span className={`dash-feed feed-${game.feed.split('/')[0].toLowerCase()}`}>
+        {game.feed}
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">buy-in</span>
+        <span className="mono">{fmt(game.buyIn)} USDC</span>
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">pot</span>
+        <span className="mono dash-pot">{fmt(game.potSize)} USDC</span>
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">watching</span>
+        <span className="mono">{game.spectators}</span>
+      </span>
+      <span className="dash-col">
+        <span className="eyebrow">live</span>
+        <span className="mono">{liveFor(game.startedAt)}</span>
+      </span>
+      <span className="dash-join">Watch →</span>
+    </li>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
 export function Dashboard() {
-  const games = useGameStore((s) => s.activeGames)
+  const activeGames = useGameStore((s) => s.activeGames)
+  const upcomingGames = useGameStore((s) => s.upcomingGames)
   const status = useGameStore((s) => s.discoveryStatus)
   const sort = useGameStore((s) => s.dashboardSort)
   const setSort = useGameStore((s) => s.setDashboardSort)
   const enterTable = useGameStore((s) => s.enterTable)
   const loadDiscovery = useGameStore((s) => s.loadDiscovery)
-  const playNow = useGameStore((s) => s.playNow)
+  const joinGame = useGameStore((s) => s.joinGame)
+  const createGame = useGameStore((s) => s.createGame)
   const playError = useGameStore((s) => s.playError)
   const balance = useGameStore((s) => s.chipBalance)
 
   const { connected, connecting } = useWallet()
   const { setVisible } = useWalletModal()
 
-  const sorted = useMemo(() => sortGames(games, sort), [games, sort])
+  const sortedActive = useMemo(() => sortGames(activeGames, sort), [activeGames, sort])
 
-  const handleEnter = (matchId: string) => {
-    if (!connected) {
-      // Prompt wallet connection before entering a table
-      setVisible(true)
-      return
-    }
+  const handleJoin = (matchId: string) => {
+    if (!connected) { setVisible(true); return }
+    void joinGame(matchId)
+  }
+
+  const handleWatch = (matchId: string) => {
+    if (!connected) { setVisible(true); return }
     void enterTable(matchId)
   }
 
-  const isEmpty = status === 'ready' && sorted.length === 0
+  const handleCreate = () => {
+    if (!connected) { setVisible(true); return }
+    void createGame()
+  }
 
   return (
     <div className="dash">
-      <div className="dash-panel panel">
+      <div className="dash-panel">
+
+        {/* ── Fixed header ── */}
         <header className="dash-head">
           <div>
             <div className="brand-mark">SATOSHI'S TABLE</div>
-            <div className="eyebrow">live tables · a contest of conviction</div>
+            <div className="eyebrow" style={{ marginTop: 3, opacity: 0.4 }}>a contest of conviction</div>
           </div>
 
           <div className="dash-head-right">
@@ -82,106 +156,120 @@ export function Dashboard() {
                 disabled={connecting}
                 aria-label="Connect Solana wallet to play"
               >
-                {connecting ? 'Connecting…' : '◎ Connect wallet to play'}
+                {connecting ? 'Connecting…' : '◎ Connect wallet'}
               </button>
             )}
-
-            <div className="dash-sorts">
-              {SORTS.map((s) => (
-                <button
-                  key={s.key}
-                  className={`chip ${sort === s.key ? 'chip--active' : ''}`}
-                  onClick={() => setSort(s.key)}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
           </div>
         </header>
 
-        {/* Hero: one-tap matchmaking — join an open table or create one (§4). */}
-        <div className="dash-hero">
-          <div className="dash-hero-copy">
-            <div className="dash-hero-title">Ready to play?</div>
-            <div className="eyebrow">
-              We'll seat you at an open table — or start a fresh one for you.
-            </div>
-          </div>
-          <button className="play-now-btn" onClick={() => void playNow()}>
-            ▶ Play now
-          </button>
-        </div>
-        {playError && <div className="dash-state--error eyebrow dash-play-error">{playError}</div>}
+        {/* ── Scrollable body ── */}
+        <div className="dash-body">
 
-        {status === 'loading' && (
-          <div className="dash-state eyebrow">Loading live tables…</div>
-        )}
-
-        {status === 'error' && (
-          <div className="dash-state dash-state--error">
-            <span className="eyebrow">Couldn't reach the games server.</span>
-            <button className="chip" onClick={() => void loadDiscovery()}>
-              Retry
-            </button>
-          </div>
-        )}
-
-        {isEmpty && (
-          <div className="dash-state">
-            <span className="eyebrow">No live tables right now.</span>
-            <span className="dash-state-sub eyebrow">
-              Be the first to host a match, or check back in a moment.
-            </span>
-            <button className="chip" onClick={() => void loadDiscovery()}>
-              Refresh
-            </button>
-          </div>
-        )}
-
-        {sorted.length > 0 && (
-          <ul className="dash-list">
-            {sorted.map((g) => (
-              <li key={g.matchId} className="dash-row" onClick={() => handleEnter(g.matchId)}>
-                <span className={`dash-feed feed-${g.feed.split('/')[0].toLowerCase()}`}>
-                  {g.feed}
-                </span>
-                <span className="dash-col">
-                  <span className="eyebrow">buy-in</span>
-                  <span className="mono">{g.buyIn.toLocaleString()}</span>
-                </span>
-                <span className="dash-col">
-                  <span className="eyebrow">pot</span>
-                  <span className="mono dash-pot">{g.potSize.toLocaleString()}</span>
-                </span>
-                <span className="dash-col">
-                  <span className="eyebrow">watching</span>
-                  <span className="mono">{g.spectators}</span>
-                </span>
-                <span className="dash-col">
-                  <span className="eyebrow">live</span>
-                  <span className="mono">{liveFor(g.startedAt)}</span>
-                </span>
-                <span className="dash-join">
-                  {!connected ? 'Connect to play →' : 'Take a seat →'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <footer className="dash-foot">
-          {connected ? (
-            <>
-              <span className="eyebrow">wallet connected · devnet</span>
-              <span className="mono">
-                {balance != null ? `${balance.toLocaleString()} USDC` : '—'}
-              </span>
-            </>
-          ) : (
-            <span className="eyebrow">connect a wallet to take a seat</span>
+          {playError && (
+            <div className="dash-play-error eyebrow" style={{ marginTop: 16 }}>{playError}</div>
           )}
+
+          {status === 'loading' && (
+            <div className="dash-state">
+              <div className="lobby-spinner" style={{ margin: '0 auto' }} />
+              <span className="eyebrow" style={{ opacity: 0.5 }}>Loading tables…</span>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div className="dash-state dash-state--error">
+              <span className="eyebrow">Server unreachable</span>
+              <span className="eyebrow" style={{ opacity: 0.45 }}>Check your connection and hit Refresh.</span>
+            </div>
+          )}
+
+          {/* ── Upcoming games — joinable ── */}
+          {status === 'ready' && (
+            <section className="dash-section">
+              <div className="dash-section-head">
+                <span className="dash-section-dot" />
+                <span className="dash-section-label">Joinable</span>
+                <span className="dash-section-sub">tables still filling seats</span>
+              </div>
+
+              {upcomingGames.length === 0 ? (
+                <div className="dash-empty eyebrow">No open tables right now</div>
+              ) : (
+                <ul className="dash-list">
+                  {upcomingGames.map((g) => (
+                    <UpcomingRow key={g.matchId} game={g} onJoin={() => handleJoin(g.matchId)} />
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {/* ── Active games — watchable ── */}
+          {status === 'ready' && (
+            <section className="dash-section">
+              <div className="dash-section-head">
+                <span className="dash-section-dot" />
+                <span className="dash-section-label">Live</span>
+                <span className="dash-section-sub">games in progress</span>
+                <div className="dash-sorts">
+                  {SORTS.map((s) => (
+                    <button
+                      key={s.key}
+                      className={`chip ${sort === s.key ? 'chip--active' : ''}`}
+                      onClick={() => setSort(s.key)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {sortedActive.length === 0 ? (
+                <div className="dash-empty eyebrow">No live games right now</div>
+              ) : (
+                <ul className="dash-list">
+                  {sortedActive.map((g) => (
+                    <ActiveRow key={g.matchId} game={g} onWatch={() => handleWatch(g.matchId)} />
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {/* ── Create a new game ── */}
+          {status === 'ready' && (
+            <section className="dash-section dash-section--create">
+              <div>
+                <div className="dash-create-title">Start a table</div>
+                <div className="eyebrow" style={{ opacity: 0.45 }}>
+                  Be first in — others can join before it goes live
+                </div>
+              </div>
+              <button className="play-now-btn" onClick={handleCreate}>
+                + New game
+              </button>
+            </section>
+          )}
+
+        </div>
+
+        {/* ── Fixed footer ── */}
+        <footer className="dash-foot">
+          <div className="dash-foot-wallet">
+            {connected ? (
+              <>
+                <span className="eyebrow" style={{ opacity: 0.45 }}>devnet · connected</span>
+                <span className="mono">{balance != null ? `${(balance / 1e6).toFixed(2)} USDC` : '—'}</span>
+              </>
+            ) : (
+              <span className="eyebrow" style={{ opacity: 0.4 }}>connect a wallet to play</span>
+            )}
+          </div>
+          <button className="dash-refresh" onClick={() => void loadDiscovery()}>
+            Refresh
+          </button>
         </footer>
+
       </div>
     </div>
   )

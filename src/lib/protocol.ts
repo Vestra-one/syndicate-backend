@@ -200,6 +200,19 @@ export interface LiveGame {
   actionsPerMin: number
   startedAt: number
 }
+
+export interface UpcomingGame {
+  matchId: string
+  onchainMatchId?: string
+  feed: string
+  buyIn: Chips
+  entryFee?: Chips
+  seated: number
+  maxPlayers: number
+  minPlayers?: number
+  fillDeadline?: number
+}
+
 export type DashboardSortKey = 'gameTime' | 'potSize' | 'buyIn' | 'feed'
 
 export interface MatchHistorySummary {

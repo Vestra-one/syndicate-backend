@@ -3,6 +3,7 @@ import { TableCanvas } from '@/components/table/TableCanvas'
 import { Dashboard } from '@/components/hud/Dashboard'
 import { Hud } from '@/components/hud/Hud'
 import { useGameStore } from '@/store/gameStore'
+import { startPriceFeed } from '@/lib/realtime/priceFeed'
 
 /**
  * Root view router.
@@ -16,7 +17,6 @@ import { useGameStore } from '@/store/gameStore'
  */
 export default function App() {
   const view = useGameStore((s) => s.view)
-  const pot = useGameStore((s) => s.match?.pot ?? 0)
   const loadDiscovery = useGameStore((s) => s.loadDiscovery)
 
   // Kick off the discovery feed on first mount
@@ -24,13 +24,21 @@ export default function App() {
     void loadDiscovery()
   }, [loadDiscovery])
 
+  // Stream live BTC/USD ticks into the cabinet chart (keeps it alive pre-match).
+  useEffect(() => {
+    const feed = startPriceFeed('BTCUSD', useGameStore.getState().ingestLivePrice)
+    return () => feed.stop()
+  }, [])
+
   return (
     <>
-      {/* Always-on 3D backdrop — pot drives coin pile */}
-      <TableCanvas pot={pot} />
+      {/* Always-on 3D table: candlelit felt + price cabinet + pot heap. Live mode
+          (no `pot` prop) → the coin pile follows the match pot from the store. */}
+      <TableCanvas />
       <div className="scene-vignette" />
 
-      {/* Surface switch — one panel at a time */}
+      {/* Surface switch — one panel at a time. The HUD layers players (Seats),
+          the pot label, and the betting panel over the 3D table during a match. */}
       {view === 'discovery' && <Dashboard />}
       {view === 'table' && <Hud />}
     </>

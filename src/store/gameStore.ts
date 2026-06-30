@@ -10,6 +10,7 @@ import type {
   RoomListing,
   SettlementView,
   TableTerms,
+  UpcomingGame,
   VoidReason,
 } from '@/lib/protocol'
 import { DRAND } from '@/lib/protocol'
@@ -17,7 +18,7 @@ import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import { createAdapters, type Adapters } from '@/lib/adapters'
 import { newOnchainMatchId } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
-import { fetchActiveGames } from '@/lib/discovery'
+import { fetchActiveGames, fetchUpcomingGames } from '@/lib/discovery'
 import {
   pickTemplate,
   templateToCreateParams,
@@ -45,6 +46,7 @@ export type DiscoveryStatus = 'idle' | 'loading' | 'ready' | 'error'
 interface GameState {
   view: AppView
   activeGames: LiveGame[]
+  upcomingGames: UpcomingGame[]
   discoveryStatus: DiscoveryStatus
   dashboardSort: DashboardSortKey
 
@@ -77,12 +79,14 @@ interface GameState {
 
   // actions
   loadDiscovery: () => Promise<void>
+  ingestLivePrice: (price: number, ts: number) => void
   setDashboardSort: (key: DashboardSortKey) => void
   enterTable: (matchId: string) => Promise<void>
   leaveToDiscovery: () => void
   connect: () => Promise<void>
   disconnect: () => void
-  playNow: () => Promise<void>
+  joinGame: (matchId: string) => Promise<void>
+  createGame: () => Promise<void>
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
   sealPrediction: (price: FixedPrice) => Promise<void>
@@ -106,6 +110,7 @@ let createCtx: { tmpl: ConfigTemplate; priceTokenHex: string; onchainMatchId: st
 export const useGameStore = create<GameState>((set, get) => ({
   view: 'discovery',
   activeGames: [],
+  upcomingGames: [],
   discoveryStatus: 'idle',
   dashboardSort: 'gameTime',
 
@@ -136,13 +141,31 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   loadDiscovery: async () => {
     set({ discoveryStatus: 'loading' })
-    try {
-      const games = await fetchActiveGames()
-      set({ activeGames: games, discoveryStatus: 'ready' })
-    } catch (err) {
-      console.error('discovery load failed:', err)
-      set({ activeGames: [], discoveryStatus: 'error' })
+    const [activeResult, upcomingResult] = await Promise.allSettled([
+      fetchActiveGames(),
+      fetchUpcomingGames(),
+    ])
+    const active = activeResult.status === 'fulfilled' ? activeResult.value : []
+    const upcoming = upcomingResult.status === 'fulfilled' ? upcomingResult.value : []
+    if (activeResult.status === 'rejected') console.warn('active-games fetch failed:', activeResult.reason)
+    if (upcomingResult.status === 'rejected') console.warn('upcoming-games fetch failed:', upcomingResult.reason)
+    // Only show error if BOTH endpoints fail
+    if (activeResult.status === 'rejected' && upcomingResult.status === 'rejected') {
+      set({ activeGames: [], upcomingGames: [], discoveryStatus: 'error' })
+    } else {
+      set({ activeGames: active, upcomingGames: upcoming, discoveryStatus: 'ready' })
     }
+  },
+
+  /**
+   * Push a spot tick from the always-on price feed into the chart history (§2).
+   * During an active match the gateway's feedPrice is authoritative, so we only
+   * feed the chart from spot ticks pre-match (no match, or still FILLING).
+   */
+  ingestLivePrice: (price, ts) => {
+    const m = get().match
+    if (m && m.phase !== 'FILLING') return
+    set((s) => ({ priceHistory: [...s.priceHistory, { price, ts }].slice(-MAX_HISTORY) }))
   },
 
   setDashboardSort: (key) => set({ dashboardSort: key }),
@@ -160,50 +183,23 @@ export const useGameStore = create<GameState>((set, get) => ({
     void get().loadDiscovery()
   },
 
-  /**
-   * Play Now (§4) — the one-tap matchmaking entry:
-   *   1. connect wallet (prompt if needed)
-   *   2. connect gateway + subscribe to the lobby
-   *   3. if an open table exists → resolve to JOIN it
-   *   4. otherwise → resolve to CREATE a new one (config template + price token)
-   *
-   * Resolution does NOT auto-send a tx — it routes into the Lobby card, which
-   * shows the full cost before the player signs the deposit/create (§10.1).
-   */
-  playNow: async () => {
+  /** Join an upcoming (FILLING) game by matchId — connect wallet + gateway, then show deposit Lobby. */
+  joinGame: async (matchId: string) => {
     if (!adapters) adapters = createAdapters()
     joinRoom = null
     createCtx = null
     set({ playError: null })
 
-    // 1. wallet
     try {
       const addr = await adapters.wallet.connect()
       set({ walletAddress: addr })
-    } catch (err) {
-      console.error('wallet connect failed:', err)
+    } catch {
       set({ playError: 'Wallet connection was cancelled.' })
       return
     }
 
-    // 2. table view + gateway
-    set({
-      view: 'table',
-      status: 'connecting',
-      playResolving: true,
-      playMode: null,
-      rooms: [],
-      match: null,
-      terms: null,
-      seated: false,
-    })
-    if (gateway) {
-      // reuse not safe across a fresh resolve — tear down and reconnect cleanly
-      unsub?.()
-      gateway.disconnect()
-      gateway = null
-      unsub = null
-    }
+    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false })
+    if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
     const gw = createGateway(adapters)
     gateway = gw
     unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
@@ -211,38 +207,53 @@ export const useGameStore = create<GameState>((set, get) => ({
       await gw.connect()
       set({ status: 'live' })
       void refreshBalance(set)
-    } catch (err) {
-      console.error('gateway connect failed:', err)
+    } catch {
       set({ status: 'offline', playResolving: false, playError: 'Could not reach the table server.' })
       return
     }
 
-    // 3. discover open tables over the lobby
-    gw.send({ type: 'subscribeLobby' })
-    const room = await waitForJoinableRoom(get, 2500)
+    // Subscribe to match — server will push tableTerms so the Lobby card can show cost
+    gw.send({ type: 'subscribe', matchId })
+    joinRoom = { matchId, roomCode: '', feedId: '', tierId: '', seated: 0, minPlayers: 0, maxPlayers: 0, fillDeadline: 0 }
+    set({ playMode: 'join', playResolving: false })
+  },
 
-    if (room) {
-      joinRoom = room
-      // subscribe to that match to receive its tableTerms + matchState
-      gw.send({ type: 'subscribe', matchId: room.matchId })
-      set({ playMode: 'join', playResolving: false })
+  /** Create a new game — connect wallet + gateway, load config, then show create Lobby. */
+  createGame: async () => {
+    if (!adapters) adapters = createAdapters()
+    joinRoom = null
+    createCtx = null
+    set({ playError: null })
+
+    try {
+      const addr = await adapters.wallet.connect()
+      set({ walletAddress: addr })
+    } catch {
+      set({ playError: 'Wallet connection was cancelled.' })
       return
     }
 
-    // 4. nothing joinable → prepare a create
+    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false })
+    if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
+    const gw = createGateway(adapters)
+    gateway = gw
+    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
+    try {
+      await gw.connect()
+      set({ status: 'live' })
+      void refreshBalance(set)
+    } catch {
+      set({ status: 'offline', playResolving: false, playError: 'Could not reach the table server.' })
+      return
+    }
+
     try {
       const tmpl = await pickTemplate('BTC/USD')
       const priceTokenHex = await priceTokenFor(tmpl.config.priceFeedId)
       const onchainMatchId = newOnchainMatchId()
       createCtx = { tmpl, priceTokenHex, onchainMatchId }
-      // Synthesize terms so the Lobby can disclose cost before the create tx.
-      set({
-        terms: { ...templateToTerms(tmpl), onchainMatchId },
-        playMode: 'create',
-        playResolving: false,
-      })
-    } catch (err) {
-      console.error('create-prep failed:', err)
+      set({ terms: { ...templateToTerms(tmpl), onchainMatchId }, playMode: 'create', playResolving: false })
+    } catch {
       set({ playResolving: false, playMode: null, playError: 'Could not load table config.' })
     }
   },
@@ -458,7 +469,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       feed: [],
       priceHistory: [],
     })
-    await get().playNow()
+    await get().createGame()
   },
 }))
 
@@ -538,26 +549,7 @@ function applyRoomsUpdate(
   return [...rooms.filter((r) => r.matchId !== u.matchId), merged]
 }
 
-/** A room is joinable if it still has an open seat and its fill window is open. */
-function isJoinable(r: RoomListing): boolean {
-  const hasSeat = r.maxPlayers === 0 || r.seated < r.maxPlayers
-  const fillOpen = !r.fillDeadline || r.fillDeadline > Date.now()
-  return hasSeat && fillOpen
-}
 
-/** Poll the store's `rooms` until a joinable one appears or the deadline passes. */
-function waitForJoinableRoom(get: () => GameState, timeoutMs: number): Promise<RoomListing | null> {
-  return new Promise((resolve) => {
-    const start = Date.now()
-    const tick = () => {
-      const room = get().rooms.find(isJoinable)
-      if (room) return resolve(room)
-      if (Date.now() - start >= timeoutMs) return resolve(null)
-      setTimeout(tick, 150)
-    }
-    tick()
-  })
-}
 
 function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameState) {
   const terms = get().terms

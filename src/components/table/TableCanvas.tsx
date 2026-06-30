@@ -42,12 +42,18 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     // Live mode: seed with the current pot, then follow it as the match plays out.
     const readPot = (p: number) => handle.setPot(p)
     readPot(useGameStore.getState().match?.pot ?? 0)
+
+    // Price board is only visible in-match — on discovery the chart has no context yet.
+    handle.setPriceBoardVisible(useGameStore.getState().view === 'table')
+
     let last = useGameStore.getState().match?.pot ?? 0
+    let lastView = useGameStore.getState().view
     const unsub = useGameStore.subscribe((s) => {
       const next = s.match?.pot ?? 0
-      if (next !== last) {
-        last = next
-        readPot(next)
+      if (next !== last) { last = next; readPot(next) }
+      if (s.view !== lastView) {
+        lastView = s.view
+        handle.setPriceBoardVisible(s.view === 'table')
       }
     })
 
