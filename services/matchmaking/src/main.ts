@@ -102,22 +102,30 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
 
       if (req.method === 'POST' && url.pathname === '/queue/join') {
         const body = await readJson(req);
-        const out = await runtime.joinQueue({
-          tierId: String(body.tierId ?? 'tier-low'),
-          feedId: String(body.feedId ?? 'BTC/USD'),
-          token: String(body.token ?? 'USDC'),
-          wallet: String(body.wallet),
-          rating: body.rating === undefined ? undefined : Number(body.rating),
-        });
-        return json(res, 200, out);
+        try {
+          const out = await runtime.joinQueue({
+            tierId: String(body.tierId ?? 'tier-standard'),
+            feedId: String(body.feedId ?? 'BTC/USD'),
+            token: String(body.token ?? 'USDC'),
+            wallet: String(body.wallet),
+            rating: body.rating === undefined ? undefined : Number(body.rating),
+            buyIn: body.buyIn === undefined ? undefined : Number(body.buyIn),
+            fillWindowSec: body.fillWindowSec === undefined ? undefined : Number(body.fillWindowSec),
+          });
+          return json(res, 200, out);
+        } catch (e) {
+          return json(res, 400, { error: (e as Error).message });
+        }
       }
 
       if (req.method === 'GET' && url.pathname === '/queue/status') {
         const status = await runtime.queueStatus(
-          url.searchParams.get('tier') ?? 'tier-low',
+          url.searchParams.get('tier') ?? 'tier-standard',
           url.searchParams.get('feed') ?? 'BTC/USD',
           url.searchParams.get('token') ?? 'USDC',
           Number(url.searchParams.get('rating') ?? '1000'),
+          url.searchParams.has('buyIn') ? Number(url.searchParams.get('buyIn')) : undefined,
+          url.searchParams.has('fillWindowSec') ? Number(url.searchParams.get('fillWindowSec')) : undefined,
         );
         return json(res, 200, { status });
       }

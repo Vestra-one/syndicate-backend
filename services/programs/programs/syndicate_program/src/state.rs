@@ -18,11 +18,18 @@ pub struct ProtocolState {
     pub pause_new_matches: bool,
     pub pause_settlement: bool,
     pub bump: u8,
+    /// Operator-governed match-creation bounds (config_admin). A match's `buy_in` must lie in
+    /// `[buy_in_min, buy_in_max]` and its fill window in `[fill_window_min_sec, fill_window_max_sec]`,
+    /// enforced on-chain at create. Replaces the old discrete buy-in/fill-window tiers.
+    pub buy_in_min: u64,
+    pub buy_in_max: u64,
+    pub fill_window_min_sec: u64,
+    pub fill_window_max_sec: u64,
     pub reserved: [u8; 12],
 }
 
 impl ProtocolState {
-    pub const SPACE: usize = 8 + 32 * 8 + 20 + 1 + 1 + 1 + 12;
+    pub const SPACE: usize = 8 + 32 * 8 + 20 + 1 + 1 + 1 + 8 * 4 + 12;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]

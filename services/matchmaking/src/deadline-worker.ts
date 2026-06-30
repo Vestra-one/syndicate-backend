@@ -1,5 +1,5 @@
 import type { RedisClient } from '../../gateway/src/redis.ts';
-import { getTierForFeed } from '../../config/src/index.ts';
+import { getTierForFeed, buildMatchConfig } from '../../config/src/index.ts';
 import type { MatchmakingStore } from './index.ts';
 import { deadlineKey, formationKey } from './redis-keys.ts';
 import { evaluateStartPolicy } from './start-policy.ts';
@@ -67,7 +67,14 @@ export class DeadlineWorker {
     if (policy.action === 'start' && table.tierId && table.feedId) {
       const tier = getTierForFeed(table.tierId, table.feedId);
       if (tier) {
-        const stack = tier.config.buyIn * tier.config.chipsPerUnit;
+        // Blinds/stack follow the match's chosen buy-in (the tier is a range); fall back to the
+        // tier minimum if the snapshot predates buy-in tracking.
+        const config = buildMatchConfig(
+          table.feedId,
+          table.buyIn ?? tier.buyInMin,
+          table.fillWindowSec ?? tier.fillWindowMinSec,
+        );
+        const stack = config.buyIn * config.chipsPerUnit;
         await this.orchestrator.triggerStartPolicy(matchId, policy, {
           onchainMatchId: hashMatchId(matchId).toString(),
           tierId: table.tierId,
@@ -78,16 +85,16 @@ export class DeadlineWorker {
             sealSeq: seatIndex,
             wallet: s.wallet,
           })),
-          smallBlind: tier.config.smallBlind,
-          bigBlind: tier.config.bigBlind,
-          roundCount: tier.config.roundCount,
-          actionTimeoutMs: tier.config.actionTimerSec * 1000,
+          smallBlind: config.smallBlind,
+          bigBlind: config.bigBlind,
+          roundCount: config.roundCount,
+          actionTimeoutMs: config.actionTimerSec * 1000,
         });
       }
     } else {
       await this.orchestrator.triggerStartPolicy(matchId, policy, {
         onchainMatchId: hashMatchId(matchId).toString(),
-        tierId: table.tierId ?? 'tier-low',
+        tierId: table.tierId ?? 'tier-standard',
         feedId: table.feedId ?? 'BTC/USD',
         players: [],
         smallBlind: 1,

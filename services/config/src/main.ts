@@ -39,7 +39,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
   if (url.pathname === '/config/table') {
     const matchId = url.searchParams.get('matchId') ?? '';
-    const tierId = url.searchParams.get('tierId') ?? 'tier-low';
+    const tierId = url.searchParams.get('tierId') ?? 'tier-standard';
     const feedId = url.searchParams.get('feedId') ?? 'BTC/USD';
     const onchainMatchId = url.searchParams.get('onchainMatchId') ?? undefined;
     const matchPda = url.searchParams.get('matchPda') ?? undefined;
@@ -47,6 +47,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       onchainMatchId,
       matchPda,
       timelockTargetRound: parseTimelock(url.searchParams.get('timelockTargetRound')),
+      buyIn: parseOptInt(url.searchParams.get('buyIn')),
+      fillWindowSec: parseOptInt(url.searchParams.get('fillWindowSec')),
     });
     if (!terms) return json(res, 404, { error: 'unknown tier/feed' });
     return json(res, 200, { terms });
@@ -65,6 +67,12 @@ function parseTimelock(raw: string | null): number {
   if (!raw) return DEFAULT_TIMELOCK_TARGET_ROUND;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMELOCK_TARGET_ROUND;
+}
+
+function parseOptInt(raw: string | null): number | undefined {
+  if (raw === null || raw === '') return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {

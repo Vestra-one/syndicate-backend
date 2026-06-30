@@ -23,14 +23,16 @@ use types::{
     SignedPriceDto,
 };
 // Re-exported for use by the test modules.
-pub use types::{MatchAccountData, SeatAccountData, SeatPayout};
+pub use types::{MatchAccountData, MatchBounds, SeatAccountData, SeatPayout};
 
 #[allow(unused_imports)]
 pub use types::DEFAULT_TAG_CHECK_FOLD;
 #[allow(unused_imports)]
 pub use syndicate_engine_core::GENESIS_HEAD;
 
-pub const PROGRAM_ID: Pubkey = pubkey!("8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX");
+// Must match `declare_id!` in the program source (the `.so` is built from it); Anchor rejects a
+// load address that differs (error 4100, DeclaredProgramIdMismatch).
+pub const PROGRAM_ID: Pubkey = pubkey!("2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT");
 pub const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 
@@ -371,6 +373,14 @@ impl MatchHarness {
             upgrade_authority: self.admin.pubkey(),
             price_signer: eth_address_of_secret(&PRICE_SIGNER_SECRET),
         };
+        // Wide-open bounds so existing harness fixtures (arbitrary buy-ins / far-future fill
+        // deadlines) pass the on-chain range check; bound-specific tests override these.
+        let bounds = MatchBounds {
+            buy_in_min: 1,
+            buy_in_max: u64::MAX,
+            fill_window_min_sec: 1,
+            fill_window_max_sec: u64::MAX,
+        };
         let ix = Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
@@ -378,17 +388,41 @@ impl MatchHarness {
                 AccountMeta::new(protocol, false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
-            data: ix_data("initialize_protocol", &roles),
+            data: ix_data("initialize_protocol", &(roles, bounds)),
         };
         send(&mut self.svm, &self.admin, vec![ix], &[])
             .expect("initialize_protocol");
     }
 
     pub fn create_match(&mut self) {
+        self.try_create_match().expect("create_match");
+    }
+
+    /// Update the operator-governed match bounds as `config_admin` (the harness admin holds
+    /// every role). Returns the raw send result so bound-rejection tests can assert failures.
+    pub fn set_match_bounds(&mut self, bounds: MatchBounds) -> Result<(), String> {
+        let (protocol, _) = protocol_pda();
+        let ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new_readonly(self.admin.pubkey(), true),
+                AccountMeta::new(protocol, false),
+            ],
+            data: ix_data("set_match_bounds", &bounds),
+        };
+        send(&mut self.svm, &self.admin, vec![ix], &[])
+    }
+
+    /// `create_match` returning the send result (for asserting bound rejections).
+    pub fn try_create_match(&mut self) -> Result<(), String> {
         let (protocol, _) = protocol_pda();
         let (match_key, _) = match_pda(self.cfg.match_id);
         let (vault, _) = vault_pda(&match_key);
         self.match_key = match_key;
+        // The on-chain deadline is derived as `now + fill_window_sec`; express the harness's
+        // desired absolute `fill_deadline_ts` as a window relative to the current clock so
+        // existing fixtures and `set_clock(cfg.fill_deadline_ts + 1)` assertions still hold.
+        let fill_window_sec = self.cfg.fill_deadline_ts.saturating_sub(self.now());
         let params = CreateParams {
             match_id: self.cfg.match_id,
             buy_in: self.cfg.buy_in,
@@ -403,7 +437,7 @@ impl MatchHarness {
             total_betting_duration_sec: 600,
             seal_window_sec: 20,
             begin_live_window_sec: 5,
-            fill_deadline_ts: self.cfg.fill_deadline_ts,
+            fill_window_sec,
             max_oracle_confidence: 100,
             oracle_exponent: -18,
         };
@@ -421,7 +455,7 @@ impl MatchHarness {
             ],
             data: ix_data("create_match", &params),
         };
-        send(&mut self.svm, &self.admin, vec![ix], &[]).expect("create_match");
+        send(&mut self.svm, &self.admin, vec![ix], &[])
     }
 
     pub fn deposit_all(&mut self) {

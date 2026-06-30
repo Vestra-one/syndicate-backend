@@ -30,7 +30,8 @@ function fakeVerifier(approve: Set<string>): ChainVerifier {
     matchPda,
     player,
     seatIndex,
-    buyIn: '1000',
+    buyIn: '10000000', // $10 USDC — within the operator-governed buy-in range
+    match: { fillDeadlineTs: '2000000000' },
   });
   return {
     async verifyCreate(input) {

@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { RedisClient } from '../../gateway/src/redis.ts';
-import { getTierForFeed, getTemplateByHash, templateAllowlist } from '../../config/src/index.ts';
+import {
+  getTierForFeed,
+  getTemplateByHash,
+  templateAllowlist,
+  buildMatchConfig,
+  type TierDefinition,
+} from '../../config/src/index.ts';
 import { tableTermsForTier } from '../../config/src/table-terms.ts';
 import { bucketFor, Table, type MatchmakingStore, type TableSnapshot } from './index.ts';
 import {
@@ -21,6 +27,15 @@ import { NOOP_PERSISTENCE, type MatchPersistence } from './persistence.ts';
 /** Default per-wallet active-room cap (anti-spam on player-created rooms). */
 export const DEFAULT_WALLET_ROOM_CAP = 3;
 
+/** Fallback fill window when no tier/selection is resolvable (seconds). */
+const FALLBACK_FILL_WINDOW_SEC = 120;
+
+/** Queue bucket key that segregates by skill rating AND the chosen buy-in / fill-window, so
+ *  only players who picked the same terms merge into one forming match. */
+function selectionBucket(rating: number, buyIn: number, fillWindowSec: number): string {
+  return `${bucketFor(rating)}:b${buyIn}:f${fillWindowSec}`;
+}
+
 export interface FormationRecord {
   matchId: string;
   tierId: string;
@@ -37,6 +52,8 @@ export interface FormationRecord {
   matchPda?: string;
   configHash?: string;
   buyIn?: number;
+  /** Creator-selected fill window (seconds), within the tier range. */
+  fillWindowSec?: number;
   entryFee?: number;
   seatCount?: number;
   createdAtMs?: number;
@@ -95,6 +112,21 @@ export interface RoomListing {
 /** Map a table snapshot's seats to the lobby seat shape (UX-only; ordered by seat index). */
 function lobbySeats(table: TableSnapshot | undefined): LobbySeat[] {
   return (table?.seats ?? []).map((s, seatIndex) => ({ seatIndex, wallet: s.wallet, joinedTs: s.finalityTs }));
+}
+
+/**
+ * Validate a creator-selected buy-in / fill-window against the tier's range (off-chain fast
+ * fail; the contract re-enforces the operator-governed bounds at create). Returns an error
+ * string or `undefined` when valid.
+ */
+export function validateSelection(tier: TierDefinition, buyIn: number, fillWindowSec: number): string | undefined {
+  if (!Number.isInteger(buyIn) || buyIn < tier.buyInMin || buyIn > tier.buyInMax) {
+    return `buyIn must be an integer in [${tier.buyInMin}, ${tier.buyInMax}]`;
+  }
+  if (!Number.isInteger(fillWindowSec) || fillWindowSec < tier.fillWindowMinSec || fillWindowSec > tier.fillWindowMaxSec) {
+    return `fillWindowSec must be an integer in [${tier.fillWindowMinSec}, ${tier.fillWindowMaxSec}]`;
+  }
+  return undefined;
 }
 
 export class MatchmakingRuntime {
@@ -172,8 +204,19 @@ export class MatchmakingRuntime {
     const matchId = input.matchPda;
     const roomCode = randomBytes(4).toString('hex');
     const now = Date.now();
-    const fillDeadlineMs = now + tier.fillWindowSec * 1000;
-    const buyIn = tier.config.buyIn;
+    // Buy-in and fill deadline are creator-selected per match and ALREADY on-chain — read the
+    // authoritative values from the verified `MatchAccount`, not from the (ranged) tier.
+    const buyIn = Number(verified.buyIn);
+    const onchainMatch = verified.match as { fillDeadlineTs?: string | number } | undefined;
+    const fillDeadlineMs = onchainMatch?.fillDeadlineTs !== undefined
+      ? Number(onchainMatch.fillDeadlineTs) * 1000
+      : now + tier.fillWindowMinSec * 1000;
+    // Reconstruct an in-range fill window for UX/terms display (the on-chain deadline is the
+    // authoritative timing; this derived window only drives engine blinds + table-terms display).
+    const fillWindowSec = Math.min(
+      tier.fillWindowMaxSec,
+      Math.max(tier.fillWindowMinSec, Math.round((fillDeadlineMs - now) / 1000)),
+    );
     const entryFee = tier.config.entryFee;
     const seatIndex = verified.seatIndex;
 
@@ -193,6 +236,7 @@ export class MatchmakingRuntime {
       matchPda: input.matchPda,
       configHash: input.configHash,
       buyIn,
+      fillWindowSec,
       entryFee,
       seatCount: 1,
       createdAtMs: now,
@@ -226,6 +270,8 @@ export class MatchmakingRuntime {
       tierId: record.tierId,
       feedId: record.feedId,
       token: record.token,
+      buyIn,
+      fillWindowSec,
       status: 'open',
     };
     await this.store.saveTable(snapshot);
@@ -244,6 +290,8 @@ export class MatchmakingRuntime {
         tableTermsForTier(matchId, record.tierId, record.feedId, {
           onchainMatchId: record.onchainMatchId,
           matchPda: record.matchPda,
+          buyIn,
+          fillWindowSec,
         }) ?? tier.config,
     };
     await this.markReportedSig(input.createTxSig, result);
@@ -351,7 +399,12 @@ export class MatchmakingRuntime {
   ) {
     const tier = getTierForFeed(rec.tierId, rec.feedId);
     if (!tier) throw new Error('unknown tier');
-    const stack = tier.config.buyIn * tier.config.chipsPerUnit;
+    // Stack and blinds follow the match's CHOSEN buy-in (the ranged tier config is only a
+    // representative at the minimum), so build the concrete config from the recorded selection.
+    const buyIn = rec.buyIn ?? tier.buyInMin;
+    const fillWindowSec = rec.fillWindowSec ?? tier.fillWindowMinSec;
+    const config = buildMatchConfig(rec.feedId, buyIn, fillWindowSec);
+    const stack = config.buyIn * config.chipsPerUnit;
     const ctx: import('./orchestrator-client.ts').StartContext = {
       onchainMatchId: rec.onchainMatchId ?? String(rec.matchId),
       matchPda: rec.matchPda,
@@ -363,10 +416,10 @@ export class MatchmakingRuntime {
         sealSeq: seatIndex,
         wallet: s.wallet,
       })),
-      smallBlind: tier.config.smallBlind,
-      bigBlind: tier.config.bigBlind,
-      roundCount: tier.config.roundCount,
-      actionTimeoutMs: tier.config.actionTimerSec * 1000,
+      smallBlind: config.smallBlind,
+      bigBlind: config.bigBlind,
+      roundCount: config.roundCount,
+      actionTimeoutMs: config.actionTimerSec * 1000,
     };
     await this.orchestrator.triggerStartPolicy(rec.matchId, policy, ctx);
     await this.publishRoomsUpdate(rec, 'started');
@@ -378,6 +431,9 @@ export class MatchmakingRuntime {
     token: string;
     wallet: string;
     rating?: number;
+    /** Creator-selected buy-in / fill-window (within the tier range). Default to tier minimums. */
+    buyIn?: number;
+    fillWindowSec?: number;
   }): Promise<{
     matchId: string;
     onchainMatchId?: string;
@@ -393,7 +449,12 @@ export class MatchmakingRuntime {
       const matchId = randomUUID();
       return { matchId, fillDeadline: Date.now() + 60_000, playersWaiting: 1, status: 'forming', depositRequired: false };
     }
-    const bucket = bucketFor(input.rating ?? 1000);
+    const buyIn = input.buyIn ?? tier.buyInMin;
+    const fillWindowSec = input.fillWindowSec ?? tier.fillWindowMinSec;
+    const selErr = validateSelection(tier, buyIn, fillWindowSec);
+    if (selErr) throw new Error(selErr);
+    // Segregate queues by buy-in/fill-window so only players who chose the same terms merge.
+    const bucket = selectionBucket(input.rating ?? 1000, buyIn, fillWindowSec);
     const fKey = formationKey(input.tierId, input.feedId, input.token, bucket);
     let record: FormationRecord | undefined;
     if (this.redis) {
@@ -410,7 +471,7 @@ export class MatchmakingRuntime {
       }
       if (!record) {
         const matchId = randomUUID();
-        const fillDeadlineMs = Date.now() + tier.fillWindowSec * 1000;
+        const fillDeadlineMs = Date.now() + fillWindowSec * 1000;
         // No on-chain create here: matchmaking never creates matches. The on-chain match is
         // established when the first player reports a verified create_and_deposit txhash.
         record = {
@@ -423,6 +484,8 @@ export class MatchmakingRuntime {
           maxPlayers: tier.config.maxPlayers,
           minPlayers: tier.config.minPlayers,
           mode: 'public_formation',
+          buyIn,
+          fillWindowSec,
         };
         const snapshot: TableSnapshot = {
           tableId: matchId,
@@ -436,11 +499,13 @@ export class MatchmakingRuntime {
           feedId: input.feedId,
           token: input.token,
           bucket,
+          buyIn,
+          fillWindowSec,
           status: 'open',
         };
         await this.store.saveTable(snapshot);
         if (this.redis) {
-          await this.redis.setex(fKey, tier.fillWindowSec + 300, JSON.stringify(record));
+          await this.redis.setex(fKey, fillWindowSec + 300, JSON.stringify(record));
           await this.redis.zadd(deadlineKey(), fillDeadlineMs, matchId);
           await this.redis.zadd(queueKey(matchId), Date.now(), input.wallet);
         }
@@ -460,8 +525,18 @@ export class MatchmakingRuntime {
     };
   }
 
-  async queueStatus(tierId: string, feedId: string, token: string, rating = 1000): Promise<unknown> {
-    const bucket = bucketFor(rating);
+  async queueStatus(
+    tierId: string,
+    feedId: string,
+    token: string,
+    rating = 1000,
+    buyIn?: number,
+    fillWindowSec?: number,
+  ): Promise<unknown> {
+    const tier = getTierForFeed(tierId, feedId);
+    const bIn = buyIn ?? tier?.buyInMin ?? 0;
+    const fWin = fillWindowSec ?? tier?.fillWindowMinSec ?? FALLBACK_FILL_WINDOW_SEC;
+    const bucket = selectionBucket(rating, bIn, fWin);
     const fKey = formationKey(tierId, feedId, token, bucket);
     if (!this.redis) return { active: false, playersWaiting: 0, seated: 0, minPlayers: 2, maxPlayers: 5, fillDeadline: null };
     const raw = await this.redis.get(fKey);

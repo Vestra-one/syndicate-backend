@@ -51,7 +51,7 @@ test('create match params encode expected byte length', () => {
       totalBettingDurationSec: 600,
       sealWindowSec: 20,
       beginLiveWindowSec: 5,
-      fillDeadlineTs: 1_900_000_000,
+      fillWindowSec: 300,
     },
     onchainMatchId,
     {
@@ -64,7 +64,7 @@ test('create match params encode expected byte length', () => {
   );
   // CreateParams (plan_v2 §A): match_id,buy_in,entry_fee,rake_bps(u32),rake_cap,
   // nonseal_penalty_bps(u32),min(u8),max(u8),config_hash[32],price_token[20],
-  // total_betting_duration,seal_window,begin_live_window,fill_deadline,
+  // total_betting_duration,seal_window,begin_live_window,fill_window_sec,
   // max_conf,exponent(i32).
   assert.equal(
     params.length,

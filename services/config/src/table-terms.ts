@@ -1,4 +1,10 @@
-import { bindConfig, getTierForFeed, totalBettingDurationSec, type MatchConfig } from './index.ts';
+import {
+  bindConfig,
+  buildMatchConfig,
+  getTierForFeed,
+  totalBettingDurationSec,
+  type MatchConfig,
+} from './index.ts';
 
 /** Fixed-point decimals per launch feed (Pyth exponent -8 → display 8). */
 export const FEED_DECIMALS: Record<string, number> = {
@@ -91,10 +97,21 @@ export function tableTermsForTier(
   tableId: string,
   tierId: string,
   feedId: string,
-  opts: { onchainMatchId?: string; matchPda?: string; timelockTargetRound?: number } = {},
+  opts: {
+    onchainMatchId?: string;
+    matchPda?: string;
+    timelockTargetRound?: number;
+    /** Creator-selected buy-in / fill-window (within the tier's range). Defaults to the
+     *  tier minimums when omitted (e.g. catalog display). Ignored for practice. */
+    buyIn?: number;
+    fillWindowSec?: number;
+  } = {},
 ): TableTermsPayload | undefined {
   const tier = getTierForFeed(tierId, feedId);
   if (!tier) return undefined;
-  bindConfig(tier.config);
-  return toTableTerms(tableId, tier.config, opts);
+  const config = tier.practiceMode
+    ? tier.config
+    : buildMatchConfig(feedId, opts.buyIn ?? tier.buyInMin, opts.fillWindowSec ?? tier.fillWindowMinSec);
+  bindConfig(config);
+  return toTableTerms(tableId, config, opts);
 }

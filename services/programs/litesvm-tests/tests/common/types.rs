@@ -19,6 +19,14 @@ pub struct ProtocolRoles {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
+pub struct MatchBounds {
+    pub buy_in_min: u64,
+    pub buy_in_max: u64,
+    pub fill_window_min_sec: u64,
+    pub fill_window_max_sec: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone)]
 pub struct CreateParams {
     pub match_id: u64,
     pub buy_in: u64,
@@ -33,7 +41,7 @@ pub struct CreateParams {
     pub total_betting_duration_sec: u64,
     pub seal_window_sec: u64,
     pub begin_live_window_sec: u64,
-    pub fill_deadline_ts: u64,
+    pub fill_window_sec: u64,
     pub max_oracle_confidence: u64,
     pub oracle_exponent: i32,
 }

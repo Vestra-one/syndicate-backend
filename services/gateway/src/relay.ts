@@ -204,10 +204,13 @@ export function createRelayHandler(deps: RelayDeps, push: RelayPush) {
     }
 
     if (type === 'fetchQueueStatus') {
-      const tier = String(msg.tierId ?? 'tier-low');
+      const tier = String(msg.tierId ?? 'tier-standard');
       const feed = String(msg.feedId ?? 'BTC/USD');
       const token = String(msg.token ?? 'USDC');
-      const res = await fetch(`${deps.matchmakingUrl}/queue/status?tier=${tier}&feed=${feed}&token=${token}`);
+      const params = new URLSearchParams({ tier, feed, token });
+      if (msg.buyIn !== undefined) params.set('buyIn', String(msg.buyIn));
+      if (msg.fillWindowSec !== undefined) params.set('fillWindowSec', String(msg.fillWindowSec));
+      const res = await fetch(`${deps.matchmakingUrl}/queue/status?${params.toString()}`);
       const json = await res.json() as { status?: unknown };
       send(wallet, { type: 'queueStatus', status: json.status });
     }

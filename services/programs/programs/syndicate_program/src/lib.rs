@@ -77,6 +77,7 @@ pub mod syndicate_program {
     pub fn initialize_protocol(
         ctx: Context<InitializeProtocol>,
         roles: ProtocolRoles,
+        bounds: MatchBounds,
     ) -> Result<()> {
         require_keys_eq!(
             ctx.accounts.authority.key(),
@@ -84,6 +85,7 @@ pub mod syndicate_program {
             SyndicateError::Unauthorized
         );
         require!(roles.all_non_default(), SyndicateError::Unauthorized);
+        bounds.validate()?;
         let p = &mut ctx.accounts.protocol_state;
         p.protocol_admin = roles.protocol_admin;
         p.settlement_admin = roles.settlement_admin;
@@ -97,6 +99,10 @@ pub mod syndicate_program {
         p.pause_new_matches = false;
         p.pause_settlement = false;
         p.bump = ctx.bumps.protocol_state;
+        p.buy_in_min = bounds.buy_in_min;
+        p.buy_in_max = bounds.buy_in_max;
+        p.fill_window_min_sec = bounds.fill_window_min_sec;
+        p.fill_window_max_sec = bounds.fill_window_max_sec;
         p.reserved = [0u8; 12];
         Ok(())
     }
@@ -131,6 +137,23 @@ pub mod syndicate_program {
         Ok(())
     }
 
+    /// Update the operator-governed match-creation bounds (config_admin). New matches must
+    /// pick a `buy_in` and fill window within these ranges; enforced in `validate_create_params`.
+    pub fn set_match_bounds(ctx: Context<ProtocolAdmin>, bounds: MatchBounds) -> Result<()> {
+        let p = &mut ctx.accounts.protocol_state;
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            p.config_admin,
+            SyndicateError::Unauthorized
+        );
+        bounds.validate()?;
+        p.buy_in_min = bounds.buy_in_min;
+        p.buy_in_max = bounds.buy_in_max;
+        p.fill_window_min_sec = bounds.fill_window_min_sec;
+        p.fill_window_max_sec = bounds.fill_window_max_sec;
+        Ok(())
+    }
+
     /// Create a match. **Permissionless** (plan_v2 §3): any signer may create; the
     /// signer becomes `m.authority` but that grants NO lifecycle power — `lock`/
     /// `begin_live`/`submit_settlement` remain gated to operator ROLE keys, so the
@@ -142,13 +165,14 @@ pub mod syndicate_program {
             SyndicateError::Paused
         );
         let now = Clock::get()?.unix_timestamp as u64;
-        validate_create_params(&params, now)?;
+        validate_create_params(&params, &ctx.accounts.protocol_state)?;
         let authority = ctx.accounts.authority.key();
         let mint = ctx.accounts.mint.key();
         let vault = ctx.accounts.vault.key();
         populate_match_account(
             &mut ctx.accounts.match_account,
             &params,
+            now,
             authority,
             mint,
             vault,
@@ -172,7 +196,7 @@ pub mod syndicate_program {
             SyndicateError::Paused
         );
         let now = Clock::get()?.unix_timestamp as u64;
-        validate_create_params(&params, now)?;
+        validate_create_params(&params, &ctx.accounts.protocol_state)?;
         require!(
             seat_index < params.max_players as u16,
             SyndicateError::InvalidSeat
@@ -184,6 +208,7 @@ pub mod syndicate_program {
         populate_match_account(
             &mut ctx.accounts.match_account,
             &params,
+            now,
             authority,
             mint,
             vault_key,
@@ -805,9 +830,9 @@ pub mod syndicate_program {
 }
 
 /// Validate `CreateParams` (shared by `create_match` and `create_and_deposit` so the two
-/// paths can never diverge). Pause + field bounds + tight oracle tolerance + future fill
-/// deadline. `now` is the current unix time.
-fn validate_create_params(params: &CreateParams, now: u64) -> Result<()> {
+/// paths can never diverge). Pause + field bounds + tight oracle tolerance + operator-governed
+/// buy-in/fill-window ranges (read from `ProtocolState`).
+fn validate_create_params(params: &CreateParams, p: &ProtocolState) -> Result<()> {
     require!(params.min_players >= 2, SyndicateError::InvalidConfig);
     require!(params.max_players <= 5, SyndicateError::InvalidConfig);
     require!(
@@ -815,6 +840,11 @@ fn validate_create_params(params: &CreateParams, now: u64) -> Result<()> {
         SyndicateError::InvalidConfig
     );
     require!(params.buy_in > 0, SyndicateError::InvalidConfig);
+    // Operator-governed buy-in range (replaces discrete tiers).
+    require!(
+        params.buy_in >= p.buy_in_min && params.buy_in <= p.buy_in_max,
+        SyndicateError::InvalidConfig
+    );
     require!(params.rake_bps <= 10_000, SyndicateError::InvalidConfig);
     require!(
         params.rake_cap <= params.buy_in,
@@ -837,7 +867,13 @@ fn validate_create_params(params: &CreateParams, now: u64) -> Result<()> {
         params.oracle_exponent == signed_price::SIGNED_PRICE_EXPONENT,
         SyndicateError::InvalidConfig
     );
-    require!(params.fill_deadline_ts > now, SyndicateError::InvalidConfig);
+    // Operator-governed fill-window range. The absolute deadline is derived on-chain as
+    // `now + fill_window_sec` (see `populate_match_account`), so this also guarantees a future deadline.
+    require!(
+        params.fill_window_sec >= p.fill_window_min_sec
+            && params.fill_window_sec <= p.fill_window_max_sec,
+        SyndicateError::InvalidConfig
+    );
     Ok(())
 }
 
@@ -848,6 +884,7 @@ fn validate_create_params(params: &CreateParams, now: u64) -> Result<()> {
 fn populate_match_account(
     m: &mut MatchAccount,
     params: &CreateParams,
+    now: u64,
     authority: Pubkey,
     mint: Pubkey,
     vault: Pubkey,
@@ -863,7 +900,9 @@ fn populate_match_account(
     m.config_hash = params.config_hash;
     m.price_token = params.price_token;
 
-    m.fill_deadline_ts = params.fill_deadline_ts;
+    // Derive the absolute fill deadline from the chosen window so on-chain `fill_deadline_ts`
+    // semantics (deposit gate, permissionless void) stay unchanged downstream.
+    m.fill_deadline_ts = now.saturating_add(params.fill_window_sec);
     m.lock_ts = 0;
     m.seal_deadline_ts = 0;
     m.live_start_ts = 0;
@@ -1012,6 +1051,32 @@ pub struct ProtocolRoles {
     pub price_signer: [u8; 20],
 }
 
+/// Operator-governed match-creation bounds (see `ProtocolState`). Passed at
+/// `initialize_protocol` and updatable via `set_match_bounds` (config_admin).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct MatchBounds {
+    pub buy_in_min: u64,
+    pub buy_in_max: u64,
+    pub fill_window_min_sec: u64,
+    pub fill_window_max_sec: u64,
+}
+
+impl MatchBounds {
+    fn validate(&self) -> Result<()> {
+        require!(self.buy_in_min > 0, SyndicateError::InvalidConfig);
+        require!(
+            self.buy_in_min <= self.buy_in_max,
+            SyndicateError::InvalidConfig
+        );
+        require!(self.fill_window_min_sec >= 1, SyndicateError::InvalidConfig);
+        require!(
+            self.fill_window_min_sec <= self.fill_window_max_sec,
+            SyndicateError::InvalidConfig
+        );
+        Ok(())
+    }
+}
+
 impl ProtocolRoles {
     fn all_non_default(&self) -> bool {
         let zero = Pubkey::default();
@@ -1062,7 +1127,9 @@ pub struct CreateParams {
     pub seal_window_sec: u64,
     /// Max delay after seal deadline for the operator to call begin_live (0 → default 5s).
     pub begin_live_window_sec: u64,
-    pub fill_deadline_ts: u64,
+    /// Public-queue fill window (seconds). The on-chain `fill_deadline_ts` is derived as
+    /// `create_ts + fill_window_sec`; must lie within the operator-governed bounds.
+    pub fill_window_sec: u64,
     pub max_oracle_confidence: u64,
     pub oracle_exponent: i32,
 }

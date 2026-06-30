@@ -66,8 +66,9 @@ export interface CreateMatchInput {
   /** Max delay after the seal deadline for the operator to call begin_live (default 5s,
    *  plan_v2 §I). Must match the on-chain CreateParams field order. */
   beginLiveWindowSec?: number | string | bigint;
-  /** Absolute fill deadline (unix sec); after it a Filling room is permissionlessly voided. */
-  fillDeadlineTs?: number | string | bigint;
+  /** Creator-selected fill window (seconds). The on-chain `fill_deadline_ts` is derived as
+   *  `create_ts + fill_window_sec` and must lie within the operator-governed bounds. */
+  fillWindowSec?: number | string | bigint;
   feedIdHex?: string;
 }
 
@@ -142,8 +143,9 @@ function configHashFor(input: CreateMatchInput, onchainMatchId: bigint): Buffer 
  * Borsh layout MUST match `CreateParams` in services/programs (plan_v2 §A) exactly:
  * match_id, buy_in, entry_fee, rake_bps(u32), rake_cap, nonseal_penalty_bps(u32),
  * min_players(u8), max_players(u8), config_hash[32], price_token[20],
- * total_betting_duration_sec, seal_window_sec, begin_live_window_sec, fill_deadline_ts,
- * max_oracle_confidence, oracle_exponent(i32).
+ * total_betting_duration_sec, seal_window_sec, begin_live_window_sec, fill_window_sec,
+ * max_oracle_confidence, oracle_exponent(i32). (`fill_window_sec` replaced the old absolute
+ * `fill_deadline_ts`; same 8-byte slot — the contract derives the deadline as now + window.)
  */
 export function encodeCreateParams(input: CreateMatchInput, onchainMatchId: bigint, cfg: CustodyConfig): Buffer {
   const buyIn = parseU64(input.buyIn ?? 10_000_000, 'buyIn');
@@ -155,10 +157,7 @@ export function encodeCreateParams(input: CreateMatchInput, onchainMatchId: bigi
   const sealWindow = parseU64(input.sealWindowSec ?? 20, 'sealWindowSec');
   // 0 → on-chain DEFAULT_BEGIN_LIVE_WINDOW_SEC (5s).
   const beginLiveWindow = parseU64(input.beginLiveWindowSec ?? 5, 'beginLiveWindowSec');
-  const fillDeadlineTs = parseU64(
-    input.fillDeadlineTs ?? BigInt(Math.floor(Date.now() / 1000) + 300),
-    'fillDeadlineTs',
-  );
+  const fillWindowSec = parseU64(input.fillWindowSec ?? 300, 'fillWindowSec');
   const maxConfidence = cfg.maxOracleConfidence ?? 2n ** 64n - 1n;
   const exponent = cfg.oracleExponent ?? -18;
   return Buffer.concat([
@@ -175,7 +174,7 @@ export function encodeCreateParams(input: CreateMatchInput, onchainMatchId: bigi
     u64(totalBettingDuration),
     u64(sealWindow),
     u64(beginLiveWindow),
-    u64(fillDeadlineTs),
+    u64(fillWindowSec),
     u64(maxConfidence),
     i32(exponent),
   ]);

@@ -412,9 +412,13 @@ export interface DepositReport {
 /** Host create: opens the match AND seats the creator in one tx; report `createTxSig`. */
 export interface CreateAndDepositArgs {
   onchainMatchId: string;
-  configHash: string;        // 32-byte hex; must match an allowlisted template
+  configHash: string;        // 32-byte hex; must match an allowlisted (rules-only) template
   priceTokenHex: string;     // 20-byte ERC-20 token address the price server signs
   seatIndex: SeatIndex;
+  // Creator-selected, within the template's [buyInMin,buyInMax] / [fillWindowMinSec,fillWindowMaxSec]
+  // ranges (`GET /config/templates`). The contract re-enforces the operator-governed bounds.
+  buyIn: Chips;              // fixed per-match buy-in (all seats deposit this)
+  fillWindowSec: number;     // on-chain fill_deadline_ts is derived as create_ts + fillWindowSec
 }
 export interface DepositArgs { matchId: string; seatIndex: SeatIndex; } // transfers buyIn + entryFee
 /**

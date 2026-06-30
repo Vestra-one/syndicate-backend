@@ -41,6 +41,9 @@ export interface TableSnapshot {
   feedId?: string;
   token?: string;
   bucket?: string;
+  /** Creator-selected buy-in / fill-window for this match (within the tier range). */
+  buyIn?: number;
+  fillWindowSec?: number;
   status?: 'open' | 'starting' | 'started' | 'void' | 'cancelled';
 }
 

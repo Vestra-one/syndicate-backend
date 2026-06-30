@@ -52,9 +52,15 @@ export interface MatchConfig {
 export interface TierDefinition {
   tierId: string;
   label: string;
-  buyIn: number;
-  fillWindowSec: number;
+  /** Inclusive buy-in range the creator may pick from (USDC base units). */
+  buyInMin: number;
+  buyInMax: number;
+  /** Inclusive fill-window range the creator may pick from (seconds). */
+  fillWindowMinSec: number;
+  fillWindowMaxSec: number;
   practiceMode: boolean;
+  /** Representative rules config (buy-in = `buyInMin`); buy-in/fill-window/blinds are filled
+   *  in per match from the creator's selection via `buildMatchConfig`. */
   config: MatchConfig;
 }
 
@@ -81,6 +87,27 @@ export const DEFAULT_BEGIN_LIVE_WINDOW_SEC = 5;
 /** Must equal the on-chain MAX_TIMELOCK_SKEW_SEC (plan_v2 §I). */
 export const MAX_TIMELOCK_SKEW_SEC = 20;
 
+/**
+ * Operator-governed match-creation bounds (replaces the old discrete buy-in / fill-window
+ * tiers). The match creator picks ANY value within `[min, max]` inclusive. These MUST mirror
+ * the on-chain `ProtocolState` bounds seeded at `initialize_protocol`; the contract is the
+ * ultimate authority and re-checks every create. (USDC base units, 6 decimals.)
+ */
+export const BUY_IN_MIN = 1_000_000; // $1
+export const BUY_IN_MAX = 1_000_000_000; // $1000
+export const FILL_WINDOW_MIN_SEC = 20;
+export const FILL_WINDOW_MAX_SEC = 5000;
+
+/**
+ * Poker economics derived from the chosen buy-in (so a single rules template serves every
+ * buy-in in range). Mirrors the on-chain-agnostic derivation in `defaultFeedUsdcTier`.
+ */
+export function deriveBlinds(buyIn: number): { bigBlind: number; smallBlind: number; rakeCap: number } {
+  const bigBlind = Math.max(2, Math.floor(buyIn / 100));
+  const smallBlind = Math.max(1, Math.floor(bigBlind / 2));
+  return { bigBlind, smallBlind, rakeCap: buyIn };
+}
+
 /** Returns a list of guardrail violations; empty means the config is safe to use. */
 export function validateConfig(c: MatchConfig): string[] {
   const e: string[] = [];
@@ -100,6 +127,15 @@ export function validateConfig(c: MatchConfig): string[] {
   if (c.allowDuplicateWalletPerMatch) e.push('duplicate wallets in one match are not allowed');
   if (!Number.isInteger(c.fillWindowSec) || c.fillWindowSec <= 0) e.push('fillWindowSec must be a positive integer');
   if (c.practiceMode && c.buyIn !== 0) e.push('practiceMode requires buyIn 0');
+  // Operator-governed creator-selectable ranges (skip practice — engine-only, no custody).
+  if (!c.practiceMode) {
+    if (!Number.isInteger(c.buyIn) || c.buyIn < BUY_IN_MIN || c.buyIn > BUY_IN_MAX) {
+      e.push(`buyIn must be an integer in [${BUY_IN_MIN}, ${BUY_IN_MAX}]`);
+    }
+    if (c.fillWindowSec < FILL_WINDOW_MIN_SEC || c.fillWindowSec > FILL_WINDOW_MAX_SEC) {
+      e.push(`fillWindowSec must be in [${FILL_WINDOW_MIN_SEC}, ${FILL_WINDOW_MAX_SEC}]`);
+    }
+  }
   if (c.minPlayers < 2) e.push('minPlayers must be >= 2');
   if (c.maxPlayers > 5) e.push('maxPlayers must be <= 5');
   if (c.minPlayers > c.maxPlayers) e.push('minPlayers exceeds maxPlayers');
@@ -179,11 +215,28 @@ export interface BoundConfig {
   hash: string;
 }
 
-/** Key-sorted JSON so the hash is independent of property order (deterministic). */
-export function canonicalize(c: MatchConfig): string {
+/**
+ * Per-match fields excluded from the config hash. Buy-in and fill-window are creator-selected
+ * within operator-governed ranges; blinds, small blind, and rake cap derive from the chosen
+ * buy-in. Excluding them makes `config_hash` a RULES identity (one hash per feed/tier), so a
+ * single allowlist entry covers the entire buy-in/fill-window range.
+ */
+const HASH_EXCLUDED_KEYS = new Set(['buyIn', 'fillWindowSec', 'bigBlind', 'smallBlind', 'rakeCap']);
+
+/** Key-sorted projection of the rules-only fields (drops per-match selections). */
+export function rulesProjection(c: MatchConfig): Record<string, unknown> {
   const sorted: Record<string, unknown> = {};
-  for (const k of Object.keys(c).sort()) sorted[k] = (c as Record<string, unknown>)[k];
-  return JSON.stringify(sorted);
+  const rec = c as unknown as Record<string, unknown>;
+  for (const k of Object.keys(c).sort()) {
+    if (HASH_EXCLUDED_KEYS.has(k)) continue;
+    sorted[k] = rec[k];
+  }
+  return sorted;
+}
+
+/** Key-sorted JSON of the rules-only projection so the hash is deterministic and buy-in/fill-window independent. */
+export function canonicalize(c: MatchConfig): string {
+  return JSON.stringify(rulesProjection(c));
 }
 
 export function bindConfig(c: MatchConfig): BoundConfig {
@@ -268,55 +321,42 @@ export function practiceModeConfig(priceFeedId = 'BTC/USD'): MatchConfig {
   return { ...base, buyIn: 0, entryFee: 0, rakeBps: 0, rakeCap: 0, nonsealPenaltyBps: 0, practiceMode: true, fillWindowSec: 60 };
 }
 
-export const TIER_BUY_INS = {
-  low: 10_000_000,      // $10 USDC (6 decimals)
-  mid: 50_000_000,      // $50
-  high: 100_000_000,    // $100
-} as const;
+/**
+ * Build the concrete `MatchConfig` a match runs under from the creator's selection. Blinds,
+ * small blind, and rake cap derive from the chosen buy-in (see `deriveBlinds`); the fill
+ * window is the chosen value. Callers must have already range-checked `buyIn`/`fillWindowSec`.
+ */
+export function buildMatchConfig(feedId: string, buyIn: number, fillWindowSec: number): MatchConfig {
+  const config = defaultFeedUsdcTier(feedId, buyIn);
+  config.fillWindowSec = fillWindowSec;
+  return config;
+}
 
-const DEFAULT_FILL_WINDOWS = { low: 90, mid: 120, high: 180 } as const;
-
-/** Launch catalog: 3 buy-in tiers + practice mode. */
+/** Launch catalog: one standard ranged tier + practice mode. */
 export function buildConfigCatalog(): ConfigCatalog {
   const feeds = [...DEFAULT_SUPPORTED_FEEDS];
   const tiers: TierDefinition[] = [
     {
-      tierId: 'tier-low',
-      label: 'Low Stakes',
-      buyIn: TIER_BUY_INS.low,
-      fillWindowSec: DEFAULT_FILL_WINDOWS.low,
+      tierId: 'tier-standard',
+      label: 'Standard',
+      buyInMin: BUY_IN_MIN,
+      buyInMax: BUY_IN_MAX,
+      fillWindowMinSec: FILL_WINDOW_MIN_SEC,
+      fillWindowMaxSec: FILL_WINDOW_MAX_SEC,
       practiceMode: false,
-      config: defaultBtcUsdcTier(TIER_BUY_INS.low),
-    },
-    {
-      tierId: 'tier-mid',
-      label: 'Mid Stakes',
-      buyIn: TIER_BUY_INS.mid,
-      fillWindowSec: DEFAULT_FILL_WINDOWS.mid,
-      practiceMode: false,
-      config: defaultBtcUsdcTier(TIER_BUY_INS.mid),
-    },
-    {
-      tierId: 'tier-high',
-      label: 'High Stakes',
-      buyIn: TIER_BUY_INS.high,
-      fillWindowSec: DEFAULT_FILL_WINDOWS.high,
-      practiceMode: false,
-      config: defaultBtcUsdcTier(TIER_BUY_INS.high),
+      config: defaultBtcUsdcTier(BUY_IN_MIN),
     },
     {
       tierId: 'tier-practice',
       label: 'Practice',
-      buyIn: 0,
-      fillWindowSec: 60,
+      buyInMin: 0,
+      buyInMax: 0,
+      fillWindowMinSec: FILL_WINDOW_MIN_SEC,
+      fillWindowMaxSec: FILL_WINDOW_MAX_SEC,
       practiceMode: true,
       config: practiceModeConfig('BTC/USD'),
     },
   ];
-  for (const tier of tiers) {
-    tier.config.fillWindowSec = tier.fillWindowSec;
-    if (tier.practiceMode) tier.config.practiceMode = true;
-  }
   return { feeds, tiers, practiceTierId: 'tier-practice' };
 }
 
@@ -324,30 +364,36 @@ export function getTierById(tierId: string): TierDefinition | undefined {
   return buildConfigCatalog().tiers.find((t) => t.tierId === tierId);
 }
 
+/** Resolve a tier for a feed, with a representative rules config bound to that feed. */
 export function getTierForFeed(tierId: string, feedId: string): TierDefinition | undefined {
   const tier = getTierById(tierId);
   if (!tier) return undefined;
   if (tier.practiceMode) {
     return { ...tier, config: practiceModeConfig(feedId) };
   }
-  const buyIn = tier.buyIn;
-  const config = defaultFeedUsdcTier(feedId, buyIn);
-  config.fillWindowSec = tier.fillWindowSec;
+  // Representative config at the minimum buy-in; only the (buy-in-independent) RULES are
+  // hashed, so this stands in for every buy-in/fill-window the creator may later pick.
+  const config = defaultFeedUsdcTier(feedId, tier.buyInMin);
   return { ...tier, config };
 }
 
 /**
- * A published, hashed game template (plan_v2 §C/§H). Each (non-practice) tier × supported
- * feed is a coexisting template. The indexer projects ONLY matches whose on-chain
- * `config_hash` is in this allowlist; clients use the template to build the
- * `[create_match, deposit]` params (durations, sealWindow, penalty, oracle tolerance).
+ * A published, hashed game template (plan_v2 §C/§H). One template per (tier × supported feed).
+ * The `configHash` is the **rules-only** hash (buy-in / fill-window / buy-in-derived blinds are
+ * excluded — see `rulesProjection`), so a single template covers the entire buy-in/fill-window
+ * range. The on-chain allowlist enforces this hash; clients combine the template's rules with
+ * their chosen buy-in/fill-window (within `[buyInMin, buyInMax]` / `[fillWindowMinSec, fillWindowMaxSec]`)
+ * to build the `[create_match, deposit]` params.
  */
 export interface GameTemplate {
   templateId: string;
   tierId: string;
   label: string;
   feed: string;
-  buyIn: number;
+  buyInMin: number;
+  buyInMax: number;
+  fillWindowMinSec: number;
+  fillWindowMaxSec: number;
   config: MatchConfig;
   configHash: string;
   totalBettingDurationSec: number;
@@ -358,8 +404,7 @@ export function buildTemplates(): GameTemplate[] {
   const catalog = buildConfigCatalog();
   const out: GameTemplate[] = [];
   for (const tier of catalog.tiers) {
-    const feeds = tier.practiceMode ? catalog.feeds : catalog.feeds;
-    for (const feed of feeds) {
+    for (const feed of catalog.feeds) {
       const t = getTierForFeed(tier.tierId, feed);
       if (!t) continue;
       const bound = bindConfig(t.config);
@@ -368,7 +413,10 @@ export function buildTemplates(): GameTemplate[] {
         tierId: tier.tierId,
         label: tier.label,
         feed,
-        buyIn: t.buyIn,
+        buyInMin: t.buyInMin,
+        buyInMax: t.buyInMax,
+        fillWindowMinSec: t.fillWindowMinSec,
+        fillWindowMaxSec: t.fillWindowMaxSec,
         config: t.config,
         configHash: bound.hash,
         totalBettingDurationSec: totalBettingDurationSec(t.config),
