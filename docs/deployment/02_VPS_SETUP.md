@@ -262,7 +262,17 @@ This guide is safe to run on a partially‑configured host:
 ## Appendix B — Optional: native (non‑Docker) runtime
 
 Guide `03` uses Docker. If you are explicitly asked to run services **without** Docker (via
-`systemd`, using the units in `docs/deployment/systemd/`), you would instead install on the
-host: Node.js 22, the Rust toolchain, and `postgresql-client`, then build the Rust binaries
-with `cargo build --release`. The Docker path in guide `03` is recommended and complete for
-all services; only follow this appendix if specifically instructed.
+`systemd`, using the units in `docs/deployment/systemd/`), install on the host:
+
+- **Node.js 24** — the Node services (gateway, matchmaking, action-feed, config,
+  settlement-chain) build/run on Node 24 in Docker; match that natively to avoid lockfile/runtime
+  drift.
+- **Rust toolchain** (`cargo build --release`) for the Rust services (match-engine,
+  match-orchestrator, settlement-worker).
+- **Go 1.24+** for `services/signed-price-server` (the v1 oracle; `make build` or its Dockerfile).
+- **`postgresql-client`** for migrations.
+
+The Docker path in guide `03` is recommended and complete for the eight app services; only follow
+this appendix if specifically instructed. Note `services/signed-price-server` is **not** in
+`deploy/docker-compose.app.yml` — run it from its own Dockerfile/`make` and point
+`SIGNED_PRICE_SERVER_URL` (guide 03) at it.

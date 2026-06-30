@@ -8,15 +8,21 @@
 ## 0. Inputs from guide 01
 
 ```
-SYNDICATE_PROGRAM_ID
+SYNDICATE_PROGRAM_ID    8D2Wt3pLyo… if you reused the declared id
 PROTOCOL_STATE_PDA
 SOLANA_RPC_URL_PRIMARY
 SOLANA_CLUSTER          devnet | testnet | mainnet-beta
-PYTH_RECEIVER_STACK     legacy (devnet/testnet) | upgraded (mainnet)
-PYTH_API_KEY
+PRICE_SIGNER_ADDRESS    20-byte ETH address; MUST equal the signed-price-server signing address
 CHIPS_TOKEN_MINT        SPL token mint for buy-ins (e.g. devnet USDC)
 settlement-admin-keypair.json
 ```
+
+> **v1 oracle = signed-price-server.** Settlement reads a company-signed price from
+> `services/signed-price-server` (Go), reached by `settlement-chain` at `SIGNED_PRICE_SERVER_URL`.
+> The contract verifies it against the on-chain `price_signer` you set in guide 01 §8. There is no
+> Pyth in the settlement path. The `PYTH_*` vars below are **vestigial boot requirements** (the
+> Rust worker still `panic!`s without `PYTH_API_KEY` + `PYTH_RECEIVER_STACK`); keep them set, but
+> they do **not** drive v1 settlement. See `docs/V1_COMPLETION_CHECKLIST.md` (cleanup pending).
 
 ---
 
@@ -24,7 +30,7 @@ settlement-admin-keypair.json
 
 **Infra** (`deploy/docker-compose.localnet.yml`): Postgres 16, Redis 7, NATS JetStream, MinIO, Prometheus, Grafana.
 
-**App** (`deploy/docker-compose.app.yml`):
+**App** (`deploy/docker-compose.app.yml`) — eight services:
 
 
 | Service            | Port (host)            | Health     |
@@ -38,6 +44,12 @@ settlement-admin-keypair.json
 | settlement-chain   | 18790                  | `/health`  |
 | settlement-worker  | 18084                  | `/healthz` |
 
+
+**Oracle (separate, NOT in the app compose):** `services/signed-price-server` (Go) listens on
+`:8080` (`/health`, `/prices`, `/prices/at`). It is **not** in `deploy/docker-compose.app.yml` —
+run it from its own `Dockerfile`/`make` (devnet config: `config/devnet.toml`) and point
+`SIGNED_PRICE_SERVER_URL` at it (§4). On a single VPS, `http://host.docker.internal:8080` reaches a
+host-run server from the app containers.
 
 Block public access to these ports at the Hetzner Cloud Firewall (SSH + 80/443 only). Services bind on the Docker host; use a reverse proxy later for gateway/action-feed.
 
@@ -89,9 +101,15 @@ PROTOCOL_STATE_PDA=REPLACE_ME
 CHIPS_TOKEN_MINT=REPLACE_ME
 SOLANA_RPC_URL_PRIMARY=https://api.devnet.solana.com
 SOLANA_RPC_URL_SECONDARY=
+
+# v1 oracle: settlement-chain proxies the signed-price-server (run separately, §1).
+SIGNED_PRICE_SERVER_URL=http://host.docker.internal:8080
+
+# Vestigial Pyth boot requirements — NOT used for v1 settlement, but the Rust worker
+# panics at boot without them. Keep set; any non-empty PYTH_API_KEY is fine on devnet.
 PYTH_RECEIVER_STACK=legacy
 PYTH_HERMES_URL=https://hermes.pyth.network
-PYTH_API_KEY=REPLACE_ME
+PYTH_API_KEY=unused-devnet-placeholder
 EOF
 ```
 
@@ -102,9 +120,10 @@ For **testnet**, set `SOLANA_CLUSTER=testnet`, `APP_ENV=testnet`, and
 nano deploy/secrets/app.env   # replace all REPLACE_ME values
 ```
 
-> With `PYTH_RECEIVER_STACK=legacy`, settlement-chain resolves Pyth receiver/wormhole/push ids
-> from `services/settlement-chain/pyth-stack.json`. You do **not** need to set the three
-> `PYTH_*_PROGRAM_ID` vars unless overriding.
+> `SIGNED_PRICE_SERVER_URL` defaults to `http://127.0.0.1:8080` if unset, which is wrong from inside
+> a container — set it to a host-reachable URL (`http://host.docker.internal:8080` for a host-run
+> server, or the server's container/DNS name). The on-chain `price_signer` (guide 01 §8) must match
+> that server's signing address or settlement is rejected.
 
 ### 4.2 Mainnet-beta
 
@@ -117,9 +136,15 @@ PROTOCOL_STATE_PDA=REPLACE_ME
 CHIPS_TOKEN_MINT=REPLACE_ME
 SOLANA_RPC_URL_PRIMARY=REPLACE_ME
 SOLANA_RPC_URL_SECONDARY=REPLACE_ME
-PYTH_RECEIVER_STACK=upgraded
-PYTH_HERMES_URL=https://pyth.dourolabs.app/hermes
-PYTH_API_KEY=REPLACE_ME
+
+# v1 oracle: production signed-price-server (its signer must equal the on-chain price_signer).
+SIGNED_PRICE_SERVER_URL=REPLACE_ME
+
+# Vestigial Pyth boot requirements (not used for settlement; worker panics without them).
+PYTH_RECEIVER_STACK=legacy
+PYTH_HERMES_URL=https://hermes.pyth.network
+PYTH_API_KEY=unused-placeholder
+
 DRAND_API=https://api.drand.sh
 DRAND_CHAIN_HASH=52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
 DRAND_EXPECTED_SCHEME_ID=bls-unchained-g1-rfc9380
@@ -127,7 +152,8 @@ EOF
 nano deploy/secrets/app.env
 ```
 
-Use a **paid RPC** with failover on `SOLANA_RPC_URL_SECONDARY`. Rotate `PYTH_API_KEY` via host secrets only.
+Use a **paid RPC** with failover on `SOLANA_RPC_URL_SECONDARY`. Run the production
+signed-price-server on a private network and reach it over TLS / an internal address.
 
 ---
 
@@ -143,6 +169,9 @@ x-cluster-env: &cluster-env
   CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
   SOLANA_RPC_URL_PRIMARY: ${SOLANA_RPC_URL_PRIMARY}
   SOLANA_RPC_URL_SECONDARY: ${SOLANA_RPC_URL_SECONDARY}
+  # v1 oracle: settlement-chain proxies the signed-price-server at this URL.
+  SIGNED_PRICE_SERVER_URL: ${SIGNED_PRICE_SERVER_URL}
+  # Vestigial Pyth boot requirements (not used for settlement; worker panics without them).
   PYTH_RECEIVER_STACK: ${PYTH_RECEIVER_STACK}
   PYTH_HERMES_URL: ${PYTH_HERMES_URL}
   PYTH_API_KEY: ${PYTH_API_KEY}
@@ -232,7 +261,9 @@ PGPASSWORD=syndicate psql -h localhost -U syndicate -d syndicate_local -c '\dt' 
 
 First build: **10–25 minutes** (Rust compile). Ensure swap is enabled on ≤4 GB RAM hosts (guide 02 §9).
 
-Node services (including `settlement-chain`) build on **Node 24** in Docker — required by `@pythnetwork/hermes-client` and a lockfile generated with npm 11. After `git pull`, rebuild if you previously failed on `npm ci` / `rpc-websockets` under Node 22.
+Node services (including `settlement-chain`) build on **Node 24** in Docker — required by the
+service lockfiles (npm 11). After `git pull`, rebuild if you previously failed on `npm ci` /
+`rpc-websockets` under Node 22.
 
 ```bash
 $COMPOSE_APP build
@@ -242,6 +273,32 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep syndicate-app
 # App must share syndicate-localnet_default with infra (do not pass docker-compose.localnet.yml here).
 docker exec syndicate-app-action-feed-1 getent hosts postgres
 ```
+
+### 9.1 Start the signed-price-server (oracle)
+
+`settlement-chain` proxies this for every settlement. Run it before driving any match to
+settlement (it is not part of `$COMPOSE_APP`). Example, host-run from its Dockerfile:
+
+```bash
+cd services/signed-price-server
+docker build -t syndicate-signed-price-server .
+# EDIT: ECDSA_PRIVATE_KEY (secp256k1, 0x-optional) whose ADDRESS == the on-chain price_signer (guide 01 §8).
+docker run -d --name signed-price-server -p 8080:8080 \
+  -e ECDSA_PRIVATE_KEY=<hex32> \
+  -e CONFIG_PATH=/app/config/config.toml \
+  -v "$PWD/config/devnet.toml:/app/config/config.toml:ro" \
+  syndicate-signed-price-server
+curl -s http://127.0.0.1:8080/health | jq .   # top-level "ok": true once the book is fresh
+
+# Native alternative (Go 1.24+): ECDSA_PRIVATE_KEY=<hex32> CONFIG_PATH=config/devnet.toml make run
+```
+
+> The `config/devnet.toml` `[signing].address` is the address the contract's `price_signer` must
+> equal. If you generate a fresh `ECDSA_PRIVATE_KEY`, derive its address and set it on-chain via
+> guide 01 §9 (`set_price_signer`).
+
+Confirm `SIGNED_PRICE_SERVER_URL` in `app.env` resolves to this server from inside the app
+containers (e.g. `http://host.docker.internal:8080`).
 
 ---
 
@@ -255,9 +312,12 @@ echo "match-engine:";     curl -s http://127.0.0.1:18083/healthz; echo
 echo "match-orchestrator:"; curl -s http://127.0.0.1:18086/healthz; echo
 echo "settlement-chain:"; curl -s http://127.0.0.1:18790/health | jq .
 echo "settlement-worker:"; curl -s http://127.0.0.1:18084/healthz; echo
+echo "signed-price-server:"; curl -s http://127.0.0.1:8080/health | jq .
 ```
 
-`settlement-chain` `/health` must show your `programId`, `pythStack`, `hermesUrl`, and receiver ids.
+`settlement-chain` `/health` must show your `programId`. The `signed-price-server` `/health` must
+report top-level `"ok": true` (book fresh) — settlement fails closed (`VOID`) if the signed price
+is unavailable at `scheduled_end_ts`.
 
 ```bash
 docker logs $(docker ps -qf name=settlement-worker) 2>&1 | tail -n 20
@@ -320,7 +380,9 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 | Worker: `missing required environment variable`                        | Fill `deploy/secrets/app.env`; re-export `COMPOSE_APP`                                                                                                                                                                        |
 | `settlement relay/poller error: error serializing parameter`           | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker`                                                                                                                                |
 | Wrong programId on `/health`                                           | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d`                                                                                                                                                                 |
-| Pyth settlement fails on devnet                                        | Keep `PYTH_RECEIVER_STACK=legacy`; do **not** use `upgraded` on devnet                                                                                                                                                        |
+| Worker panics: `missing PYTH_API_KEY or PYTH_API_KEY_FILE`             | Vestigial boot requirement — set any non-empty `PYTH_API_KEY` and `PYTH_RECEIVER_STACK=legacy` in `app.env` (§4). Not used for v1 settlement.                                                                                 |
+| Settlement always `VOID` / `signed price unavailable`                  | signed-price-server unreachable or book stale: check `curl $SIGNED_PRICE_SERVER_URL/health` (`"ok": true`), and that `SIGNED_PRICE_SERVER_URL` resolves from inside the app containers (use `host.docker.internal`, not `127.0.0.1`). |
+| Settlement rejected: `InvalidOracleProof`                              | On-chain `price_signer` ≠ the signed-price-server signing address. Re-run guide 01 §9 (`set_price_signer`) with the server's `[signing].address`.                                                                             |
 | OOM during build                                                       | Add swap (guide 02 §9); rebuild                                                                                                                                                                                               |
 | `network syndicate-localnet_default not found`                         | Run `$COMPOSE_INFRA up -d` first                                                                                                                                                                                              |
 

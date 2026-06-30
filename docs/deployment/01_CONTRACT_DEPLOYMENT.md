@@ -7,6 +7,11 @@ This guide deploys the Syndicate Anchor program (`services/programs`) and runs t
 `initialize_protocol` transaction. After this guide, proceed to [02_VPS_SETUP.md](./02_VPS_SETUP.md)
 then [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md).
 
+> **v1 oracle is the signed-price-server, not Pyth.** The program verifies a company-signed price
+> (secp256k1 / EIP-191) against `ProtocolState.price_signer` — a 20-byte Ethereum address you set in
+> `initialize_protocol` (§8) and can rotate later with `set_price_signer` (§9). There is **no
+> on-chain Pyth receiver** and you do **not** deploy any Pyth program.
+
 ---
 
 ## 0. Choose your cluster
@@ -19,11 +24,11 @@ export SOLANA_RPC_URL=https://api.devnet.solana.com
 # mainnet:  export SOLANA_RPC_URL=https://api.mainnet-beta.solana.com   # prefer a paid RPC provider
 ```
 
-| Cluster | Funding | Pyth stack for backend (guide 03) |
-|---------|---------|-----------------------------------|
-| **devnet** | `solana airdrop` / faucet | `PYTH_RECEIVER_STACK=legacy` |
-| **testnet** | `solana airdrop` / faucet | `PYTH_RECEIVER_STACK=legacy` |
-| **mainnet-beta** | Real SOL; **multisig upgrade authority** | `PYTH_RECEIVER_STACK=upgraded` |
+| Cluster | Funding | Oracle / signer |
+|---------|---------|-----------------|
+| **devnet** | `solana airdrop` / faucet | devnet signed-price-server signer (see §8/§9) |
+| **testnet** | `solana airdrop` / faucet | same |
+| **mainnet-beta** | Real SOL; **multisig upgrade authority** | production signed-price-server signer |
 
 > **Recommendation:** use **devnet** for first end-to-end rehearsal. Solana **testnet** uses the
 > same steps with a different RPC URL. **Mainnet** adds multisig ceremony and real funds — see §12.
@@ -32,11 +37,14 @@ export SOLANA_RPC_URL=https://api.devnet.solana.com
 
 ## 1. Facts from source code
 
-- Anchor program: `services/programs` · `anchor-lang = "0.32.1"` · CLI **must** be **0.32.1**.
-- Declared program id in repo: `FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS` (devnet staging).
-- Pyth: program accepts price updates from **both** Pyth Core receiver generations on-chain
-  (`services/programs/programs/syndicate_program/src/pyth_receiver.rs`). You do **not** deploy Pyth programs.
-- Backend Pyth presets: `services/settlement-chain/pyth-stack.json` (see guide 03).
+- Anchor program: `services/programs` · `anchor-lang = 0.32.1` (`Anchor.toml` toolchain).
+- **Declared program id (all clusters):** `8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX`
+  (`declare_id!` in `lib.rs`, `[programs.*]` in `Anchor.toml`).
+- **Build the `.so` with platform-tools v1.53** — the default (v1.48) fails on `edition2024` deps:
+  `cargo build-sbf --tools-version v1.53 -p syndicate-program`.
+- Oracle: company-signed price verified in `signed_price.rs` against `ProtocolState.price_signer`.
+  No Pyth program is deployed or referenced on-chain.
+- The settlement signer (backend) is the on-chain `settlement_admin` = `emergency_void_admin`.
 
 ---
 
@@ -63,6 +71,9 @@ anchor --version   # anchor-cli 0.32.1
 solana --version
 node --version
 ```
+
+> `cargo build-sbf` downloads platform-tools on first use. `--tools-version v1.53` (§5) pins the
+> toolchain that supports the program's `edition2024` dependencies.
 
 ---
 
@@ -109,15 +120,15 @@ cd syndicate-backend
 ```bash
 cd services/programs
 
-# Important: build into the project target/ (not a sandbox CARGO_TARGET_DIR).
+# Build into the project target/ (not a sandbox CARGO_TARGET_DIR). v1.53 is required.
 unset CARGO_TARGET_DIR
-anchor build
+cargo build-sbf --tools-version v1.53 -p syndicate-program
 ```
 
-First build generates `target/deploy/syndicate_program-keypair.json` and
-`target/idl/syndicate_program.json`.
+This produces `target/deploy/syndicate_program.so` and (first build)
+`target/deploy/syndicate_program-keypair.json`.
 
-Refresh the committed frontend IDL (optional, on build host):
+Refresh the committed frontend IDL (optional, on a build host):
 
 ```bash
 cd ../..   # repo root
@@ -126,47 +137,53 @@ cd ../..   # repo root
 
 ---
 
-## 6. Program id — fresh deploy vs team staging id
+## 6. Program id — fresh deploy vs declared id
 
-### Option A — Fresh deploy (new program id)
+### Option A — Reuse the declared id `8D2Wt3pLyo…`
+
+Only if you hold the **upgrade authority** for that program (devnet authority is the deployer
+`2jUC7Ha2cUVGh7apUw7ztnckCWt4ffWCrwSVUYjJFnYt`). Upgrade in place:
 
 ```bash
 cd services/programs
-anchor keys sync
-unset CARGO_TARGET_DIR && anchor build
-export SYNDICATE_PROGRAM_ID=$(solana address -k target/deploy/syndicate_program-keypair.json)
-echo "SYNDICATE_PROGRAM_ID=$SYNDICATE_PROGRAM_ID"
-```
-
-### Option B — Reuse team devnet id `FR4tqVX…`
-
-Only if you hold the **upgrade authority** for that program (not the program keypair alone):
-
-```bash
-export SYNDICATE_PROGRAM_ID=FR4tqVX41CDmUbJEbM7Qx5hxfQnfLmCJspTab7fou3WS
-# Do NOT run anchor keys sync. Upgrade with:
+export SYNDICATE_PROGRAM_ID=8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX
 unset CARGO_TARGET_DIR
-cargo build-sbf
-solana program deploy target/sbpf-solana-solana/release/syndicate_program.so \
+cargo build-sbf --tools-version v1.53 -p syndicate-program
+solana program deploy target/deploy/syndicate_program.so \
   --program-id "$SYNDICATE_PROGRAM_ID" \
   --url "$SOLANA_RPC_URL" \
   --keypair ~/.config/solana/id.json
 ```
 
-If deploy fails with `ExtendProgram requires…`, extend then redeploy:
+If deploy fails with `account data too small` / `ExtendProgram requires…`, extend then redeploy:
 
 ```bash
 solana program extend "$SYNDICATE_PROGRAM_ID" 16384 --url "$SOLANA_RPC_URL"
 # re-run deploy command above
 ```
 
----
+### Option B — Fresh deploy (new program id)
 
-## 7. Deploy (Option A — new program)
+Use this if you do **not** hold the declared id's authority. You must update `declare_id!`
+(`lib.rs`) and all `[programs.*]` in `Anchor.toml` to the new id **in lockstep**, then rebuild:
 
 ```bash
 cd services/programs
-anchor deploy --provider.cluster "$SOLANA_CLUSTER"
+anchor keys sync                 # rewrites declare_id! + Anchor.toml to the local keypair's id
+unset CARGO_TARGET_DIR
+cargo build-sbf --tools-version v1.53 -p syndicate-program
+export SYNDICATE_PROGRAM_ID=$(solana address -k target/deploy/syndicate_program-keypair.json)
+echo "SYNDICATE_PROGRAM_ID=$SYNDICATE_PROGRAM_ID"
+```
+
+---
+
+## 7. Deploy (Option B — new program)
+
+```bash
+cd services/programs
+solana program deploy target/deploy/syndicate_program.so \
+  --url "$SOLANA_RPC_URL" --keypair ~/.config/solana/id.json
 export SYNDICATE_PROGRAM_ID=$(solana address -k target/deploy/syndicate_program-keypair.json)
 solana program show "$SYNDICATE_PROGRAM_ID" --url "$SOLANA_RPC_URL"
 ```
@@ -175,21 +192,30 @@ Explorer: `https://explorer.solana.com/address/$SYNDICATE_PROGRAM_ID?cluster=$SO
 
 ---
 
-## 8. Settlement signer + `initialize_protocol`
+## 8. Settlement signer, price signer, and `initialize_protocol`
 
-The backend signs `submit_settlement` and `void` with one keypair. On-chain:
+The backend signs `submit_settlement` / `lock` / `begin_live` / `void` with one keypair. On-chain
 **`settlement_admin` = `emergency_void_admin` = settlement signer pubkey**.
+
+The **`price_signer`** is a 20-byte **Ethereum address** (NOT a Solana key): the secp256k1 signer
+used by `services/signed-price-server`. The contract recovers this address from each settlement
+price's signature. Read it from the signed-price-server config you will run (guide 03):
+
+```bash
+# devnet signer address (services/signed-price-server/config/devnet.toml [signing].address):
+export PRICE_SIGNER_ADDRESS=0xa7BaE7da3E4950700BE9f107EB186e89a474d180   # EDIT for your deployment
+```
+
+Create the settlement signer and fund it:
 
 ```bash
 solana-keygen new --no-bip39-passphrase -o ~/settlement-admin-keypair.json
 export SETTLEMENT_PUBKEY=$(solana address -k ~/settlement-admin-keypair.json)
 echo "SETTLEMENT_PUBKEY=$SETTLEMENT_PUBKEY"
-
-# Fund for tx fees (devnet/testnet):
-solana airdrop 2 "$SETTLEMENT_PUBKEY" --url "$SOLANA_RPC_URL" || true
+solana airdrop 2 "$SETTLEMENT_PUBKEY" --url "$SOLANA_RPC_URL" || true   # devnet/testnet
 ```
 
-Create and run init script:
+Create and run the init script:
 
 ```bash
 mkdir -p ~/synd-init && cd ~/synd-init
@@ -211,8 +237,12 @@ const PROGRAM_ID = new PublicKey(process.env.SYNDICATE_PROGRAM_ID);
 const PAYER = loadKey(process.env.DEPLOYER_KEYPAIR);
 const SETTLEMENT_PUBKEY = new PublicKey(process.env.SETTLEMENT_PUBKEY);
 const DEPLOYER_PUBKEY = PAYER.publicKey;
+// 20-byte Ethereum price signer (hex, 0x-optional).
+const PRICE_SIGNER = Buffer.from(process.env.PRICE_SIGNER_ADDRESS.replace(/^0x/, ''), 'hex');
+if (PRICE_SIGNER.length !== 20) throw new Error('PRICE_SIGNER_ADDRESS must be 20 bytes');
 
-const roles = {
+// ProtocolRoles is 8 pubkeys (32 bytes each) followed by price_signer ([u8; 20]).
+const PUBKEY_ROLES = {
   protocol_admin: DEPLOYER_PUBKEY,
   settlement_admin: SETTLEMENT_PUBKEY,
   emergency_void_admin: SETTLEMENT_PUBKEY,
@@ -222,7 +252,6 @@ const roles = {
   treasury_admin: DEPLOYER_PUBKEY,
   upgrade_authority: DEPLOYER_PUBKEY,
 };
-
 const ORDER = ['protocol_admin','settlement_admin','emergency_void_admin','pause_admin',
   'config_admin','fee_admin','treasury_admin','upgrade_authority'];
 
@@ -234,7 +263,11 @@ function disc(name) {
 }
 
 const [protocolPda] = PublicKey.findProgramAddressSync([Buffer.from('protocol')], PROGRAM_ID);
-const data = Buffer.concat([disc('initialize_protocol'), ...ORDER.map((k) => roles[k].toBuffer())]);
+const data = Buffer.concat([
+  disc('initialize_protocol'),
+  ...ORDER.map((k) => PUBKEY_ROLES[k].toBuffer()),
+  PRICE_SIGNER,
+]);
 const ix = new TransactionInstruction({
   programId: PROGRAM_ID,
   keys: [
@@ -257,45 +290,57 @@ export DEPLOYER_KEYPAIR=$HOME/.config/solana/id.json
 node init-protocol.mjs
 ```
 
-Record **`PROTOCOL_STATE_PDA`**. If it fails with “already in use”, protocol was initialized — OK.
+Record **`PROTOCOL_STATE_PDA`**. If it fails with “already in use”, the protocol was already
+initialized — that is OK (the layout is fixed at first init; to change `price_signer`, use §9).
 
 ---
 
-## 9. Pyth configuration (backend — do not deploy Pyth)
+## 9. Rotate the price signer (optional / re-key)
 
-Read canonical ids from the repo manifest:
+`set_price_signer` lets the `protocol_admin` point the protocol at a new signed-price-server signing
+address without re-initializing. Use it after rotating the server's signing key, or to recover a
+protocol that was initialized against the wrong address.
 
 ```bash
-cd /path/to/syndicate-backend
-node -e "
-const m=require('./services/settlement-chain/pyth-stack.json');
-const s=m.stacks.legacy;
-console.log('PYTH_RECEIVER_STACK=legacy');
-console.log('PYTH_HERMES_URL='+m.hermes.core);
-console.log('PYTH_RECEIVER_PROGRAM_ID='+s.receiverProgramId);
-console.log('PYTH_WORMHOLE_PROGRAM_ID='+s.wormholeProgramId);
-console.log('PYTH_PUSH_ORACLE_PROGRAM_ID='+s.pushOracleProgramId);
-console.log('--- mainnet cutover ---');
-const u=m.stacks.upgraded;
-console.log('PYTH_RECEIVER_STACK=upgraded');
-console.log('PYTH_HERMES_URL='+m.hermes.upgraded);
-console.log('PYTH_RECEIVER_PROGRAM_ID='+u.receiverProgramId);
-"
+# Same env as §8 (SOLANA_RPC_URL, SYNDICATE_PROGRAM_ID, DEPLOYER_KEYPAIR=protocol_admin, PRICE_SIGNER_ADDRESS).
+cd ~/synd-init
+cat > set-price-signer.mjs <<'EOF'
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+const PROGRAM_ID = new PublicKey(process.env.SYNDICATE_PROGRAM_ID);
+const PAYER = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(process.env.DEPLOYER_KEYPAIR, 'utf8'))));
+const ADDR = Buffer.from(process.env.PRICE_SIGNER_ADDRESS.replace(/^0x/, ''), 'hex');
+if (ADDR.length !== 20) throw new Error('PRICE_SIGNER_ADDRESS must be 20 bytes');
+const disc = (n) => createHash('sha256').update(`global:${n}`).digest().subarray(0, 8);
+const [protocolPda] = PublicKey.findProgramAddressSync([Buffer.from('protocol')], PROGRAM_ID);
+const ix = new TransactionInstruction({
+  programId: PROGRAM_ID,
+  keys: [
+    { pubkey: PAYER.publicKey, isSigner: true, isWritable: false },
+    { pubkey: protocolPda, isSigner: false, isWritable: true },
+  ],
+  data: Buffer.concat([disc('set_price_signer'), ADDR]),
+});
+const conn = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
+const sig = await conn.sendTransaction(new Transaction().add(ix), [PAYER]);
+await conn.confirmTransaction(sig, 'confirmed');
+console.log('set_price_signer tx:', sig);
+EOF
+node set-price-signer.mjs
 ```
-
-For **mainnet**, use the `upgraded` block and a real `PYTH_API_KEY` from [Pyth Terminal](https://terminal.pyth.network/).
 
 ---
 
 ## 10. Hand-off checklist (→ guide 03)
 
 ```
-SYNDICATE_PROGRAM_ID     = <§6/§7>
+SYNDICATE_PROGRAM_ID     = <§6/§7>     # 8D2Wt3pLyo… if you reused the declared id
 PROTOCOL_STATE_PDA       = <§8>
 SOLANA_RPC_URL_PRIMARY   = <§0>
 SOLANA_CLUSTER           = devnet | testnet | mainnet-beta
-PYTH_RECEIVER_STACK      = legacy (devnet/testnet) | upgraded (mainnet)
-PYTH_API_KEY             = <secret — never commit>
+PRICE_SIGNER_ADDRESS     = <§8>        # must equal the signed-price-server signing address
+SIGNED_PRICE_SERVER_URL  = <guide 03>  # settlement-chain reaches the server at this URL
 CHIPS_TOKEN_MINT         = <SPL mint players deposit — e.g. devnet USDC>
 ```
 
@@ -309,24 +354,29 @@ Secure file transfer (never paste in chat):
 
 ## 11. Smoke test (devnet / testnet)
 
-Optional — validates custody + Pyth settlement path against your deployment:
+The authoritative end-to-end gate is `services/e2e` (Phase 11). It drives the full lifecycle
+(create → deposit → seal → begin_live → submit_settlement → claim) plus a void path against your
+deployed program and asserts the vault drains to **0**. It rotates `price_signer` to an
+e2e-controlled key and signs prices locally, so it needs no running signed-price-server.
 
 ```bash
-cd /path/to/syndicate-backend
-npm install --prefix services/devnet-harness
+cd /path/to/syndicate-backend/services/e2e
+npm install
 
-export PYTH_API_KEY=<your-key>
-export PYTH_HERMES_URL=https://hermes.pyth.network
-export PYTH_RECEIVER_STACK=legacy
-export SYNDICATE_PROGRAM_ID=<your program id>
-export SYNDICATE_DEVNET_RPC_URL="$SOLANA_RPC_URL"
-export SYNDICATE_DEVNET_SETTLEMENT_ONLY=1
-export SYNDICATE_DEVNET_SETTLEMENT_TS=$(($(date +%s) - 45))
+export SYNDICATE_E2E_DEVNET=1
+export PROGRAM_ID="$SYNDICATE_PROGRAM_ID"
+export SOLANA_RPC_URL="$SOLANA_RPC_URL"
+export SYNDICATE_DEVNET_KEYS_FILE=$PWD/../../devnet_testing_keys.md   # funded player keypairs
+export E2E_OPERATOR_KEYPAIR=$HOME/.config/solana/id.json             # protocol_admin / settlement_admin
 
-./scripts/devnet-lifecycle-harness.sh
+npm test     # gated test; or: npm run devnet  (verbose)
 ```
 
-Expect `settlement lifecycle complete` and both `claim ok` lines.
+Expect both `✅ happy path: status=Settled, vault=0` and `✅ void path: status=Void, vault=0`. See
+[../../services/e2e/README.md](../../services/e2e/README.md).
+
+> **Note:** the e2e gate leaves `price_signer` rotated to a throwaway key. Re-run §9 with your real
+> `PRICE_SIGNER_ADDRESS` afterward so live settlement accepts the server's prices.
 
 ---
 
@@ -337,7 +387,8 @@ Before mainnet deploy:
 1. **Multisig** for `upgrade_authority`, pause admins, and treasury roles — not a single hot wallet.
 2. **Audit** complete; see `docs/deployment/AUDIT_AND_BUG_BOUNTY.md`.
 3. **Real SOL** on deployer; no airdrop.
-4. **`PYTH_RECEIVER_STACK=upgraded`** + production Hermes API key.
+4. **Production signed-price-server** signer key; `PRICE_SIGNER_ADDRESS` set to its address and
+   verified on-chain (`set_price_signer` rotation tested on devnet first).
 5. Run `./scripts/deploy-mainnet.sh` preflight on CI before cutover.
 6. After deploy: revoke unnecessary bootstrap authorities.
 
