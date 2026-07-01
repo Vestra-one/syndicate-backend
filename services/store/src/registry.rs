@@ -95,7 +95,7 @@ impl MatchRegistryStore {
                 ],
             )
             .await
-            .map_err(map_pg)?;
+            .map_err(|e| map_pg_stmt(e, "INSERT_MATCH"))?;
         row_to_match_row(&row)
     }
 
@@ -214,19 +214,27 @@ async fn ensure_config_id(
     params: &InsertMatchParams,
 ) -> Result<String, RegistryError> {
     const CONFIG_VERSION: i32 = 1;
+
     if let Some(row) = client
-        .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[config_hash])
+        .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash.as_slice()])
         .await
-        .map_err(map_pg)?
+        .map_err(|e| map_pg_stmt(e, "SELECT_CONFIG_ID_BY_HASH"))?
     {
         return Ok(row.get(0));
     }
 
+    let oracle_exponent: i16 = params.oracle_exponent.try_into().map_err(|_| {
+        RegistryError::Invalid(format!(
+            "oracle_exponent out of range for smallint: {}",
+            params.oracle_exponent
+        ))
+    })?;
+
     let insert_params: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[
         &CONFIG_VERSION,
         &params.price_feed_symbol,
-        pyth_feed_id,
-        &params.oracle_exponent,
+        &pyth_feed_id.as_slice(),
+        &oracle_exponent,
         &params.max_oracle_confidence,
         &params.buy_in_chips,
         &params.entry_fee_chips,
@@ -234,7 +242,7 @@ async fn ensure_config_id(
         &params.rake_cap_chips,
         &params.max_players,
         &"matchmaking",
-        config_hash,
+        &config_hash.as_slice(),
     ];
 
     match client
@@ -246,23 +254,27 @@ async fn ensure_config_id(
             if let Some(row) = client
                 .query_opt(
                     ATTACH_CONFIG_HASH_BY_FEED_SQL,
-                    &[config_hash, &params.price_feed_symbol, &CONFIG_VERSION],
+                    &[
+                        &config_hash.as_slice(),
+                        &params.price_feed_symbol,
+                        &CONFIG_VERSION,
+                    ],
                 )
                 .await
-                .map_err(map_pg)?
+                .map_err(|e| map_pg_stmt(e, "ATTACH_CONFIG_HASH_BY_FEED"))?
             {
                 return Ok(row.get(0));
             }
             if let Some(row) = client
-                .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[config_hash])
+                .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash.as_slice()])
                 .await
-                .map_err(map_pg)?
+                .map_err(|e| map_pg_stmt(e, "SELECT_CONFIG_ID_BY_HASH"))?
             {
                 return Ok(row.get(0));
             }
-            return Err(map_pg(err));
+            return Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG"));
         }
-        Err(err) => return Err(map_pg(err)),
+        Err(err) => return Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG")),
     }
 }
 
@@ -291,6 +303,13 @@ fn map_pg(err: tokio_postgres::Error) -> RegistryError {
         return RegistryError::Postgres(msg);
     }
     RegistryError::Postgres(err.to_string())
+}
+
+fn map_pg_stmt(err: tokio_postgres::Error, stmt: &str) -> RegistryError {
+    match map_pg(err) {
+        RegistryError::Postgres(msg) => RegistryError::Postgres(format!("{stmt}: {msg}")),
+        other => other,
+    }
 }
 
 pub fn unix_to_datetime(secs: u64) -> Result<DateTime<Utc>, RegistryError> {
