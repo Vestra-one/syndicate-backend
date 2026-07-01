@@ -42,7 +42,7 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
       canJoinTable: (wallet, now) => enforcement.canJoinTable(wallet, now),
     },
   });
-  const deadlineWorker = redis ? new DeadlineWorker(redis, store, orchestrator) : undefined;
+  const deadlineWorker = redis ? new DeadlineWorker(redis, store, orchestrator, runtime) : undefined;
   deadlineWorker?.start();
 
   const server = createServer(async (req, res) => {

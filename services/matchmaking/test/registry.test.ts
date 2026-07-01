@@ -145,6 +145,69 @@ test('per-wallet active-room cap is enforced', async () => {
   assert.match((third as { reason: string }).reason, /cap/);
 });
 
+test('cap releases after void retire', async () => {
+  const rt = runtime({ approve: new Set(['s1', 's2', 's3']), cap: 2 });
+  const mk = (sig: string, pda: string, id: string) =>
+    rt.createRoom({ createTxSig: sig, matchPda: pda, onchainMatchId: id, configHash: CONFIG_HASH, wallet: 'HOST', seatIndex: 0 });
+  assert.equal((await mk('s1', 'PDA1', '1')).ok, true);
+  assert.equal((await mk('s2', 'PDA2', '2')).ok, true);
+  const rec = await rt.loadRoom('1');
+  assert.ok(rec);
+  await rt.retireLobbyRoom(rec, 'void');
+  const third = await mk('s3', 'PDA3', '3');
+  assert.equal(third.ok, true);
+});
+
+test('cap releases after start retire', async () => {
+  const rt = runtime({ approve: new Set(['s1', 's2']), cap: 1 });
+  const mk = (sig: string, pda: string, id: string) =>
+    rt.createRoom({ createTxSig: sig, matchPda: pda, onchainMatchId: id, configHash: CONFIG_HASH, wallet: 'HOST', seatIndex: 0 });
+  assert.equal((await mk('s1', 'PDA1', '1')).ok, true);
+  const rec = await rt.loadRoom('1');
+  assert.ok(rec);
+  await rt.retireLobbyRoom(rec, 'started');
+  const second = await mk('s2', 'PDA2', '2');
+  assert.equal(second.ok, true);
+});
+
+test('failed start without retire keeps cap blocked', async () => {
+  const rt = runtime({ approve: new Set(['s1', 's2', 's3']), cap: 2 });
+  const mk = (sig: string, pda: string, id: string) =>
+    rt.createRoom({ createTxSig: sig, matchPda: pda, onchainMatchId: id, configHash: CONFIG_HASH, wallet: 'HOST', seatIndex: 0 });
+  assert.equal((await mk('s1', 'PDA1', '1')).ok, true);
+  assert.equal((await mk('s2', 'PDA2', '2')).ok, true);
+  const third = await mk('s3', 'PDA3', '3');
+  assert.equal(third.ok, false);
+  assert.match((third as { reason: string }).reason, /cap/);
+});
+
+test('expired fill deadline does not count toward cap', async () => {
+  const rt = runtime({ approve: new Set(['s1', 's2']), cap: 1 });
+  assert.equal(
+    (await rt.createRoom({
+      createTxSig: 's1',
+      matchPda: 'PDA1',
+      onchainMatchId: '1',
+      configHash: CONFIG_HASH,
+      wallet: 'HOST',
+      seatIndex: 0,
+    })).ok,
+    true,
+  );
+  const rec = await rt.loadRoom('1');
+  assert.ok(rec);
+  rec.fillDeadlineMs = Date.now() - 1000;
+  const second = await rt.createRoom({
+    createTxSig: 's2',
+    matchPda: 'PDA2',
+    onchainMatchId: '2',
+    configHash: CONFIG_HASH,
+    wallet: 'HOST',
+    seatIndex: 0,
+  });
+  assert.equal(second.ok, true);
+});
+
 test('verified deposit seats a joiner and bumps the registry count', async () => {
   const { port, seats } = recordingPersistence();
   const rt = runtime({ approve: new Set(['sig-create', 'sig-deposit']), persistence: port });

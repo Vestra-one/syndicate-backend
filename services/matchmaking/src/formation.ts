@@ -17,7 +17,6 @@ import {
   queueKey,
   roomKey,
   roomsIndexKey,
-  walletRoomsKey,
   ROOMS_CHANNEL,
 } from './redis-keys.ts';
 import { evaluateStartPolicy } from './start-policy.ts';
@@ -25,7 +24,7 @@ import { type ChainVerifier } from './chain-verify.ts';
 import { NOOP_PERSISTENCE, type MatchPersistence } from './persistence.ts';
 
 /** Default per-wallet active-room cap (anti-spam on player-created rooms). */
-export const DEFAULT_WALLET_ROOM_CAP = 3;
+export const DEFAULT_WALLET_ROOM_CAP = 20;
 
 /** Fallback fill window when no tier/selection is resolvable (seconds). */
 const FALLBACK_FILL_WINDOW_SEC = 120;
@@ -139,7 +138,6 @@ export class MatchmakingRuntime {
   private rooms = new Map<string, FormationRecord>();
   // In-memory fallbacks when Redis is absent (tests / single-process dev).
   private seenSigs = new Map<string, unknown>();
-  private walletRooms = new Map<string, number>();
 
   constructor(opts: {
     store: MatchmakingStore;
@@ -277,7 +275,6 @@ export class MatchmakingRuntime {
     await this.store.saveTable(snapshot);
 
     await this.registerRoom(record);
-    await this.bumpWalletRooms(input.wallet, 1);
 
     const result: CreateRoomResult = {
       ok: true,
@@ -426,6 +423,32 @@ export class MatchmakingRuntime {
     };
     await this.orchestrator.triggerStartPolicy(rec.matchId, policy, ctx);
     await this.publishRoomsUpdate(rec, 'started');
+    await this.retireLobbyRoom(rec, 'started');
+  }
+
+  /**
+   * Terminal lobby transition: remove from the open-room registry so the per-wallet cap and
+   * `GET /rooms` feed reflect only active-unfilled lobbies. Idempotent — safe on retry.
+   */
+  async retireLobbyRoom(rec: FormationRecord, reason: 'started' | 'void'): Promise<void> {
+    const terminalStatus = reason === 'started' ? 'started' : 'void';
+    const table = await this.store.loadTable(rec.matchId);
+    if (table && (table.status ?? 'open') === 'open') {
+      await this.store.saveTable({ ...table, status: terminalStatus });
+    }
+
+    if (rec.roomCode) this.rooms.delete(rec.roomCode);
+    this.rooms.delete(rec.matchId);
+
+    if (this.redis) {
+      if (rec.roomCode) {
+        await this.redis.zrem(roomsIndexKey(), rec.roomCode);
+        await this.redis.del(roomKey(rec.roomCode));
+      }
+      await this.redis.zrem(deadlineKey(), rec.matchId);
+      await this.redis.del(roomKey(rec.matchId));
+      await this.publishRoomsUpdate(rec, 'retired');
+    }
   }
 
   async joinQueue(input: {
@@ -693,7 +716,7 @@ export class MatchmakingRuntime {
    * `version` lets the client discard out-of-order updates (last-writer-wins). UX-only; a missed
    * publish just means clients fall back to the `GET /rooms` pull.
    */
-  private async publishRoomsUpdate(rec: FormationRecord, kind: 'upsert' | 'started'): Promise<void> {
+  private async publishRoomsUpdate(rec: FormationRecord, kind: 'upsert' | 'started' | 'retired'): Promise<void> {
     if (!this.redis) return;
     try {
       // One extra table load per lobby mutation; seat arrays are bounded by maxPlayers (2–5).
@@ -750,24 +773,18 @@ export class MatchmakingRuntime {
     else this.seenSigs.set(sig, payload);
   }
 
+  /** Count host rooms still in the open, unfilled lobby phase (anti-spam cap input). */
   private async walletRoomCount(wallet: string): Promise<number> {
-    if (this.redis) {
-      const v = await this.redis.get(walletRoomsKey(wallet));
-      return v ? Number(v) : 0;
+    const now = Date.now();
+    const records = await this.allOpenRecords();
+    let count = 0;
+    for (const rec of records) {
+      if (rec.host !== wallet || !rec.roomCode) continue;
+      if (rec.fillDeadlineMs <= now) continue;
+      const table = await this.store.loadTable(rec.matchId);
+      const status = table?.status ?? 'open';
+      if (status === 'open') count++;
     }
-    return this.walletRooms.get(wallet) ?? 0;
-  }
-
-  private async bumpWalletRooms(wallet: string, delta: number): Promise<void> {
-    if (this.redis) {
-      // Minimal Redis client has no DECR; the cap is a soft anti-spam gate, so increment + a
-      // 24h TTL is sufficient (stale counters self-expire).
-      if (delta > 0) {
-        await this.redis.incr(walletRoomsKey(wallet));
-        await this.redis.expire(walletRoomsKey(wallet), 86_400);
-      }
-    } else {
-      this.walletRooms.set(wallet, Math.max(0, (this.walletRooms.get(wallet) ?? 0) + delta));
-    }
+    return count;
   }
 }

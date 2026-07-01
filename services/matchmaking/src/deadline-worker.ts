@@ -3,7 +3,7 @@ import { getTierForFeed, buildMatchConfig } from '../../config/src/index.ts';
 import type { MatchmakingStore } from './index.ts';
 import { deadlineKey, formationKey } from './redis-keys.ts';
 import { evaluateStartPolicy } from './start-policy.ts';
-import type { FormationRecord, OrchestratorClient } from './formation.ts';
+import type { MatchmakingRuntime, OrchestratorClient } from './formation.ts';
 import { hashMatchId } from './orchestrator-client.ts';
 
 export class DeadlineWorker {
@@ -12,15 +12,18 @@ export class DeadlineWorker {
   private redis: RedisClient;
   private store: MatchmakingStore;
   private orchestrator: OrchestratorClient;
+  private runtime: MatchmakingRuntime;
 
   constructor(
     redis: RedisClient,
     store: MatchmakingStore,
     orchestrator: OrchestratorClient,
+    runtime: MatchmakingRuntime,
   ) {
     this.redis = redis;
     this.store = store;
     this.orchestrator = orchestrator;
+    this.runtime = runtime;
   }
 
   start(intervalMs = 5_000): void {
@@ -107,8 +110,12 @@ export class DeadlineWorker {
       });
     }
     await this.redis.zrem(deadlineKey(), matchId);
-    if (policy.action === 'void' && table.mode === 'public_formation' && table.tierId && table.feedId && table.token && table.bucket) {
-      await this.redis.del(formationKey(table.tierId, table.feedId, table.token, table.bucket));
+    if (policy.action === 'void') {
+      const rec = await this.runtime.loadRoom(matchId);
+      if (rec) await this.runtime.retireLobbyRoom(rec, 'void');
+      if (table.mode === 'public_formation' && table.tierId && table.feedId && table.token && table.bucket) {
+        await this.redis.del(formationKey(table.tierId, table.feedId, table.token, table.bucket));
+      }
     }
   }
 }
