@@ -11,6 +11,7 @@ mod consumer;
 mod health;
 mod metrics;
 mod poller;
+mod public_feed;
 mod reconstruct;
 mod registry_http;
 mod relay;

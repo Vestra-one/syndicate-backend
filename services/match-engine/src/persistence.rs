@@ -168,7 +168,14 @@ impl PostgresMatchStore {
         runtime: &FencedMatchRuntime,
         envelope: &EventEnvelope,
     ) -> Result<String, PersistenceError> {
-        let payload = event_payload(&envelope.event)?;
+        let mut payload = event_payload(&envelope.event)?;
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("seq".to_string(), serde_json::json!(envelope.seq));
+            obj.insert(
+                "ts".to_string(),
+                serde_json::json!(chrono::Utc::now().timestamp_millis()),
+            );
+        }
         let event_type = event_type_name(&envelope.event);
         let now = chrono_now();
         let match_uuid = self.resolve_match_uuid(&runtime.config().match_id).await?;

@@ -12,6 +12,7 @@ use syndicate_settlement::ops::{
 use syndicate_settlement::Outcome;
 
 use crate::metrics::WorkerMetrics;
+use crate::public_feed;
 use crate::reconstruct::{parse_settlement_request, reconstruct_job, ReconstructError};
 use crate::timelock_open::TimelockOpenClient;
 
@@ -127,12 +128,19 @@ where
         }
         Err(e) => return Err(format!("{e:?}")),
     };
+    let terminal_outcome = job.outcome.clone();
     let result = ops
         .process(&job, started)
         .await
         .map_err(|e| format!("{e:?}"))?;
     match result {
         SettlementProcessResult::Final(record) => {
+            if let Err(err) =
+                public_feed::publish_terminal_public_event(pool, &record.match_id, &terminal_outcome)
+                    .await
+            {
+                eprintln!("public feed publish failed for {}: {err}", record.match_id);
+            }
             message.ack().await.map_err(|e| e.to_string())?;
             metrics.inc_messages_acked();
             metrics.inc_attempt_final(record.status);

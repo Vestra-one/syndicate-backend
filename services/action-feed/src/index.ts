@@ -14,14 +14,14 @@ export type RawEvent =
   | { kind: 'round'; matchId: string; round: number; ts: number }
   | { kind: 'seal'; matchId: string; wallet: string; ciphertext: string; ts: number } // SECRET
   | { kind: 'intent'; matchId: string; wallet: string; presigned: string; ts: number } // SECRET
-  | { kind: 'settlement'; matchId: string; settlementPrice: number; awards: { seat: number; amount: number }[]; ts: number }
+  | { kind: 'settlement'; matchId: string; settlementPrice: number; awards: { seat: number; amount: number }[]; ts: number; voided?: boolean }
   | { kind: 'reveal'; matchId: string; seat: number; prediction: number; ts: number }; // only after time-lock open
 
 export type PublicEvent =
   | { kind: 'action'; matchId: string; seat: number; action: string; amount: number; feedPrice: number; pot: number; ts: number }
   | { kind: 'fold'; matchId: string; seat: number; ts: number }
   | { kind: 'round'; matchId: string; round: number; ts: number }
-  | { kind: 'settlement'; matchId: string; settlementPrice: number; awards: { seat: number; amount: number }[]; ts: number }
+  | { kind: 'settlement'; matchId: string; settlementPrice: number; awards: { seat: number; amount: number }[]; ts: number; voided?: boolean }
   | { kind: 'reveal'; matchId: string; seat: number; prediction: number; ts: number };
 
 /**
@@ -37,7 +37,14 @@ export function projectEvent(e: RawEvent, timelockOpen: boolean): PublicEvent | 
     case 'round':
       return { kind: 'round', matchId: e.matchId, round: e.round, ts: e.ts };
     case 'settlement':
-      return { kind: 'settlement', matchId: e.matchId, settlementPrice: e.settlementPrice, awards: e.awards, ts: e.ts };
+      return {
+        kind: 'settlement',
+        matchId: e.matchId,
+        settlementPrice: e.settlementPrice,
+        awards: e.awards,
+        ts: e.ts,
+        voided: e.voided,
+      };
     case 'reveal':
       return timelockOpen
         ? { kind: 'reveal', matchId: e.matchId, seat: e.seat, prediction: e.prediction, ts: e.ts }
@@ -336,7 +343,7 @@ function applyPublicEventToModels(state: ProjectionState, event: PublicEvent): v
     state.liveGames.set(event.matchId, live);
   }
   if (event.kind === 'settlement') {
-    history.status = 'settled';
+    history.status = event.voided ? 'voided' : 'settled';
     history.settlementPrice = event.settlementPrice;
     history.summary.awardTotal = event.awards.reduce((n, a) => n + a.amount, 0);
     state.liveGames.delete(event.matchId);

@@ -465,6 +465,18 @@ VALUES ('settlement', $1::uuid, 'settlement.requested', $2::jsonb)
 RETURNING id::text, aggregate_id::text, event_type, payload::text
 "#;
 
+/// Publish a terminal public settlement/void event for action-feed projection.
+pub const INSERT_PUBLIC_MATCH_OUTBOX_SQL: &str = r#"
+INSERT INTO outbox_events (
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload
+)
+VALUES ('match', $1::uuid, $2, $3::jsonb)
+RETURNING id::text
+"#;
+
 /// Claim settlement outbox rows for relay to JetStream.
 pub const CLAIM_SETTLEMENT_OUTBOX_SQL: &str = r#"
 WITH claimed AS (

@@ -15,6 +15,7 @@ import {
   type ReplayBundle,
   type SequencedRawEvent,
 } from './index.ts';
+import { adaptEngineOutboxPayload } from './engine-outbox.ts';
 import type { ObjectStore } from './object-store.ts';
 import type { ActionFeedReadServer } from './server.ts';
 
@@ -79,13 +80,17 @@ export class ProjectionWorker {
           await this.source.ack([message]);
           continue;
         }
+        if (message.type !== 'match-event' || !message.event?.raw) {
+          await this.source.ack([message]);
+          continue;
+        }
 
         const projected = projectEvent(message.event.raw, message.event.timelockOpen);
         const existingEvents = this.state.replayEvents.get(message.event.raw.matchId) ?? [];
         const nextEvents = projected ? [...existingEvents, projected] : existingEvents;
         if (projected) await this.publisher?.publish(projected);
         let replayBundleUri: string | undefined;
-        if (message.event.raw.kind === 'settlement') {
+        if (message.event.raw.kind === 'settlement' && !message.event.raw.voided) {
           const bundle = replayBundle(message.event.raw.matchId, nextEvents);
           const object = await this.objectStore.putJson(`replays/${bundle.matchId}/${bundle.contentHash}.json`, bundle);
           replayBundleUri = object.uri;
@@ -383,7 +388,10 @@ export class PsqlOutboxProjectionSource implements ProjectionSource {
         if (split === -1) return [];
         const outboxId = line.slice(0, split);
         const payload = line.slice(split + 1);
-        return { ...(JSON.parse(payload) as ProjectionMessage), outboxId };
+        const parsed = JSON.parse(payload) as unknown;
+        const message = adaptEngineOutboxPayload(parsed, outboxId);
+        if (!message) return [];
+        return { ...message, outboxId };
       });
   }
 
