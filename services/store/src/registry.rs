@@ -83,13 +83,7 @@ impl MatchRegistryStore {
         let config_hash = decode_config_hash(&params.config_hash_hex)?;
         let pyth_feed_id = oracle_token_to_feed_id(&params.oracle_token_hex)?;
         let client = self.pool.get().await.map_err(map_pool)?;
-        let config_id = ensure_config_id(
-            &client,
-            &config_hash,
-            &params,
-            &pyth_feed_id,
-        )
-        .await?;
+        let config_id = ensure_config_id(&client, &config_hash, &pyth_feed_id, &params).await?;
         let row = client
             .query_one(
                 INSERT_MATCH_SQL,
@@ -215,13 +209,13 @@ fn row_to_match_seat(row: &Row) -> Result<PersistedMatchSeat, RegistryError> {
 
 async fn ensure_config_id(
     client: &deadpool_postgres::Object,
-    config_hash: &[u8],
+    config_hash: &Vec<u8>,
+    pyth_feed_id: &Vec<u8>,
     params: &InsertMatchParams,
-    pyth_feed_id: &[u8],
 ) -> Result<String, RegistryError> {
     const CONFIG_VERSION: i32 = 1;
     if let Some(row) = client
-        .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash])
+        .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[config_hash])
         .await
         .map_err(map_pg)?
     {
@@ -231,7 +225,7 @@ async fn ensure_config_id(
     let insert_params: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[
         &CONFIG_VERSION,
         &params.price_feed_symbol,
-        &pyth_feed_id,
+        pyth_feed_id,
         &params.oracle_exponent,
         &params.max_oracle_confidence,
         &params.buy_in_chips,
@@ -240,7 +234,7 @@ async fn ensure_config_id(
         &params.rake_cap_chips,
         &params.max_players,
         &"matchmaking",
-        &config_hash,
+        config_hash,
     ];
 
     match client
@@ -252,7 +246,7 @@ async fn ensure_config_id(
             if let Some(row) = client
                 .query_opt(
                     ATTACH_CONFIG_HASH_BY_FEED_SQL,
-                    &[&config_hash, &params.price_feed_symbol, &CONFIG_VERSION],
+                    &[config_hash, &params.price_feed_symbol, &CONFIG_VERSION],
                 )
                 .await
                 .map_err(map_pg)?
@@ -260,7 +254,7 @@ async fn ensure_config_id(
                 return Ok(row.get(0));
             }
             if let Some(row) = client
-                .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash])
+                .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[config_hash])
                 .await
                 .map_err(map_pg)?
             {
