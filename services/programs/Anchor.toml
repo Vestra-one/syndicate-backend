@@ -7,7 +7,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-syndicate_program = "GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF"
+syndicate_program = "6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d"
 
 [programs.localnet]
 syndicate_program = "8D2Wt3pLyoS8wLaTb3mcnC5WVja6xYMoumNqG2yZs1qX"

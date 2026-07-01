@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { RedisClient } from '../../gateway/src/redis.ts';
 import { EnforcementRegistry } from '../../trust-safety/src/index.ts';
@@ -25,7 +26,7 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
   // Authoritative on-chain verification lives in settlement-chain (Phase 02); matchmaking
   // delegates over HTTP so it stays zero-dependency and the predicate never forks.
   const verifyBaseUrl = process.env.SETTLEMENT_CHAIN_URL ?? 'http://127.0.0.1:8085';
-  const chainVerifier = createChainVerifier(verifyBaseUrl, process.env.SETTLEMENT_CHAIN_AUTH_TOKEN);
+  const chainVerifier = createChainVerifier(verifyBaseUrl, readAuthToken('SETTLEMENT_CHAIN_AUTH_TOKEN', 'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE'));
   // Postgres match-row writer (Phase 05). Registry is UX-only, so this is best-effort.
   const persistence = process.env.MATCH_PERSISTENCE_URL
     ? createHttpPersistence(process.env.MATCH_PERSISTENCE_URL, process.env.MATCH_PERSISTENCE_AUTH_TOKEN)
@@ -198,6 +199,14 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 function parsePort(raw: string): number {
   return parsePositiveInt(raw, 'port');
+}
+
+function readAuthToken(envName: string, fileEnvName: string): string | undefined {
+  const direct = process.env[envName];
+  if (direct) return direct;
+  const file = process.env[fileEnvName];
+  if (!file) return undefined;
+  return readFileSync(file, 'utf8').trim();
 }
 
 function parsePositiveInt(raw: string, label = 'positive integer'): number {

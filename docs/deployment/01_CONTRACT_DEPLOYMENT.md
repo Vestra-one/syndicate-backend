@@ -18,7 +18,7 @@ then [03_BACKEND_DEPLOYMENT.md](./03_BACKEND_DEPLOYMENT.md).
 
 ```bash
 # EDIT: pick ONE cluster for this deployment.
-export SOLANA_CLUSTER=devnet          # devnet | testnet | mainnet-beta
+export SOLANA_CLUSTER=devnet
 export SOLANA_RPC_URL=https://api.devnet.solana.com
 # testnet:  export SOLANA_RPC_URL=https://api.testnet.solana.com
 # mainnet:  export SOLANA_RPC_URL=https://api.mainnet-beta.solana.com   # prefer a paid RPC provider
@@ -124,8 +124,6 @@ cd syndicate-backend
 
 ```bash
 cd services/programs
-
-# Build into the project target/ (not a sandbox CARGO_TARGET_DIR). v1.53 is required.
 unset CARGO_TARGET_DIR
 cargo build-sbf --tools-version v1.53 -- -p syndicate-program
 ```
@@ -208,7 +206,7 @@ price's signature. Read it from the signed-price-server config you will run (gui
 
 ```bash
 # devnet signer address (services/signed-price-server/config/devnet.toml [signing].address):
-export PRICE_SIGNER_ADDRESS=0x29cf2F55722dBC71D5674D76553f17Ff28B939Aa   # EDIT for your deployment
+export PRICE_SIGNER_ADDRESS=0x29cf2F55722dBC71D5674D76553f17Ff28B939Aa
 ```
 
 Set the **match-creation bounds** seeded at init. These must equal the config-service constants
@@ -228,7 +226,7 @@ Create the settlement signer and fund it:
 solana-keygen new --no-bip39-passphrase -o ~/settlement-admin-keypair.json
 export SETTLEMENT_PUBKEY=$(solana address -k ~/settlement-admin-keypair.json)
 echo "SETTLEMENT_PUBKEY=$SETTLEMENT_PUBKEY"
-solana airdrop 2 "$SETTLEMENT_PUBKEY" --url "$SOLANA_RPC_URL" || true   # devnet/testnet
+solana airdrop 2 "$SETTLEMENT_PUBKEY" --url "$SOLANA_RPC_URL" || true
 ```
 
 Create and run the init script:

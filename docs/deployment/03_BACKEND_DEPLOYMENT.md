@@ -109,8 +109,8 @@ Create **one** file for your cluster. Do not edit `docs/deployment/env.example` 
 cat > deploy/secrets/app.env <<'EOF'
 APP_ENV=devnet
 SOLANA_CLUSTER=devnet
-SYNDICATE_PROGRAM_ID=GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF
-PROTOCOL_STATE_PDA=7c6RkHEjeCJC1Z6dG5ttotxYmpiR6PAKSLn8iYf3D3mH
+SYNDICATE_PROGRAM_ID=6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d
+PROTOCOL_STATE_PDA=GXJvqNTi3HGurTtsYk7G9eE4Qe9p4KjGc8qrtaV6ZsaM
 CHIPS_TOKEN_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
 SOLANA_RPC_URL_PRIMARY=https://api.devnet.solana.com
 SOLANA_RPC_URL_SECONDARY=
@@ -284,16 +284,15 @@ pass `-p 5433` (omitting it defaults to 5432 and hits a different/absent Postgre
 DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
   ./scripts/db-migrate-local.sh
 
-# Verify (note -p 5433 and 127.0.0.1 to avoid IPv6 ::1 → 5432):
 PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local -c '\dt' | head
 ```
 
 > **Re-running fails with `type "match_status" already exists`?** A previous run partially applied.
 > On a fresh DB (no real data) reset the schema and re-run:
-> ```bash
-> PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local \
->   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-> DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
+ ```bash
+PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local \
+   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
 > ```
 > Or wipe the volume entirely: `$COMPOSE_INFRA down -v && $COMPOSE_INFRA up -d` (destroys all infra data).
 
@@ -373,6 +372,7 @@ Wire the domain in [04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md). Devnet handof
 | ------------------ | ---------------------------------------- |
 | `GATEWAY_WS_URL`   | `wss://gateway.devnet.satoshitable.fun`  |
 | `ACTION_FEED_URL`  | `https://api.devnet.satoshitable.fun`    |
+| `MATCHMAKING`      | `https://matchmaking.devnet.satoshitable.fun`|
 | `CONFIG_URL`       | `https://config.devnet.satoshitable.fun` |
 | `PROGRAM_ID`       | from `app.env`                           |
 | `CHIPS_TOKEN_MINT` | from `app.env`                           |

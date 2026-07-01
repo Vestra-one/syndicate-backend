@@ -30,7 +30,7 @@ use error::SyndicateError;
 use settle_args::SettleArgs;
 use state::{MatchAccount, MatchStatus, ProtocolState, SeatAccount, SeatIndexAccount};
 
-declare_id!("GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF");
+declare_id!("6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d");
 
 /// Pinned drand beacon (League of Entropy `quicknet`, 3s period, time-lock capable).
 /// Used to (a) bound the committed button round to publish AFTER the seal deadline and
