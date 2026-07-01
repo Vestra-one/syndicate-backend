@@ -84,13 +84,16 @@ impl MatchRegistryStore {
         let pyth_feed_id = oracle_token_to_feed_id(&params.oracle_token_hex)?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let config_id = ensure_config_id(&client, &config_hash, &pyth_feed_id, &params).await?;
+        let config_uuid = uuid::Uuid::parse_str(&config_id).map_err(|e| {
+            RegistryError::Invalid(format!("invalid config_id uuid: {e}"))
+        })?;
         let row = client
             .query_one(
                 INSERT_MATCH_SQL,
                 &[
                     &params.match_key,
                     &params.onchain_match_id,
-                    &config_id,
+                    &config_uuid,
                     &params.fill_deadline,
                 ],
             )

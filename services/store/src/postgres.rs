@@ -101,20 +101,20 @@ inserted_outbox AS (
     )
     SELECT
         'match',
-        match_id,
-        event_type,
-        payload
-    FROM match_events
-    WHERE id = (SELECT id FROM inserted_event)
+        ie.match_id,
+        $7,
+        $8
+    FROM inserted_event ie
     RETURNING id
 )
 SELECT
-    inserted_event.id,
-    inserted_event.match_id,
-    inserted_event.seq,
-    inserted_event.hash,
-    inserted_outbox.id AS outbox_id
-FROM inserted_event, inserted_outbox
+    ie.id,
+    ie.match_id,
+    ie.seq,
+    ie.hash,
+    io.id AS outbox_id
+FROM inserted_event ie
+JOIN inserted_outbox io ON true
 "#;
 
 /// Persist a replay snapshot at a specific event root.
@@ -913,6 +913,10 @@ mod tests {
         assert!(APPEND_MATCH_EVENT_WITH_OUTBOX_SQL.contains("event_count = $5"));
         assert!(APPEND_MATCH_EVENT_WITH_OUTBOX_SQL.contains("event_head = $6"));
         assert!(APPEND_MATCH_EVENT_WITH_OUTBOX_SQL.contains("INSERT INTO outbox_events"));
+        assert!(
+            APPEND_MATCH_EVENT_WITH_OUTBOX_SQL.contains("FROM inserted_event ie"),
+            "outbox must read from inserted_event CTE, not match_events (visibility bug)"
+        );
     }
 
     #[test]

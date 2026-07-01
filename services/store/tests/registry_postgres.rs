@@ -3,13 +3,7 @@
 //! Skipped unless `SYNDICATE_TEST_DATABASE_URL` is set.
 
 use chrono::{Duration, Utc};
-use syndicate_store::schema::POSTGRES_SCHEMA_V1;
 use syndicate_store::{InsertMatchParams, MatchRegistryStore};
-
-const MIGRATION_0003_DROP_ORACLE_DELAY: &str =
-    include_str!("../migrations/0003_drop_oracle_delay_window_sec.sql");
-const MIGRATION_0006: &str = include_str!("../migrations/0006_match_lifecycle_columns.sql");
-const MIGRATION_0007: &str = include_str!("../migrations/0007_match_config_hash.sql");
 
 fn test_database_url() -> Option<String> {
     std::env::var("SYNDICATE_TEST_DATABASE_URL")
@@ -22,26 +16,29 @@ async fn apply_schema(url: &str) {
         .await
         .expect("connect test database");
     tokio::spawn(async move {
-        if let Err(err) = connection.await {
-            eprintln!("postgres connection error: {err}");
-        }
+        let _ = connection.await;
     });
-    client
-        .batch_execute(POSTGRES_SCHEMA_V1)
+    let ready = client
+        .query_opt(
+            "SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'matches' AND column_name = 'fill_deadline_ts'",
+            &[],
+        )
         .await
-        .expect("apply schema v1");
-    client
-        .batch_execute(MIGRATION_0003_DROP_ORACLE_DELAY)
-        .await
-        .expect("apply migration 0003 drop oracle delay");
-    client
-        .batch_execute(MIGRATION_0006)
-        .await
-        .expect("apply migration 0006");
-    client
-        .batch_execute(MIGRATION_0007)
-        .await
-        .expect("apply migration 0007");
+        .expect("probe lifecycle columns")
+        .is_some();
+    if ready {
+        return;
+    }
+    use std::process::Command;
+    let status = Command::new("bash")
+        .args([
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/db-migrate-local.sh"),
+        ])
+        .env("DATABASE_URL", url)
+        .status()
+        .expect("spawn db-migrate-local.sh");
+    assert!(status.success(), "db-migrate-local.sh failed with {status}");
 }
 
 #[tokio::test]

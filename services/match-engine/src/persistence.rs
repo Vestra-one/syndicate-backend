@@ -174,7 +174,7 @@ impl PostgresMatchStore {
         let match_uuid = self.resolve_match_uuid(&runtime.config().match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let row = client
-            .query_one(
+            .query_opt(
                 APPEND_MATCH_EVENT_WITH_OUTBOX_SQL,
                 &[
                     &match_uuid,
@@ -191,6 +191,11 @@ impl PostgresMatchStore {
             )
             .await
             .map_err(map_pg)?;
+        let Some(row) = row else {
+            return Err(PersistenceError::Invalid(
+                "append rejected: stale seq/hash or lease lost".into(),
+            ));
+        };
         Ok(row.get::<_, uuid::Uuid>("outbox_id").to_string())
     }
 

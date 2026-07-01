@@ -11,9 +11,10 @@ path = "src/lib.rs"
 [dependencies]
 sha2 = "0.10"
 deadpool-postgres = "0.14"
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"] }
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
+uuid = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
