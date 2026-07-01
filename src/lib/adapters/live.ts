@@ -37,6 +37,7 @@ import type {
   OnchainSeatInfo,
   ReclaimableMatch,
   Tlock,
+  TxProgressFn,
   Wallet,
 } from './index'
 import type { Chips } from '@/lib/protocol'
@@ -174,6 +175,7 @@ async function simulateSignAndSend(
   conn: Connection,
   tx: Transaction,
   feePayer: PublicKey,
+  onProgress?: TxProgressFn,
 ): Promise<string> {
   const adapter = walletBridge.adapter
   if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
@@ -192,11 +194,13 @@ async function simulateSignAndSend(
   const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
   let sig: string
   try {
+    onProgress?.('signing') // wallet approval prompt is up
     sig = await sender.sendTransaction(tx, conn, { skipPreflight: true })
   } catch (err) {
     const code = anchorErrorCode(err)
     throw code ? new Error(code) : err
   }
+  onProgress?.('confirming') // broadcast — waiting on finality
   // A bare-signature confirmTransaction(sig, commitment) has no expiry — if the RPC's
   // signature-subscribe WS never fires (common on congested/public endpoints), this hangs
   // forever with no error surfaced. Passing the blockhash strategy bounds it to the
@@ -363,7 +367,7 @@ function createLiveChain(): ChainClient {
      * config-derived CreateParams + the signed-price token, then signs+sends.
      * Resolves on finality so the room can be reported to matchmaking.
      */
-    async createAndDeposit(input: CreateAndDepositInput): Promise<{ txSig: string; matchPda: string }> {
+    async createAndDeposit(input: CreateAndDepositInput, onProgress?: TxProgressFn): Promise<{ txSig: string; matchPda: string }> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
@@ -466,6 +470,7 @@ function createLiveChain(): ChainClient {
       const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
       let sig: string
       try {
+        onProgress?.('signing') // wallet approval prompt is up
         sig = await sender.sendTransaction(tx, conn, { skipPreflight: true })
       } catch (err: unknown) {
         const logs: string[] = (err as { logs?: string[] })?.logs ?? []
@@ -473,6 +478,7 @@ function createLiveChain(): ChainClient {
         throw err
       }
 
+      onProgress?.('confirming') // broadcast — waiting on finality
       await conn.confirmTransaction(sig, 'finalized')
       return { txSig: sig, matchPda: matchAcct.toBase58() }
     },
@@ -483,7 +489,7 @@ function createLiveChain(): ChainClient {
      * matchId here is used to look up onchainMatchId from the store terms.
      * The Anchor instruction requires the on-chain u64 match id for PDA derivation.
      */
-    async deposit(_matchId: string, seatIndex: number): Promise<string> {
+    async deposit(_matchId: string, seatIndex: number, _amount?: number, onProgress?: TxProgressFn): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
@@ -534,7 +540,7 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
-      return simulateSignAndSend(conn, tx, player)
+      return simulateSignAndSend(conn, tx, player, onProgress)
     },
 
     async claim(_matchId: string): Promise<string> {
@@ -716,6 +722,56 @@ function createLiveChain(): ChainClient {
       const tx = new Transaction()
       if (createIx) tx.add(createIx)
       tx.add(ix)
+      return simulateSignAndSend(conn, tx, player)
+    },
+
+    /**
+     * Single-signature path: bundles void_before_start + refund into one atomic tx.
+     * `simulateSignAndSend` simulates before prompting the wallet, so if someone else's
+     * void beat us to it (BadStatus), this throws pre-signature and the caller can fall
+     * back to the sequential pair with no wasted wallet prompt.
+     */
+    async cancelAndRefundSelf(onchainMatchId: string): Promise<string> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
+      if (!mintAddr) throw new Error('[live] chips token mint not configured')
+
+      const conn = getConnection()
+      const player = adapter.publicKey
+      const matchAcct = matchPda(onchainMatchId)
+      const vault = vaultPda(matchAcct)
+      const seat = seatPda(matchAcct, player)
+
+      const seatInfo = await conn.getAccountInfo(seat)
+      if (!seatInfo?.data) throw new Error('NoSeat')
+      const { seatIndex } = decodeSeatInfo(seatInfo.data as Buffer)
+      const seatIdx = seatIndexPda(matchAcct, seatIndex)
+
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const voidIx = await program.methods
+        .voidBeforeStart()
+        .accounts({ matchAccount: matchAcct })
+        .instruction()
+      const refundIx = await program.methods
+        .refund()
+        .accounts({
+          player,
+          matchAccount: matchAcct,
+          seat,
+          seatIndexAccount: seatIdx,
+          vault,
+          playerToken,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction()
+
+      const tx = new Transaction()
+      if (createIx) tx.add(createIx)
+      tx.add(voidIx, refundIx)
       return simulateSignAndSend(conn, tx, player)
     },
 

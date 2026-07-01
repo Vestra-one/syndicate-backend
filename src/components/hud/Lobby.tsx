@@ -92,6 +92,9 @@ export function Lobby() {
   return (
     <div className="lobby">
       <div className="lobby-card panel">
+        <button className="lobby-back" onClick={() => useGameStore.getState().backToDashboard()}>
+          ← Back to tables
+        </button>
         <div className="lobby-head">
           <div>
             <div className="eyebrow">

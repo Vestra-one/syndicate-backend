@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactElement } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { seatAlias } from '@/lib/seats'
+import { formatChips } from '@/lib/format'
 import { projectPot, projectSeatAngle, seatAngles, type ScreenPoint } from '@/three/table/tableView'
 import type { SeatView } from '@/lib/protocol'
 
@@ -171,7 +172,7 @@ function SeatMedallion({
       <div className="seat-label">
         <span className="seat-alias">{alias}</span>
         <span className="seat-stack mono">
-          {seat.folded ? 'folded' : seat.allIn ? 'all-in' : seat.stack}
+          {seat.folded ? 'folded' : seat.allIn ? 'all-in' : formatChips(seat.stack)}
         </span>
       </div>
     </div>

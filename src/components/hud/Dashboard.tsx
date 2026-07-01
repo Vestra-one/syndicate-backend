@@ -25,14 +25,25 @@ function sortGames(games: LiveGame[], key: DashboardSortKey): LiveGame[] {
   }
 }
 
-function liveFor(startedAt: number): string {
-  const m = Math.max(0, Math.round((Date.now() - startedAt) / 60_000))
+/** Re-render on an interval so relative-time labels (countdowns, elapsed) stay live. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs)
+    return () => clearInterval(id)
+  }, [intervalMs])
+  return now
+}
+
+function liveFor(startedAt: number, now: number): string {
+  const m = Math.max(0, Math.round((now - startedAt) / 60_000))
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-function fillDeadlineLabel(ts?: number): string {
+function fillDeadlineLabel(ts: number | undefined, now: number): string {
   if (!ts) return '—'
-  const secs = Math.max(0, Math.round((ts - Date.now()) / 1000))
+  const secs = Math.round((ts - now) / 1000)
+  if (secs <= 0) return 'closing…'
   if (secs < 60) return `${secs}s left`
   return `${Math.round(secs / 60)}m left`
 }
@@ -206,6 +217,7 @@ function WalletButton({
 // ---------------------------------------------------------------------------
 
 function UpcomingRow({ game, onJoin, index }: { game: UpcomingGame; onJoin: () => void; index: number }) {
+  const now = useNow(1000)
   const pct = game.maxPlayers > 0 ? (game.seated / game.maxPlayers) * 100 : 0
   return (
     <li className="dash-row dash-row--upcoming" onClick={onJoin} style={{ '--i': index } as React.CSSProperties}>
@@ -222,7 +234,7 @@ function UpcomingRow({ game, onJoin, index }: { game: UpcomingGame; onJoin: () =
       {game.fillDeadline ? (
         <span className="dash-col">
           <span className="eyebrow">closes</span>
-          <span className="mono">{fillDeadlineLabel(game.fillDeadline)}</span>
+          <span className="mono">{fillDeadlineLabel(game.fillDeadline, now)}</span>
         </span>
       ) : null}
       <span className="dash-join dash-join--upcoming">Join →</span>
@@ -231,6 +243,7 @@ function UpcomingRow({ game, onJoin, index }: { game: UpcomingGame; onJoin: () =
 }
 
 function ActiveRow({ game, onWatch, index }: { game: LiveGame; onWatch: () => void; index: number }) {
+  const now = useNow(15_000)
   return (
     <li className="dash-row" onClick={onWatch} style={{ '--i': index } as React.CSSProperties}>
       <span className={`dash-feed feed-${game.feed.split('/')[0].toLowerCase()}`}>{game.feed}</span>
@@ -248,7 +261,7 @@ function ActiveRow({ game, onWatch, index }: { game: LiveGame; onWatch: () => vo
       </span>
       <span className="dash-col">
         <span className="eyebrow">live for</span>
-        <span className="mono">{liveFor(game.startedAt)}</span>
+        <span className="mono">{liveFor(game.startedAt, now)}</span>
       </span>
       <span className="dash-join">Watch →</span>
     </li>
@@ -367,7 +380,7 @@ export function Dashboard() {
         <header className="dash-head">
           <div>
             <div className="brand-mark">SATOSHI'S TABLE</div>
-            <div className="eyebrow" style={{ marginTop: 3, opacity: 0.35 }}>a contest of conviction</div>
+            <div className="dash-tagline">a contest of conviction</div>
           </div>
         </header>
 
@@ -407,9 +420,9 @@ export function Dashboard() {
           {isEmpty && (
             <div className="dash-open-state">
               <div className="dash-open-icon">◎</div>
-              <div className="dash-open-title">No games at the table</div>
-              <p className="dash-open-sub">Be first in — start a table and others can join before it goes live.</p>
-              <button className="play-now-btn dash-open-cta" onClick={handleCreate}>+ New game</button>
+              <div className="dash-open-title">No games yet</div>
+              <p className="dash-open-sub">Deal the first table.</p>
+              <button className="play-now-btn dash-open-cta" onClick={handleCreate}>Deal a table</button>
             </div>
           )}
 
@@ -419,11 +432,11 @@ export function Dashboard() {
             <section className="dash-section">
               <div className="dash-section-head">
                 <span className="dash-section-dot" />
-                <span className="dash-section-label">Joinable</span>
-                <span className="dash-section-sub">open, filling seats</span>
+                <span className="dash-section-label">Open</span>
+                <span className="dash-section-sub">filling now</span>
               </div>
               {upcomingGames.length === 0 ? (
-                <div className="dash-empty eyebrow">No open tables right now</div>
+                <div className="dash-empty eyebrow">No open tables</div>
               ) : (
                 <ul className="dash-list">
                   {upcomingGames.map((g, i) => (
@@ -439,7 +452,7 @@ export function Dashboard() {
               <div className="dash-section-head">
                 <span className="dash-section-dot dash-section-dot--live" />
                 <span className="dash-section-label">Live</span>
-                <span className="dash-section-sub">games in progress</span>
+                <span className="dash-section-sub">in progress</span>
                 {sortedActive.length > 0 && (
                   <div className="dash-sorts">
                     {SORTS.map((s) => (
@@ -455,7 +468,7 @@ export function Dashboard() {
                 )}
               </div>
               {sortedActive.length === 0 ? (
-                <div className="dash-empty eyebrow">No live games right now</div>
+                <div className="dash-empty eyebrow">No live hands</div>
               ) : (
                 <ul className="dash-list">
                   {sortedActive.map((g, i) => (
@@ -471,11 +484,11 @@ export function Dashboard() {
               <div>
                 <div className="dash-create-title">Start a table</div>
                 <div className="eyebrow" style={{ opacity: 0.45 }}>
-                  Be first in — others can join before it goes live
+                  Be first in — others join before it goes live
                 </div>
               </div>
               <button className="play-now-btn" onClick={handleCreate}>
-                + New game
+                Deal a table
               </button>
             </section>
           )}

@@ -1,6 +1,6 @@
 import { useGameStore } from '@/store/gameStore'
 import type { MatchPhase } from '@/lib/protocol'
-import { ReclaimCard } from './ReclaimCard'
+import { useWaiting, WaitingStake } from './WaitingRoom'
 
 const PHASE_COPY: Record<MatchPhase, string> = {
   FILLING: 'Filling table',
@@ -19,6 +19,10 @@ const PHASE_COPY: Record<MatchPhase, string> = {
 export function RoundStatus() {
   const match = useGameStore((s) => s.match)
   const terms = useGameStore((s) => s.terms)
+  const { active: waiting } = useWaiting()
+
+  // Pre-game: "pot 0 / current bet 0" is meaningless — show the committed-stake recap instead.
+  if (waiting) return <WaitingStake />
 
   if (!match) {
     return (
@@ -47,7 +51,6 @@ export function RoundStatus() {
           <span>current bet {match.currentBet}</span>
         </div>
       </div>
-      {match.phase === 'FILLING' && <ReclaimCard onchainMatchId={terms?.onchainMatchId} />}
     </div>
   )
 }

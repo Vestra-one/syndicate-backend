@@ -3,6 +3,7 @@ import { useGameStore } from '@/store/gameStore'
 import { useNow } from '@/lib/useNow'
 import { formatClock } from '@/lib/format'
 import type { BettingAction } from '@/lib/protocol'
+import { useWaiting } from './WaitingRoom'
 
 /**
  * The action surface. Its contents follow the match phase:
@@ -15,12 +16,15 @@ export function BettingPanel() {
   const terms = useGameStore((s) => s.terms)
   const sealStatus = useGameStore((s) => s.sealStatus)
   const yourTurn = useGameStore((s) => s.yourTurn)
+  const { active: waiting } = useWaiting()
 
   const phase = match?.phase
 
-  if (phase === 'SEALING' || (phase === 'FILLING' && sealStatus === 'unsealed')) {
+  // Pre-game you may lock in your prediction early; once sealed, a calm "you're set" state.
+  if (phase === 'SEALING' || (waiting && sealStatus === 'unsealed')) {
     return <SealPanel />
   }
+  if (waiting) return <SealedWaitingPanel />
   if (phase === 'LIVE') {
     return yourTurn ? <ActionPanel /> : <WaitingPanel />
   }
@@ -95,6 +99,22 @@ function SealPanel() {
       <button className="seal-btn" onClick={submit} disabled={!valid || sealing}>
         {sealing ? 'Sealing…' : 'Seal prediction'}
       </button>
+    </div>
+  )
+}
+
+/** Prediction locked, table still filling — reassure and set expectations, no dead "waiting…". */
+function SealedWaitingPanel() {
+  return (
+    <div className="betpanel panel">
+      <div className="betpanel-head">
+        <span className="panel-title">Prediction sealed</span>
+        <span className="seal-lock" aria-hidden="true">🔒</span>
+      </div>
+      <p className="seal-note eyebrow">
+        Your call is time-locked on your device. It stays secret from everyone —
+        including the server — until the hand ends. The table begins once it fills.
+      </p>
     </div>
   )
 }

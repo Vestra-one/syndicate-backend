@@ -103,6 +103,18 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
             return
           }
           setPhase('voiding')
+          // Try the single-signature combined path first: simulation runs before any
+          // wallet prompt, so a lost race (someone else's void beat us to it) fails here
+          // with no wasted signature — just fall back to the sequential pair below.
+          try {
+            await chain.cancelAndRefundSelf(onchainMatchId)
+            setSeat(await chain.getMySeat(onchainMatchId))
+            setRefundedAmount(s.buyIn + s.entryFee)
+            setPhase('done')
+            return
+          } catch {
+            // fall through to sequential void + refund
+          }
           try {
             await chain.voidBeforeStart(onchainMatchId)
           } catch (err) {

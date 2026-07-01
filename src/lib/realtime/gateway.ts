@@ -21,6 +21,8 @@ export interface Gateway {
   subscribe(listener: GatewayListener): () => void
   /** Send a post-auth client message (act / sealPrediction / setDefault / subscribe). */
   send(msg: ClientMessage): void
+  /** True if the underlying socket is actually open — lets callers reuse an already-authenticated session instead of re-running the (wallet-signed) auth handshake. */
+  isOpen(): boolean
 }
 
 /** Open a real WebSocket gateway. Requires VITE_GATEWAY_WS_URL. */

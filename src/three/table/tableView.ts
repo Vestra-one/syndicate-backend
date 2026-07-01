@@ -60,6 +60,9 @@ function seatWorld(angleDeg: number): THREE.Vector3 {
 // above the top of the pile and a touch toward the camera so the number reads
 // over the coins rather than buried in them.
 const POT_WORLD = new THREE.Vector3(0, 0.85, 1.25)
+// The pre-game countdown sits lower and further forward than the pot label so the
+// ring rests on the open felt, clear of the price cabinet behind it.
+const FELT_CENTRE_WORLD = new THREE.Vector3(0, 0.42, 1.42)
 
 export interface ScreenPoint {
   x: number
@@ -99,4 +102,7 @@ export function projectSeatAngle(angleDeg: number): ScreenPoint | null {
 }
 export function projectPot(): ScreenPoint | null {
   return project(POT_WORLD)
+}
+export function projectFeltCentre(): ScreenPoint | null {
+  return project(FELT_CENTRE_WORLD)
 }

@@ -31,6 +31,27 @@ import { reportCreate, reportDeposit } from '@/lib/matchmaking'
 /** Resolved Play Now action: join an existing open table, or create a new one. */
 export type PlayMode = 'join' | 'create'
 
+/**
+ * A live on-chain commit (create-and-deposit or join-deposit), tracked stage-by-stage
+ * so the waiting UI narrates the real transaction lifecycle instead of a blind spinner.
+ *  preparing  → building the ix + simulating (before the wallet prompt)
+ *  signing    → the wallet approval prompt is up; we're waiting on the user
+ *  confirming → broadcast; waiting for Solana to finalize (the long wait)
+ *  confirmed  → finalized on-chain; the seat is real
+ *  error      → simulation/send/confirm failed (message in `error`)
+ */
+export type TxStageName = 'preparing' | 'signing' | 'confirming' | 'confirmed' | 'error'
+export type TxCommit = {
+  kind: PlayMode
+  stage: TxStageName
+  amount: number // total committed, token base units
+  chipsToken: string
+  feed?: string
+  seats?: string // e.g. "2/6" at commit time
+  sig?: string
+  error?: string
+}
+
 const MAX_HISTORY = 240 // ~2 min at 500ms snapshots — enough for the board chart
 const MAX_FEED = 40 // recent public events kept for the action feed
 
@@ -57,6 +78,8 @@ interface GameState {
   terms: TableTerms | null
   match: MatchStateView | null
   yourTurn: { toCall: number; minRaiseTo: number; deadline: number } | null
+  /** Epoch-ms the fill window closes (room voids if under min). Drives the waiting-room countdown. */
+  fillDeadline: number | null
 
   // self-centric, derived from the feed
   sealStatus: SealStatus
@@ -78,6 +101,7 @@ interface GameState {
   playError: string | null // resolution / commit failure surfaced to the user
   lobbySeated: number | null // seats already taken in the room being joined (from the lobby listing)
   lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
+  txProgress: TxCommit | null // live commit tx being narrated by the waiting ceremony
 
   // actions
   fetchBalance: () => Promise<void>
@@ -86,12 +110,14 @@ interface GameState {
   setDashboardSort: (key: DashboardSortKey) => void
   enterTable: (matchId: string) => Promise<void>
   leaveToDiscovery: () => void
+  backToDashboard: () => void
   connect: () => Promise<void>
   disconnect: () => void
   joinGame: (matchId: string) => Promise<void>
   createGame: () => Promise<void>
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
+  dismissTxProgress: () => void
   sealPrediction: (price: FixedPrice) => Promise<void>
   act: (action: BettingAction) => Promise<void>
   setDefault: (def: DefaultAction) => void
@@ -115,9 +141,12 @@ let createCtx: { tmpl: ConfigTemplate; priceTokenHex: string; onchainMatchId: st
  * `Error(<AnchorErrorCode>)` for program errors, or an Error with the raw message
  * otherwise — surface something actionable instead of "see console".
  */
-function depositErrorMessage(err: unknown): string {
+function depositErrorMessage(err: unknown, kind: PlayMode = 'join'): string {
   const msg = err instanceof Error ? err.message : String(err)
   // Anchor / SPL / system-program cases we can phrase better than the raw code.
+  if (/User rejected|rejected the request|denied|declined|cancell?ed/i.test(msg)) {
+    return 'You cancelled the transaction in your wallet.'
+  }
   if (/already in use|SeatAlreadyExists|AlreadySeated/i.test(msg)) {
     return 'You already have a seat at this table.'
   }
@@ -129,7 +158,9 @@ function depositErrorMessage(err: unknown): string {
   if (/block height exceeded|blockhash|expired|timed out/i.test(msg)) {
     return 'The network dropped the transaction (RPC congestion). Try again.'
   }
-  return `Deposit failed: ${msg}`
+  // Unmatched program/simulation errors can be a wall of logs — keep the card readable.
+  const verb = kind === 'create' ? 'open the table' : 'take your seat'
+  return `Couldn't ${verb} — the transaction was rejected on-chain. Check your balance and try again.`
 }
 
 /**
@@ -138,6 +169,28 @@ function depositErrorMessage(err: unknown): string {
  * gateway's lobby snapshot has. joinTable needs onchainMatchId to derive the deposit PDA,
  * so resolve the full RoomListing over the socket before showing the join Lobby.
  */
+/**
+ * Reuse an already-authenticated gateway when one is live — avoids re-running the
+ * wallet-signed nonce challenge (§3) on every createGame/joinGame call. Only tears
+ * down and reconnects (which re-signs) when there's no live session to reuse.
+ */
+async function ensureAuthedGateway(adapters: Adapters, set: SetState, get: () => GameState): Promise<boolean> {
+  if (gateway?.isOpen() && get().status === 'live') return true
+  if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
+  const gw = createGateway(adapters)
+  gateway = gw
+  unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
+  try {
+    await gw.connect() // resolves once authenticated (wallet signs the nonce)
+    set({ status: 'live' })
+    void refreshBalance(set)
+    return true
+  } catch {
+    set({ status: 'offline' })
+    return false
+  }
+}
+
 function resolveRoomListing(gw: Gateway, matchId: string, timeoutMs = 5000): Promise<RoomListing | null> {
   return new Promise((resolve) => {
     let done = false
@@ -173,6 +226,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   terms: null,
   match: null,
   yourTurn: null,
+  fillDeadline: null,
 
   sealStatus: 'unsealed',
   yourPrediction: null,
@@ -192,6 +246,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   playError: null,
   lobbySeated: null,
   lastTx: null,
+  txProgress: null,
 
   fetchBalance: async () => {
     if (!adapters) adapters = createAdapters()
@@ -242,6 +297,28 @@ export const useGameStore = create<GameState>((set, get) => ({
     void get().loadDiscovery()
   },
 
+  /**
+   * Back out of the current create/join Lobby (pre-seat) to the dashboard. Unlike
+   * `leaveToDiscovery`, this deliberately leaves the gateway connected — severing it
+   * would force a fresh (wallet-signed) auth handshake on the next create/join, which
+   * is the "double sign" this button exists to avoid users working around via refresh.
+   */
+  backToDashboard: () => {
+    joinRoom = null
+    createCtx = null
+    set({
+      view: 'discovery',
+      playMode: null,
+      playResolving: false,
+      playError: null,
+      terms: null,
+      match: null,
+      lobbySeated: null,
+      fillDeadline: null,
+    })
+    void get().loadDiscovery()
+  },
+
   /** Join an upcoming (FILLING) game by matchId — connect wallet + gateway, then show deposit Lobby. */
   joinGame: async (matchId: string) => {
     if (!adapters) adapters = createAdapters()
@@ -258,25 +335,17 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
-    if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
-    const gw = createGateway(adapters)
-    gateway = gw
-    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
-    try {
-      await gw.connect()
-      set({ status: 'live' })
-      void refreshBalance(set)
-    } catch {
-      set({ status: 'offline', playResolving: false, playError: 'Could not reach the table server.' })
+    if (!(await ensureAuthedGateway(adapters, set, get))) {
+      set({ playResolving: false, playError: 'Could not reach the table server.' })
       return
     }
 
     // Subscribe to match — live seat/board updates once we're seated.
-    gw.send({ type: 'subscribe', matchId })
+    gateway!.send({ type: 'subscribe', matchId })
 
     // Resolve the room's onchainMatchId/tierId over the lobby socket (the REST
     // discovery feed doesn't carry them), then build terms from its config template.
-    const room = await resolveRoomListing(gw, matchId)
+    const room = await resolveRoomListing(gateway!, matchId)
     if (!room) {
       set({ playResolving: false, playError: 'That table just filled up or closed — pick another.' })
       return
@@ -296,6 +365,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         lobbySeated: room.seated,
         playMode: 'join',
         playResolving: false,
+        fillDeadline: room.fillDeadline ? toEpochMs(room.fillDeadline) : null,
       })
     } catch {
       set({ playResolving: false, playError: 'Could not load table config.' })
@@ -318,16 +388,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
-    if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
-    const gw = createGateway(adapters)
-    gateway = gw
-    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
-    try {
-      await gw.connect()
-      set({ status: 'live' })
-      void refreshBalance(set)
-    } catch {
-      set({ status: 'offline', playResolving: false, playError: 'Could not reach the table server.' })
+    if (!(await ensureAuthedGateway(adapters, set, get))) {
+      set({ playResolving: false, playError: 'Could not reach the table server.' })
       return
     }
 
@@ -389,6 +451,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       playResolving: false,
       playError: null,
       lobbySeated: null,
+      fillDeadline: null,
     })
   },
 
@@ -425,10 +488,23 @@ export const useGameStore = create<GameState>((set, get) => ({
       console.warn('[joinTable] seat pre-check failed:', err)
     }
 
-    set({ seated: true }) // optimistic; revert on failure
+    const commit: TxCommit = {
+      kind: 'join',
+      stage: 'preparing',
+      amount: terms.buyIn + terms.entryFee,
+      chipsToken: terms.chipsToken,
+      feed: terms.priceFeedId,
+      seats: `${Math.max(match?.seats.length ?? 0, get().lobbySeated ?? 0)}/${terms.maxPlayers}`,
+    }
+    set({ seated: true, txProgress: commit }) // optimistic; revert on failure
     try {
-      const txSig = await adapters.chain.deposit(matchId, seatIndex, terms.buyIn + terms.entryFee)
-      set({ lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' } })
+      const txSig = await adapters.chain.deposit(matchId, seatIndex, terms.buyIn + terms.entryFee, (stage) =>
+        set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})),
+      )
+      set((s) => ({
+        lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' },
+        txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
+      }))
       // Best-effort registry report (capital safety never depends on it, §7).
       reportDeposit(matchId, {
         depositTxSig: txSig,
@@ -441,17 +517,30 @@ export const useGameStore = create<GameState>((set, get) => ({
       void refreshBalance(set)
     } catch (err) {
       console.error('deposit failed:', err)
-      set({ seated: false, playError: depositErrorMessage(err) })
+      const msg = depositErrorMessage(err)
+      set((s) => ({
+        seated: false,
+        playError: msg,
+        txProgress: s.txProgress ? { ...s.txProgress, stage: 'error', error: msg } : null,
+      }))
     }
   },
 
   /** Host create: open a new table on-chain and seat yourself (§7). */
   createTable: async () => {
-    const { seated } = get()
+    const { seated, terms } = get()
     if (!adapters || !createCtx || seated) return
     const { tmpl, priceTokenHex, onchainMatchId } = createCtx
     const p = templateToCreateParams(tmpl)
-    set({ seated: true }) // optimistic
+    const commit: TxCommit = {
+      kind: 'create',
+      stage: 'preparing',
+      amount: p.buyIn + p.entryFee,
+      chipsToken: terms?.chipsToken ?? 'USDC',
+      feed: terms?.priceFeedId,
+      seats: terms ? `1/${terms.maxPlayers}` : undefined,
+    }
+    set({ seated: true, txProgress: commit }) // optimistic
     try {
       const { txSig, matchPda } = await adapters.chain.createAndDeposit({
         onchainMatchId,
@@ -470,9 +559,14 @@ export const useGameStore = create<GameState>((set, get) => ({
         beginLiveWindowSec: p.beginLiveWindowSec,
         fillWindowSec: p.fillWindowSec,
         decimals: p.decimals,
-      })
+      }, (stage) => set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})))
       // Record the on-chain ids so subsequent ix (seal/claim) derive the right PDAs.
-      set((s) => ({ terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms, lastTx: { sig: txSig, label: 'Table created on-chain' } }))
+      set((s) => ({
+        terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms,
+        lastTx: { sig: txSig, label: 'Table created on-chain' },
+        txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
+        fillDeadline: Date.now() + p.fillWindowSec * 1000,
+      }))
       // Best-effort registry report so others can discover the room.
       reportCreate({
         createTxSig: txSig,
@@ -491,9 +585,16 @@ export const useGameStore = create<GameState>((set, get) => ({
       void refreshBalance(set)
     } catch (err) {
       console.error('create failed:', err)
-      set({ seated: false, playError: 'Creating the table failed — see console.' })
+      const msg = depositErrorMessage(err, 'create')
+      set((s) => ({
+        seated: false,
+        playError: msg,
+        txProgress: s.txProgress ? { ...s.txProgress, stage: 'error', error: msg } : null,
+      }))
     }
   },
+
+  dismissTxProgress: () => set({ txProgress: null }),
 
   sealPrediction: async (price) => {
     const { terms, match, sealStatus } = get()
@@ -577,10 +678,16 @@ export const useGameStore = create<GameState>((set, get) => ({
       seated: false,
       feed: [],
       priceHistory: [],
+      fillDeadline: null,
     })
     await get().createGame()
   },
 }))
+
+/** On-chain deadlines are unix seconds; the UI counts down in epoch-ms. Pass through values already in ms. */
+function toEpochMs(deadline: number): number {
+  return deadline > 1e12 ? deadline : deadline * 1000
+}
 
 type SetState = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void
 

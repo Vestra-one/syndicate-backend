@@ -8,6 +8,8 @@ import { Seats } from './Seats'
 import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
+import { TxCeremony } from './TxCeremony'
+import { WaitingRoom } from './WaitingRoom'
 import { useGameStore } from '@/store/gameStore'
 import './hud.css'
 
@@ -69,8 +71,10 @@ export function Hud() {
         <RoundStatus />
       </footer>
 
+      <WaitingRoom />
       <TxBanner />
       <Lobby />
+      <TxCeremony />
       <Resolution />
     </div>
   )

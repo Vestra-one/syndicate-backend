@@ -1,5 +1,5 @@
 import { useGameStore } from '@/store/gameStore'
-import { formatPrice } from '@/lib/format'
+import { formatChips, formatPrice } from '@/lib/format'
 import type { DefaultAction } from '@/lib/protocol'
 
 /**
@@ -48,9 +48,9 @@ export function YourPosition() {
 
       {match?.yourSeat != null && (
         <div className="position-row eyebrow">
-          <span>seat {match.yourSeat}</span>
-          <span className="mono">stack {match.yourStack ?? 0}</span>
-          <span className="mono">committed {match.yourExposure ?? 0}</span>
+          <span>seat {match.yourSeat + 1}</span>
+          <span className="mono">stack {formatChips(match.yourStack ?? 0)}</span>
+          <span className="mono">committed {formatChips(match.yourExposure ?? 0)}</span>
         </div>
       )}
 

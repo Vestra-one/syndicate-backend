@@ -68,14 +68,23 @@ export interface ReclaimableMatch extends OnchainMatchStatus {
   entryFeePaid: Chips
 }
 
+/**
+ * The lifecycle of an on-chain commit tx, surfaced so the UI can narrate the wait
+ * honestly (build → wallet prompt → network finality) instead of a blind spinner.
+ *  - 'signing'    → the wallet approval prompt is up; we're waiting on the user.
+ *  - 'confirming' → broadcast; waiting for the network to finalize.
+ */
+export type TxStage = 'signing' | 'confirming'
+export type TxProgressFn = (stage: TxStage) => void
+
 /** On-chain custody. The client builds; the wallet signs. Returns tx signatures. */
 export interface ChainClient {
   /** Spendable chip balance in token base units (for the wallet badge). */
   chipBalance(): Promise<Chips>
   /** Host: open a match AND seat the creator in one tx. Resolves on finality → { txSig, matchPda }. */
-  createAndDeposit(input: CreateAndDepositInput): Promise<{ txSig: string; matchPda: string }>
+  createAndDeposit(input: CreateAndDepositInput, onProgress?: TxProgressFn): Promise<{ txSig: string; matchPda: string }>
   /** buy-in + entry fee; resolves on finality (seat is then granted). */
-  deposit(matchId: string, seatIndex: SeatIndex, amount: Chips): Promise<string>
+  deposit(matchId: string, seatIndex: SeatIndex, amount: Chips, onProgress?: TxProgressFn): Promise<string>
   /** pull payout after SETTLED (idempotent). */
   claim(matchId: string): Promise<string>
   /** reclaim deposit + entry fee after VOID. */
@@ -93,6 +102,13 @@ export interface ChainClient {
    * Idempotent: an already-claimed seat throws an error whose message is `AlreadyClaimed`.
    */
   refundSelf(onchainMatchId: string): Promise<string>
+  /**
+   * Single-signature optimistic path: bundles `void_before_start` + `refund` into one
+   * atomic transaction for a match still FILLING past its deadline. If someone else's
+   * void beat us to it, the whole transaction fails at simulation (before any wallet
+   * prompt) — callers should fall back to the sequential `voidBeforeStart`/`refundSelf` pair.
+   */
+  cancelAndRefundSelf(onchainMatchId: string): Promise<string>
   /** Scan the connected wallet's seats for matches stuck FILLING past deadline, or already VOID. */
   listReclaimableMatches(): Promise<ReclaimableMatch[]>
 }

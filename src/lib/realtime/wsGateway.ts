@@ -42,6 +42,9 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
           }
         }
         sock.onerror = () => reject(new Error('socket error'))
+        // If the socket drops after auth (no in-flight connect() promise to reject),
+        // null it out so isOpen() correctly reports the session as dead.
+        sock.onclose = () => { if (ws === sock) ws = null }
       })
     },
     disconnect() {
@@ -55,6 +58,9 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
     },
     send(msg) {
       ws?.send(JSON.stringify(msg))
+    },
+    isOpen() {
+      return ws?.readyState === WebSocket.OPEN
     },
   }
 }
