@@ -72,8 +72,13 @@ test('verified create registers a room and persists match + creator seat', async
   assert.equal(matches.length, 1);
   assert.equal(seats.length, 1);
   assert.deepEqual((matches[0] as { onchainMatchId: string }).onchainMatchId, '111');
+  assert.equal((matches[0] as { matchKey: string }).matchKey, '111');
+  assert.equal((out as { matchId: string }).matchId, '111');
+  assert.equal((out as { matchPda: string }).matchPda, 'PDA1');
   const rooms = await rt.listRooms({});
   assert.equal(rooms.length, 1);
+  assert.equal(rooms[0].matchId, '111');
+  assert.equal(rooms[0].onchainMatchId, '111');
   assert.equal(rooms[0].seated, 1);
   assert.equal(rooms[0].configHash, CONFIG_HASH);
   // Gap 3: seat identity exposed for the lobby feed.
@@ -153,7 +158,7 @@ test('verified deposit seats a joiner and bumps the registry count', async () =>
   });
   assert.equal(created.ok, true);
   const dep = await rt.verifyDeposit({
-    matchId: 'PDA1', // matchId == matchPda
+    matchId: '111',
     wallet: 'JOINER',
     txSignature: 'sig-deposit',
     seatIndex: 1,

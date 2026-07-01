@@ -543,7 +543,12 @@ LIMIT $3
 pub const LOAD_ALL_MATCH_EVENTS_SQL: &str = r#"
 SELECT seq, event_type, payload, prev_hash, hash, owner_fencing_token
 FROM match_events
-WHERE match_id = $1::uuid
+WHERE match_id = (
+    SELECT id
+    FROM matches
+    WHERE id::text = $1 OR match_key = $1 OR onchain_match_id::text = $1
+    LIMIT 1
+)
 ORDER BY seq ASC
 "#;
 
@@ -564,14 +569,24 @@ SELECT m.id::text,
        c.rake_cap_chips
 FROM matches m
 JOIN match_configs c ON c.id = m.config_id
-WHERE m.id = $1::uuid
+WHERE m.id = (
+    SELECT id
+    FROM matches
+    WHERE id::text = $1 OR match_key = $1 OR onchain_match_id::text = $1
+    LIMIT 1
+)
 "#;
 
 /// Load settled match seats in on-chain seat-index order.
 pub const LOAD_MATCH_SEATS_SQL: &str = r#"
 SELECT seat_index, wallet_address
 FROM match_seats
-WHERE match_id = $1::uuid
+WHERE match_id = (
+    SELECT id
+    FROM matches
+    WHERE id::text = $1 OR match_key = $1 OR onchain_match_id::text = $1
+    LIMIT 1
+)
   AND left_at IS NULL
 ORDER BY seat_index ASC
 "#;
@@ -611,7 +626,7 @@ RETURNING id::text, match_key, onchain_match_id, status::text, room_status
 /// Insert a seat row on a verified deposit (host or joiner).
 ///
 /// Parameters:
-/// 1. match_id uuid
+/// 1. match_id text (internal uuid, match_key, or onchain_match_id)
 /// 2. seat_index smallint
 /// 3. wallet_address text
 /// 4. deposit_signature text
@@ -622,6 +637,12 @@ RETURNING id::text, match_key, onchain_match_id, status::text, room_status
 /// txhash a no-op (idempotency); the unique `(match_id, wallet_address)` also
 /// rejects the same wallet taking two seats.
 pub const INSERT_MATCH_SEAT_SQL: &str = r#"
+WITH target_match AS (
+    SELECT id
+    FROM matches
+    WHERE id::text = $1 OR match_key = $1 OR onchain_match_id::text = $1
+    LIMIT 1
+)
 INSERT INTO match_seats (
     match_id,
     seat_index,
@@ -630,7 +651,8 @@ INSERT INTO match_seats (
     buy_in_chips,
     entry_fee_chips
 )
-VALUES ($1::uuid, $2, $3, $4, $5, $6)
+SELECT id, $2, $3, $4, $5, $6
+FROM target_match
 ON CONFLICT (match_id, seat_index) DO NOTHING
 RETURNING match_id::text, seat_index, wallet_address, deposit_signature
 "#;
@@ -639,7 +661,7 @@ RETURNING match_id::text, seat_index, wallet_address, deposit_signature
 /// record the sealed cohort, and advance the room/status projections.
 ///
 /// Parameters:
-/// 1. match_id uuid
+/// 1. match_id text (internal uuid, match_key, or onchain_match_id)
 /// 2. live_start_ts timestamptz
 /// 3. scheduled_end_ts timestamptz
 /// 4. lock_ts timestamptz
@@ -657,7 +679,9 @@ SET live_start_ts = $2::timestamptz,
     locked_at = COALESCE(locked_at, $4::timestamptz),
     status = 'active',
     room_status = 'Live'
-WHERE id = $1::uuid
+WHERE id::text = $1
+   OR match_key = $1
+   OR onchain_match_id::text = $1
 RETURNING id::text, status::text, room_status, scheduled_end_ts
 "#;
 
@@ -666,7 +690,7 @@ RETURNING id::text, status::text, room_status, scheduled_end_ts
 /// The matching `*_at` timestamp is stamped from the chosen `match_status`.
 ///
 /// Parameters:
-/// 1. match_id uuid
+/// 1. match_id text (internal uuid, match_key, or onchain_match_id)
 /// 2. room_status text ('Settled' | 'Void')
 /// 3. status match_status ('settled' | 'voided')
 /// 4. void_kind text (NULL when settled; 'FillingVoid'|'UnderMinSealed'|'Emergency' when voided)
@@ -677,7 +701,9 @@ SET room_status = $2,
     void_kind = $4,
     settled_at = CASE WHEN $3::match_status = 'settled' THEN now() ELSE settled_at END,
     voided_at  = CASE WHEN $3::match_status = 'voided'  THEN now() ELSE voided_at END
-WHERE id = $1::uuid
+WHERE id::text = $1
+   OR match_key = $1
+   OR onchain_match_id::text = $1
 RETURNING id::text, status::text, room_status, void_kind
 "#;
 

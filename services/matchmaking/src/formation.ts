@@ -201,7 +201,7 @@ export class MatchmakingRuntime {
     });
     if (!verified.ok) return { ok: false, reason: verified.reason };
 
-    const matchId = input.matchPda;
+    const matchId = input.onchainMatchId;
     const roomCode = randomBytes(4).toString('hex');
     const now = Date.now();
     // Buy-in and fill deadline are creator-selected per match and ALREADY on-chain — read the

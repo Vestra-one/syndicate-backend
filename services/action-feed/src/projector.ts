@@ -121,7 +121,6 @@ export class PsqlProjectionSink implements ProjectionSink {
   }
 
   async persistReplay(history: MatchHistory, bundle: ReplayBundle, objectUri: string): Promise<void> {
-    if (!isUuid(history.matchId)) throw new Error(`matchId must be a uuid for postgres projection: ${history.matchId}`);
     const eventRoot = sha256Hex(JSON.stringify(bundle.events));
     const summary = {
       ...history.summary,
@@ -133,6 +132,17 @@ export class PsqlProjectionSink implements ProjectionSink {
     const settlementPrice = history.settlementPrice === undefined ? 'NULL' : String(history.settlementPrice);
     const sql = `
       BEGIN;
+      CREATE TEMP TABLE IF NOT EXISTS _syndicate_projection_match (
+        match_id uuid PRIMARY KEY
+      ) ON COMMIT DELETE ROWS;
+      INSERT INTO _syndicate_projection_match (match_id)
+      SELECT id
+      FROM matches
+      WHERE id::text = ${sqlString(history.matchId)}
+         OR match_key = ${sqlString(history.matchId)}
+         OR onchain_match_id::text = ${sqlString(history.matchId)}
+      LIMIT 1;
+
       INSERT INTO replay_bundles (
         match_id,
         from_seq,
@@ -142,7 +152,7 @@ export class PsqlProjectionSink implements ProjectionSink {
         content_sha256
       )
       VALUES (
-        ${sqlString(history.matchId)}::uuid,
+        (SELECT match_id FROM _syndicate_projection_match),
         ${nonNegativeInt(bundle.fromSeq, 'fromSeq')},
         ${nonNegativeInt(bundle.toSeq, 'toSeq')},
         decode(${sqlString(eventRoot)}, 'hex'),
@@ -166,7 +176,7 @@ export class PsqlProjectionSink implements ProjectionSink {
         summary
       )
       VALUES (
-        ${sqlString(history.matchId)}::uuid,
+        (SELECT match_id FROM _syndicate_projection_match),
         ${sqlString(postgresMatchStatus(history.status))}::match_status,
         ${sqlString(history.feed)},
         to_timestamp(${history.startedAt / 1000.0}),
@@ -226,7 +236,7 @@ export class PsqlProjectionSink implements ProjectionSink {
 export async function hydrateHistoricalGamesFromPsql(state: ProjectionState, databaseUrl: string): Promise<number> {
   const sql = `
     SELECT
-      match_id::text,
+      COALESCE(m.onchain_match_id::text, mh.match_id::text),
       status::text,
       price_feed_symbol,
       floor(extract(epoch from scheduled_end_ts) * 1000)::bigint,
@@ -234,9 +244,10 @@ export async function hydrateHistoricalGamesFromPsql(state: ProjectionState, dat
       settlement_price,
       replay_bundle_uri,
       summary::text
-    FROM match_history
-    WHERE status IN ('settled', 'voided')
-    ORDER BY projected_at ASC, match_id ASC
+    FROM match_history mh
+    LEFT JOIN matches m ON m.id = mh.match_id
+    WHERE mh.status IN ('settled', 'voided')
+    ORDER BY mh.projected_at ASC, mh.match_id ASC
   `;
   const { stdout } = await execFileAsync('psql', [databaseUrl, '-At', '-F', PSQL_FIELD_SEP, '-P', 'null=\\N', '-c', sql]);
   let count = 0;

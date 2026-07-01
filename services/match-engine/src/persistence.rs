@@ -104,8 +104,7 @@ impl PostgresMatchStore {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<MatchLease, PersistenceError> {
-        let match_uuid = uuid::Uuid::parse_str(match_id)
-            .map_err(|e| PersistenceError::Invalid(format!("invalid match uuid: {e}")))?;
+        let match_uuid = self.resolve_match_uuid(match_id).await?;
         let now = chrono::DateTime::from_timestamp_millis(now_ms as i64)
             .ok_or_else(|| PersistenceError::Invalid("invalid now_ms".into()))?;
         let client = self.pool.get().await.map_err(map_pool)?;
@@ -137,8 +136,7 @@ impl PostgresMatchStore {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<MatchLease, PersistenceError> {
-        let match_uuid = uuid::Uuid::parse_str(&lease.match_id)
-            .map_err(|e| PersistenceError::Invalid(format!("invalid match uuid: {e}")))?;
+        let match_uuid = self.resolve_match_uuid(&lease.match_id).await?;
         let now = chrono::DateTime::from_timestamp_millis(now_ms as i64)
             .ok_or_else(|| PersistenceError::Invalid("invalid now_ms".into()))?;
         let client = self.pool.get().await.map_err(map_pool)?;
@@ -173,12 +171,13 @@ impl PostgresMatchStore {
         let payload = event_payload(&envelope.event)?;
         let event_type = event_type_name(&envelope.event);
         let now = chrono_now();
+        let match_uuid = self.resolve_match_uuid(&runtime.config().match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let row = client
             .query_one(
                 APPEND_MATCH_EVENT_WITH_OUTBOX_SQL,
                 &[
-                    &runtime.config().match_id,
+                    &match_uuid,
                     &self.node_id,
                     &(runtime.lease().fencing_token as i64),
                     &now,
@@ -201,12 +200,13 @@ impl PostgresMatchStore {
         snapshot_payload: Value,
     ) -> Result<(), PersistenceError> {
         let snapshot = runtime.snapshot();
+        let match_uuid = self.resolve_match_uuid(&runtime.config().match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         client
             .execute(
                 INSERT_MATCH_SNAPSHOT_SQL,
                 &[
-                    &runtime.config().match_id,
+                    &match_uuid,
                     &((snapshot.next_seq.saturating_sub(1)) as i64),
                     &snapshot.head.as_slice(),
                     &(runtime.lease().fencing_token as i64),
@@ -234,9 +234,10 @@ impl PostgresMatchStore {
             "rake_bps": context.rake_bps,
             "rake_cap": context.rake_cap,
         });
+        let match_uuid = self.resolve_match_uuid(match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let row = client
-            .query_one(ENQUEUE_SETTLEMENT_REQUEST_SQL, &[&match_id, &payload])
+            .query_one(ENQUEUE_SETTLEMENT_REQUEST_SQL, &[&match_uuid, &payload])
             .await
             .map_err(map_pg)?;
         Ok(row.get::<_, String>("id"))
@@ -246,21 +247,25 @@ impl PostgresMatchStore {
         &self,
         match_id: &str,
     ) -> Result<SettlementContext, PersistenceError> {
+        let match_uuid = self.resolve_match_uuid(match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let row = client
-            .query_one(LOAD_MATCH_SETTLEMENT_CONTEXT_SQL, &[&match_id])
+            .query_one(LOAD_MATCH_SETTLEMENT_CONTEXT_SQL, &[&match_uuid.to_string()])
             .await
             .map_err(map_pg)?;
-        row_to_settlement_context(&row)
+        let mut context = row_to_settlement_context(&row)?;
+        context.match_id = match_id.to_string();
+        Ok(context)
     }
 
     pub async fn load_replay_events(
         &self,
         match_id: &str,
     ) -> Result<Vec<PersistedMatchEvent>, PersistenceError> {
+        let match_uuid = self.resolve_match_uuid(match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let snapshot_seq: i64 = match client
-            .query_opt(LOAD_LATEST_MATCH_SNAPSHOT_SQL, &[&match_id])
+            .query_opt(LOAD_LATEST_MATCH_SNAPSHOT_SQL, &[&match_uuid])
             .await
             .map_err(map_pg)?
         {
@@ -268,10 +273,32 @@ impl PostgresMatchStore {
             None => -1,
         };
         let rows = client
-            .query(LOAD_MATCH_EVENTS_AFTER_SQL, &[&match_id, &snapshot_seq])
+            .query(LOAD_MATCH_EVENTS_AFTER_SQL, &[&match_uuid, &snapshot_seq])
             .await
             .map_err(map_pg)?;
         rows.iter().map(row_to_persisted_event).collect()
+    }
+
+    async fn resolve_match_uuid(&self, match_id: &str) -> Result<uuid::Uuid, PersistenceError> {
+        if let Ok(id) = uuid::Uuid::parse_str(match_id) {
+            return Ok(id);
+        }
+        let client = self.pool.get().await.map_err(map_pool)?;
+        let row = client
+            .query_opt(
+                r#"
+                SELECT id
+                FROM matches
+                WHERE match_key = $1 OR onchain_match_id::text = $1
+                LIMIT 1
+                "#,
+                &[&match_id],
+            )
+            .await
+            .map_err(map_pg)?;
+        row.map(|r| r.get("id")).ok_or_else(|| {
+            PersistenceError::Invalid(format!("match not found for protocol match id: {match_id}"))
+        })
     }
 }
 

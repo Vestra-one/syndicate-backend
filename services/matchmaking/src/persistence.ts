@@ -12,7 +12,7 @@
  */
 
 export interface InsertMatchRow {
-  /** Postgres `matches.match_key` — the match PDA (base58). */
+  /** Postgres `matches.match_key` — the protocol match id, i.e. the on-chain u64 id as text. */
   matchKey: string;
   onchainMatchId: string;
   configHash: string;
