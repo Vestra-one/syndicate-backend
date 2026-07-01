@@ -9,7 +9,7 @@ use std::sync::Arc;
 use syndicate_settlement::ops::{
     AttemptStatus, MockSolanaClient, PostgresAttemptStore, PythFetchRequest, PythSettlementContext,
     RetryPolicy, SettlementAttemptStore, SettlementJob, SettlementOpsWorker,
-    SettlementProcessResult, SolanaMatchContext,
+    SettlementProcessResult, SignedPricePayload, SolanaMatchContext,
 };
 use syndicate_settlement::{Outcome, VoidReason};
 use syndicate_store::POSTGRES_SCHEMA_V1;
@@ -118,6 +118,42 @@ fn void_job(match_id: &str, idempotency_key: &str, event_root: [u8; 32]) -> Sett
         },
         outcome: Outcome::Void(VoidReason::OracleDegraded),
     }
+}
+
+#[tokio::test]
+async fn pg_begin_attempt_persists_oracle_audit_json() {
+    let Some(_) = test_database_url() else {
+        eprintln!(
+            "skipping pg_begin_attempt_persists_oracle_audit_json: SYNDICATE_TEST_DATABASE_URL unset"
+        );
+        return;
+    };
+    let pool = setup_pool().await;
+    let client = pool.get().await.expect("pool connection");
+    let (match_id, event_root) = insert_match(&client).await;
+    drop(client);
+
+    let mut store = PostgresAttemptStore::new(pool.clone());
+    let idempotency_key = format!("{match_id}:root-audit");
+    let mut job = void_job(&match_id, &idempotency_key, event_root);
+    job.pyth_context.signed_price = Some(SignedPricePayload {
+        token: "a7bae7da3e4950700be9f107eb186e89a474d180000000000000000000000000".into(),
+        symbol: "BTC/USD".into(),
+        price_in_wad: "1000000000000000000".into(),
+        timestamp: 1_700_000_000_000,
+        v: 27,
+        r: "0".repeat(64),
+        s: "0".repeat(64),
+        signed_at: Some(1_700_000_000_000),
+    });
+    job.pyth_context.signed_price_source_url = Some("http://signed-price.test/price".into());
+
+    let record = store.begin_attempt(&job, 1).await.unwrap();
+    assert_eq!(record.status, AttemptStatus::Pending);
+    assert!(record.oracle_audit.is_some());
+
+    let reloaded = store.get(&idempotency_key).await.unwrap().unwrap();
+    assert!(reloaded.oracle_audit.is_some());
 }
 
 #[tokio::test]

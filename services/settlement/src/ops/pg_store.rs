@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::Row;
+use tokio_postgres::types::Json;
 
 use syndicate_store::{
     INSERT_SETTLEMENT_DEAD_LETTER_SQL, LOAD_SETTLEMENT_ATTEMPT_SQL, LOCK_SETTLEMENT_ATTEMPT_SQL,
@@ -42,7 +43,20 @@ fn map_pool_err(err: impl std::fmt::Display) -> AttemptStoreError {
 }
 
 fn map_pg_err(err: tokio_postgres::Error) -> AttemptStoreError {
-    AttemptStoreError::Backend(err.to_string())
+    if let Some(db) = err.as_db_error() {
+        let mut msg = db.message().to_string();
+        if let Some(constraint) = db.constraint() {
+            msg.push_str(&format!(" (constraint: {constraint})"));
+        }
+        if let Some(detail) = db.detail() {
+            msg.push_str(&format!(" — {detail}"));
+        }
+        if let Some(hint) = db.hint() {
+            msg.push_str(&format!(" [hint: {hint}]"));
+        }
+        return AttemptStoreError::Backend(msg);
+    }
+    AttemptStoreError::Backend(format!("{err:?}"))
 }
 
 fn attempt_kind(job: &SettlementJob) -> &'static str {
@@ -110,6 +124,29 @@ async fn load_attempt(
     query_one_attempt(client, LOAD_SETTLEMENT_ATTEMPT_SQL, &[&idempotency_key]).await
 }
 
+async fn resolve_match_uuid(
+    client: &deadpool_postgres::Transaction<'_>,
+    match_id: &str,
+) -> Result<uuid::Uuid, AttemptStoreError> {
+    if let Ok(id) = uuid::Uuid::parse_str(match_id) {
+        return Ok(id);
+    }
+    let row = client
+        .query_opt(
+            r#"
+            SELECT id
+            FROM matches
+            WHERE match_key = $1 OR onchain_match_id::text = $1
+            LIMIT 1
+            "#,
+            &[&match_id],
+        )
+        .await
+        .map_err(map_pg_err)?;
+    row.map(|r| r.get("id"))
+        .ok_or_else(|| AttemptStoreError::Backend(format!("match not found: {match_id}")))
+}
+
 #[async_trait]
 impl SettlementAttemptStore for PostgresAttemptStore {
     async fn begin_attempt(
@@ -123,17 +160,19 @@ impl SettlementAttemptStore for PostgresAttemptStore {
             .query_opt(LOCK_SETTLEMENT_ATTEMPT_SQL, &[&job.idempotency_key])
             .await
             .map_err(map_pg_err)?;
+        let match_uuid = resolve_match_uuid(&transaction, &job.match_id).await?;
         let next_retry: Option<f64> = None;
         let oracle_audit = super::oracle_audit_for_job(job);
+        let oracle_audit_json = oracle_audit.as_ref().map(Json);
         let row = transaction
             .query_one(
                 UPSERT_SETTLEMENT_ATTEMPT_SQL,
                 &[
-                    &job.match_id,
+                    &match_uuid,
                     &job.idempotency_key,
                     &attempt_kind(job),
                     &job.event_root.as_slice(),
-                    &oracle_audit,
+                    &oracle_audit_json,
                     &next_retry,
                 ],
             )
@@ -224,7 +263,7 @@ impl SettlementAttemptStore for PostgresAttemptStore {
             .await
             .map_err(map_pg_err)?
             .ok_or(AttemptStoreError::NotFound)?;
-        let payload_json = serde_json::json!({ "payload": payload }).to_string();
+        let payload_json = Json(serde_json::json!({ "payload": payload }));
         transaction
             .execute(
                 INSERT_SETTLEMENT_DEAD_LETTER_SQL,

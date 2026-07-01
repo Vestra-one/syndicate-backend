@@ -40,3 +40,4 @@ services:
     environment:
       <<: *cluster-env
       SETTLEMENT_WORKER_MODE: production
+      TIMELOCK_OPEN_MODE: mock

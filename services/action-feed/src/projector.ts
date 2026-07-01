@@ -15,7 +15,7 @@ import {
   type ReplayBundle,
   type SequencedRawEvent,
 } from './index.ts';
-import { adaptEngineOutboxPayload } from './engine-outbox.ts';
+import { adaptEngineOutboxPayload, isIgnorableEngineOutboxPayload } from './engine-outbox.ts';
 import type { ObjectStore } from './object-store.ts';
 import type { ActionFeedReadServer } from './server.ts';
 
@@ -39,6 +39,7 @@ export interface PublicEventPublisher {
 
 export interface ProjectionSink {
   persistReplay(history: MatchHistory, bundle: ReplayBundle, objectUri: string): Promise<void>;
+  persistTerminalHistory(history: MatchHistory): Promise<void>;
   persistCheckpoint(checkpoint: ProjectionCheckpoint): Promise<void>;
 }
 
@@ -104,6 +105,9 @@ export class ProjectionWorker {
             history.replayBundleUri = replayBundleUri;
             await this.sink?.persistReplay(history, replayBundle(message.event.raw.matchId, nextEvents), replayBundleUri);
           }
+        } else if (message.event.raw.kind === 'settlement') {
+          const history = this.state.matchHistory.get(message.event.raw.matchId);
+          if (history) await this.sink?.persistTerminalHistory(history);
         }
         await this.sink?.persistCheckpoint(this.state.checkpoint);
         await this.source.ack([message]);
@@ -200,6 +204,52 @@ export class PsqlProjectionSink implements ProjectionSink {
           summary = EXCLUDED.summary,
           projected_at = now();
       COMMIT;
+    `;
+    await execFileAsync('psql', [this.databaseUrl, '-v', 'ON_ERROR_STOP=1', '-At', '-c', sql]);
+  }
+
+  async persistTerminalHistory(history: MatchHistory): Promise<void> {
+    const summary = {
+      ...history.summary,
+      buyIn: history.buyIn,
+      startedAt: history.startedAt,
+      lastEventTs: history.lastEventTs,
+      replayEventCount: history.replayEventCount,
+    };
+    const settlementPrice = history.settlementPrice === undefined ? 'NULL' : String(history.settlementPrice);
+    const replayBundleUri = history.replayBundleUri ? sqlString(history.replayBundleUri) : 'NULL';
+    const sql = `
+      INSERT INTO match_history (
+        match_id,
+        status,
+        price_feed_symbol,
+        scheduled_end_ts,
+        oracle_publish_time,
+        settlement_price,
+        replay_bundle_uri,
+        summary
+      )
+      SELECT
+        m.id,
+        ${sqlString(postgresMatchStatus(history.status))}::match_status,
+        ${sqlString(history.feed)},
+        to_timestamp(${history.startedAt / 1000.0}),
+        to_timestamp(${history.lastEventTs / 1000.0}),
+        ${settlementPrice},
+        ${replayBundleUri},
+        ${sqlString(JSON.stringify(summary))}::jsonb
+      FROM matches m
+      WHERE m.id::text = ${sqlString(history.matchId)}
+         OR m.match_key = ${sqlString(history.matchId)}
+         OR m.onchain_match_id::text = ${sqlString(history.matchId)}
+      LIMIT 1
+      ON CONFLICT (match_id) DO UPDATE
+      SET status = EXCLUDED.status,
+          oracle_publish_time = EXCLUDED.oracle_publish_time,
+          settlement_price = EXCLUDED.settlement_price,
+          replay_bundle_uri = COALESCE(EXCLUDED.replay_bundle_uri, match_history.replay_bundle_uri),
+          summary = EXCLUDED.summary,
+          projected_at = now();
     `;
     await execFileAsync('psql', [this.databaseUrl, '-v', 'ON_ERROR_STOP=1', '-At', '-c', sql]);
   }
@@ -363,8 +413,8 @@ export class PsqlOutboxProjectionSource implements ProjectionSource {
     const safeVisibility = positiveInt(this.visibilityTimeoutMs, 'visibilityTimeoutMs');
     const sql = `
       WITH claimed AS (
-        SELECT id
-        FROM outbox_events
+        SELECT o.id, o.aggregate_id
+        FROM outbox_events o
         WHERE status IN ('pending', 'processing') AND available_at <= now()
           AND aggregate_type = 'match'
         ORDER BY created_at, id
@@ -375,24 +425,69 @@ export class PsqlOutboxProjectionSource implements ProjectionSource {
       SET status = 'processing',
           attempts = attempts + 1,
           available_at = now() + (${safeVisibility}::bigint * interval '1 millisecond')
-      FROM claimed
-      WHERE o.id = claimed.id
-      RETURNING o.id::text, o.payload::text
+      FROM claimed c
+      WHERE o.id = c.id
+      RETURNING o.id::text, o.payload::text, (
+        SELECT COALESCE(m.onchain_match_id::text, m.match_key)
+        FROM matches m
+        WHERE m.id = o.aggregate_id
+        LIMIT 1
+      )
     `;
     const { stdout } = await execFileAsync('psql', [this.databaseUrl, '-At', '-F', '\t', '-c', sql]);
-    return stdout
-      .split('\n')
-      .filter(Boolean)
-      .flatMap((line) => {
-        const split = line.indexOf('\t');
-        if (split === -1) return [];
-        const outboxId = line.slice(0, split);
-        const payload = line.slice(split + 1);
-        const parsed = JSON.parse(payload) as unknown;
-        const message = adaptEngineOutboxPayload(parsed, outboxId);
-        if (!message) return [];
-        return { ...message, outboxId };
-      });
+    const messages: ProjectionMessage[] = [];
+    for (const line of stdout.split('\n').filter(Boolean)) {
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      const outboxId = parts[0]!;
+      const payload = parts[1]!;
+      const fallbackMatchId = parts[2] && parts[2] !== '' ? parts[2] : undefined;
+      const parsed = JSON.parse(payload) as unknown;
+      const message = adaptEngineOutboxPayload(parsed, outboxId, fallbackMatchId);
+      if (!message) {
+        if (isIgnorableEngineOutboxPayload(parsed)) {
+          await this.ackIgnorable(outboxId);
+        } else {
+          await this.deadLetterUnadaptable(outboxId);
+        }
+        continue;
+      }
+      messages.push({ ...message, outboxId });
+    }
+    return messages;
+  }
+
+  private async ackIgnorable(outboxId: string): Promise<void> {
+    if (!isUuid(outboxId)) return;
+    await execFileAsync('psql', [
+      this.databaseUrl,
+      '-At',
+      '-c',
+      `
+        UPDATE outbox_events
+        SET status = 'published'::outbox_status,
+            published_at = now(),
+            last_error = NULL
+        WHERE id = '${outboxId}'::uuid
+          AND status = 'processing'
+      `,
+    ]);
+  }
+
+  private async deadLetterUnadaptable(outboxId: string): Promise<void> {
+    if (!isUuid(outboxId)) return;
+    await execFileAsync('psql', [
+      this.databaseUrl,
+      '-At',
+      '-c',
+      `
+        UPDATE outbox_events
+        SET status = 'dead_letter'::outbox_status,
+            last_error = 'unadaptable outbox payload for action_feed'
+        WHERE id = '${outboxId}'::uuid
+          AND status = 'processing'
+      `,
+    ]);
   }
 
   async ack(messages: ProjectionMessage[]): Promise<void> {
@@ -427,7 +522,10 @@ export class PsqlOutboxProjectionSource implements ProjectionSource {
       '-c',
       `
         UPDATE outbox_events
-        SET status = CASE WHEN attempts >= ${safeMaxAttempts} THEN 'dead_letter' ELSE 'pending' END,
+        SET status = CASE
+              WHEN attempts >= ${safeMaxAttempts} THEN 'dead_letter'::outbox_status
+              ELSE 'pending'::outbox_status
+            END,
             available_at = CASE WHEN attempts >= ${safeMaxAttempts}
               THEN available_at
               ELSE now() + (${safeRetryDelay}::bigint * interval '1 millisecond')

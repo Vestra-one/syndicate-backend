@@ -172,6 +172,10 @@ pub async fn run(state: EngineServerState, addr: &str) -> Result<(), String> {
     tokio::spawn(async move {
         timeout_loop(timer_state).await;
     });
+    let lease_state = state.clone();
+    tokio::spawn(async move {
+        lease_renewal_loop(lease_state).await;
+    });
 
     loop {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
@@ -190,6 +194,35 @@ pub async fn run(state: EngineServerState, addr: &str) -> Result<(), String> {
             );
             let _ = stream.write_all(response.as_bytes()).await;
         });
+    }
+}
+
+async fn lease_renewal_loop(state: EngineServerState) {
+    let interval_ms = std::env::var("MATCH_ENGINE_LEASE_RENEW_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30_000);
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
+        let now = now_ms();
+        let mut guard = state.runtimes.lock().await;
+        let ids: Vec<String> = guard.keys().cloned().collect();
+        for match_id in ids {
+            let Some(active) = guard.get_mut(&match_id) else {
+                continue;
+            };
+            if active.runtime.engine().is_complete() {
+                continue;
+            }
+            let mut coord = state.coordinator.lock().await;
+            let Some(coordinator) = coord.as_mut() else {
+                continue;
+            };
+            let _ = coordinator
+                .renew_lease(&mut active.runtime, now)
+                .await
+                .map_err(|e| eprintln!("lease renew failed for {match_id}: {e}"));
+        }
     }
 }
 
@@ -527,6 +560,18 @@ async fn seal_match(
     )
     .unwrap_or_default();
     let player_id = PlayerId(input.player_id.unwrap_or(0));
+    let mut runtimes = state.runtimes.lock().await;
+    let Some(active) = runtimes.get_mut(match_id) else {
+        return ("404 Not Found", r#"{"error":"match not running"}"#.into());
+    };
+    let seal_seq = active
+        .runtime
+        .config()
+        .players
+        .iter()
+        .find(|(pid, _, _)| *pid == player_id)
+        .map(|(_, _, seq)| *seq)
+        .unwrap_or(0);
     let commitment_hex = input.commitment_hex.unwrap_or_else(|| "00".repeat(64));
     let blinding_hex = input.blinding_hex.unwrap_or_else(|| "00".repeat(64));
     let commitment = hex_to_32(&commitment_hex).unwrap_or([0u8; 32]);
@@ -534,14 +579,10 @@ async fn seal_match(
     let signed = SignedPredictionCommitment {
         player_id: player_id.0,
         wallet: input.wallet.unwrap_or_default(),
-        seal_seq: 0,
+        seal_seq,
         commitment,
         blinding,
         signature: input.signature.unwrap_or_else(|| "sig-dev".into()),
-    };
-    let mut runtimes = state.runtimes.lock().await;
-    let Some(active) = runtimes.get_mut(match_id) else {
-        return ("404 Not Found", r#"{"error":"match not running"}"#.into());
     };
     let mut coord = state.coordinator.lock().await;
     if let Some(coordinator) = coord.as_mut() {
@@ -568,8 +609,12 @@ async fn seal_match(
                 .await;
             return ("200 OK", r#"{"ok":true}"#.into());
         }
+        return (
+            "409 Conflict",
+            r#"{"error":"seal prediction failed"}"#.into(),
+        );
     }
-    ("200 OK", r#"{"ok":true}"#.into())
+    ("503 Service Unavailable", r#"{"error":"coordinator unavailable"}"#.into())
 }
 
 async fn get_state(state: &EngineServerState, match_id: &str) -> (&'static str, String) {
@@ -615,6 +660,10 @@ fn sized_streets(supplied: &Option<Vec<u64>>, round_count: u8, fill: u64) -> Vec
 
 fn build_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
     let round_count = input.round_count.unwrap_or(3);
+    let round_durations_sec = sized_streets(&input.round_durations_sec, round_count, 180);
+    let observation_windows_sec = sized_streets(&input.observation_windows_sec, round_count, 20);
+    let action_timeout_ms = input.action_timeout_ms.unwrap_or(25_000);
+    let time_bank_sec = input.time_bank_sec.unwrap_or(60);
     MatchConfig {
         match_id: input.match_id.clone(),
         onchain_match_id: input.onchain_match_id.unwrap_or(1),
@@ -626,12 +675,42 @@ fn build_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
         small_blind: input.small_blind.unwrap_or(1),
         big_blind: input.big_blind.unwrap_or(2),
         round_count,
-        round_durations_sec: sized_streets(&input.round_durations_sec, round_count, 180),
-        observation_windows_sec: sized_streets(&input.observation_windows_sec, round_count, 20),
-        action_timeout_ms: input.action_timeout_ms.unwrap_or(25_000),
-        time_bank_sec: input.time_bank_sec.unwrap_or(60),
-        lease_ttl_ms: 60_000,
+        round_durations_sec: round_durations_sec.clone(),
+        observation_windows_sec: observation_windows_sec.clone(),
+        action_timeout_ms,
+        time_bank_sec,
+        lease_ttl_ms: compute_lease_ttl_ms(
+            &round_durations_sec,
+            &observation_windows_sec,
+            action_timeout_ms,
+            round_count,
+            time_bank_sec,
+        ),
     }
+}
+
+/// Postgres lease must cover the full on-chain betting span plus settlement margin.
+fn compute_lease_ttl_ms(
+    round_durations_sec: &[u64],
+    observation_windows_sec: &[u64],
+    action_timeout_ms: u64,
+    round_count: u8,
+    time_bank_sec: u64,
+) -> u64 {
+    let betting_ms = round_durations_sec.iter().copied().sum::<u64>().saturating_mul(1_000);
+    let observation_ms = observation_windows_sec
+        .iter()
+        .copied()
+        .sum::<u64>()
+        .saturating_mul(1_000);
+    let action_ms = action_timeout_ms.saturating_mul(round_count as u64);
+    let time_bank_ms = time_bank_sec.saturating_mul(1_000);
+    betting_ms
+        .saturating_add(observation_ms)
+        .saturating_add(action_ms)
+        .saturating_add(time_bank_ms)
+        .saturating_add(300_000)
+        .max(600_000)
 }
 
 fn demo_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
@@ -648,7 +727,7 @@ fn demo_config(input: &StartBody, players: &[PlayerSeat]) -> MatchConfig {
             observation_windows_sec: vec![20, 20, 20],
             action_timeout_ms: 25_000,
             time_bank_sec: 60,
-            lease_ttl_ms: 60_000,
+            lease_ttl_ms: compute_lease_ttl_ms(&[180, 180, 180], &[20, 20, 20], 25_000, 3, 60),
         };
     }
     build_config(input, players)

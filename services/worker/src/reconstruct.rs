@@ -265,7 +265,7 @@ async fn load_context(pool: &Pool, match_id: &str) -> Result<LoadedContext, Reco
         price_feed_symbol: row.get("price_feed_symbol"),
         pyth_feed_id,
         buy_in_chips: row.get::<_, i64>("buy_in_chips") as u64,
-        oracle_exponent: row.get("oracle_exponent"),
+        oracle_exponent: row.get::<_, i16>("oracle_exponent") as i32,
         max_oracle_confidence: row.get::<_, i64>("max_oracle_confidence") as u64,
         rake_bps: row.get::<_, i32>("rake_bps") as u32,
         rake_cap: row.get::<_, i64>("rake_cap_chips") as u64,

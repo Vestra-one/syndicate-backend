@@ -135,9 +135,10 @@ async fn claim_rows(pool: &Pool, config: &RelayConfig) -> Result<Vec<ClaimedOutb
 
 async fn mark_published(pool: &Pool, outbox_id: &str) -> Result<(), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::parse_str(outbox_id).map_err(|e| e.to_string())?;
     let now: DateTime<Utc> = Utc::now();
     client
-        .execute(MARK_OUTBOX_PUBLISHED_SQL, &[&outbox_id, &now])
+        .execute(MARK_OUTBOX_PUBLISHED_SQL, &[&id, &now])
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -150,11 +151,12 @@ async fn mark_retry(
     error: &str,
 ) -> Result<(), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::parse_str(outbox_id).map_err(|e| e.to_string())?;
     let now: DateTime<Utc> = Utc::now();
     client
         .execute(
             MARK_OUTBOX_RETRY_SQL,
-            &[&outbox_id, &now, &retry_delay_ms, &error],
+            &[&id, &now, &retry_delay_ms, &error],
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -163,8 +165,9 @@ async fn mark_retry(
 
 async fn mark_dead_letter(pool: &Pool, outbox_id: &str, error: &str) -> Result<(), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::parse_str(outbox_id).map_err(|e| e.to_string())?;
     client
-        .execute(MARK_OUTBOX_DEAD_LETTER_SQL, &[&outbox_id, &error])
+        .execute(MARK_OUTBOX_DEAD_LETTER_SQL, &[&id, &error])
         .await
         .map_err(|e| e.to_string())?;
     Ok(())

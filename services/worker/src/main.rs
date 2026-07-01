@@ -27,7 +27,7 @@ use syndicate_settlement::ops::{
 };
 use syndicate_store::FileStore;
 use syndicate_store::Store;
-use timelock_open::DrandTimelockOpenClient;
+use timelock_open::{timelock_open_from_env, TimelockOpenBackend};
 use tokio::signal;
 use tokio::sync::{mpsc, oneshot};
 
@@ -68,7 +68,7 @@ pub async fn demo_worker_loop(mut rx: mpsc::Receiver<Job>, store_path: PathBuf) 
 struct ProductionRuntime {
     chain: SettlementChainHttpClient,
     oracle: SettlementChainHttpClient,
-    timelock: DrandTimelockOpenClient,
+    timelock: TimelockOpenBackend,
     database_url: String,
     bus_config: SettlementBusConfig,
 }
@@ -251,8 +251,8 @@ fn production_preflight() -> ProductionRuntime {
     required_env("SYNDICATE_PROGRAM_ID");
     require_pyth_receiver_env();
     required_env("SETTLEMENT_SIGNER_KEYPAIR_PATH");
-    let timelock = DrandTimelockOpenClient::from_env()
-        .unwrap_or_else(|e| panic!("drand timelock preflight failed: {e}"));
+    let timelock = timelock_open_from_env()
+        .unwrap_or_else(|e| panic!("timelock open client preflight failed: {e}"));
 
     let chain = SettlementChainHttpClient {
         base_url: chain_url.clone(),

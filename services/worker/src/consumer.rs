@@ -136,10 +136,10 @@ where
     match result {
         SettlementProcessResult::Final(record) => {
             if let Err(err) =
-                public_feed::publish_terminal_public_event(pool, &record.match_id, &terminal_outcome)
+                public_feed::publish_terminal_public_event(pool, &job.match_id, &terminal_outcome)
                     .await
             {
-                eprintln!("public feed publish failed for {}: {err}", record.match_id);
+                eprintln!("public feed publish failed for {}: {err}", job.match_id);
             }
             message.ack().await.map_err(|e| e.to_string())?;
             metrics.inc_messages_acked();

@@ -207,7 +207,8 @@ export function createProjectionState(projectionName = 'action_feed'): Projectio
 }
 
 export function applySequencedEvent(state: ProjectionState, event: SequencedRawEvent): ProjectionState {
-  if (event.seq <= state.checkpoint.lastSeq) return state;
+  const sameMatch = state.checkpoint.lastMatchId === event.raw.matchId;
+  if (sameMatch && event.seq <= state.checkpoint.lastSeq) return state;
 
   const projected = projectEvent(event.raw, event.timelockOpen);
   if (projected) {

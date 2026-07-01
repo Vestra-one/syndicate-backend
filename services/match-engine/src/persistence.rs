@@ -338,7 +338,7 @@ fn row_to_settlement_context(row: &Row) -> Result<SettlementContext, Persistence
         event_root: root,
         scheduled_end_ts: row.get::<_, i64>("scheduled_end_ts_sec") as u64,
         pyth_feed_id,
-        oracle_exponent: row.get("oracle_exponent"),
+        oracle_exponent: row.get::<_, i16>("oracle_exponent") as i32,
         max_oracle_confidence: row.get::<_, i64>("max_oracle_confidence") as u64,
         rake_bps: row.get::<_, i32>("rake_bps") as u32,
         rake_cap: row.get::<_, i64>("rake_cap_chips") as u64,

@@ -86,7 +86,7 @@ pub fn verify_prediction_commitment(
     match_id: u64,
     onchain_match_id: u64,
     seat_index: u16,
-    seal_seq: u64,
+    timelock_target: u64,
     commitment: &[u8; 32],
 ) -> Result<(), VerifyError> {
     let pk = decode_wallet_pubkey(wallet)?;
@@ -95,7 +95,7 @@ pub fn verify_prediction_commitment(
         onchain_match_id,
         seat_index,
         &pk,
-        seal_seq,
+        timelock_target,
         commitment,
     );
     verify_ed25519(wallet, &msg, signature_b64)

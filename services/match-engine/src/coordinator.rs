@@ -73,9 +73,12 @@ impl MatchCoordinator {
         now_ms: u64,
     ) -> Result<FencedMatchRuntime, CoordinatorError> {
         let lease = if self.use_postgres_leases {
-            self.store
+            let lease = self
+                .store
                 .acquire_lease(&config.match_id, owner_id, now_ms, config.lease_ttl_ms)
-                .await?
+                .await?;
+            self.memory_leases.install_lease(lease.clone());
+            lease
         } else {
             self.memory_leases
                 .acquire(&config.match_id, owner_id, now_ms, config.lease_ttl_ms)?
@@ -90,12 +93,32 @@ impl MatchCoordinator {
         Ok(runtime)
     }
 
+    pub async fn renew_lease(
+        &mut self,
+        runtime: &mut FencedMatchRuntime,
+        now_ms: u64,
+    ) -> Result<(), CoordinatorError> {
+        let ttl_ms = runtime.config().lease_ttl_ms;
+        let renewed = if self.use_postgres_leases {
+            self.store
+                .renew_lease(runtime.lease(), now_ms, ttl_ms)
+                .await?
+        } else {
+            self.memory_leases
+                .renew(runtime.lease(), now_ms, ttl_ms)?
+        };
+        runtime.set_lease(renewed.clone());
+        self.memory_leases.install_lease(renewed);
+        Ok(())
+    }
+
     pub async fn apply_action(
         &mut self,
         runtime: &mut FencedMatchRuntime,
         now_ms: u64,
         intent: SignedActionIntent,
     ) -> Result<(), CoordinatorError> {
+        self.renew_lease(runtime, now_ms).await?;
         let envelope = runtime
             .apply_signed_action(&self.memory_leases, now_ms, intent)?
             .clone();
@@ -114,6 +137,7 @@ impl MatchCoordinator {
         default: DefaultAction,
         deadline_ms: u64,
     ) -> Result<(), CoordinatorError> {
+        self.renew_lease(runtime, now_ms).await?;
         let envelope = runtime
             .apply_timeout_default(
                 &self.memory_leases,
@@ -138,6 +162,11 @@ impl MatchCoordinator {
         ciphertext: Vec<u8>,
         commitment: SignedPredictionCommitment,
     ) -> Result<(), CoordinatorError> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.renew_lease(runtime, now_ms).await?;
         let envelope = runtime
             .record_prediction_sealed(player_id, target_round, ciphertext, commitment)?
             .clone();

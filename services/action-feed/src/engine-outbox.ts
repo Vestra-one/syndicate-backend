@@ -13,6 +13,7 @@ type EnginePayload = Record<string, unknown>;
 export function adaptEngineOutboxPayload(
   payload: unknown,
   outboxId?: string,
+  fallbackMatchId?: string,
 ): ProjectionMessage | null {
   if (!payload || typeof payload !== 'object') return null;
   const body = payload as Record<string, unknown>;
@@ -27,7 +28,7 @@ export function adaptEngineOutboxPayload(
   const kind = typeof body.kind === 'string' ? body.kind : null;
   if (!kind) return null;
 
-  const matchId = String(body.match_id ?? body.matchId ?? '');
+  const matchId = resolveProjectionMatchId(body, fallbackMatchId);
   if (!matchId) return null;
 
   const seq = nonNegativeInt(body.seq, 0);
@@ -105,9 +106,23 @@ function engineKindToRaw(
         ts,
         voided: kind === 'match.public.voided' || body.voided === true,
       };
+    case 'match.completed':
+    case 'prediction.sealed':
+    case 'default.registered':
+    case 'snapshot.written':
+      return null;
     default:
       return null;
   }
+}
+
+export function isIgnorableEngineOutboxPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const kind = (payload as Record<string, unknown>).kind;
+  return kind === 'match.completed'
+    || kind === 'prediction.sealed'
+    || kind === 'default.registered'
+    || kind === 'snapshot.written';
 }
 
 function parseEngineAction(raw: string): { action: string; amount: number } {
@@ -121,4 +136,15 @@ function nonNegativeInt(value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return Math.floor(n);
+}
+
+/** Prefer on-chain match id from SQL join when payload carries the aggregate UUID. */
+function resolveProjectionMatchId(body: EnginePayload, fallbackMatchId?: string): string {
+  const raw = String(body.match_id ?? body.matchId ?? '');
+  if (fallbackMatchId && isUuid(raw)) return fallbackMatchId;
+  return raw || fallbackMatchId || '';
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

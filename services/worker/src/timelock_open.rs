@@ -219,6 +219,31 @@ impl TimelockOpenClient for DrandTimelockOpenClient {
     }
 }
 
+pub fn timelock_open_from_env() -> Result<TimelockOpenBackend, String> {
+    if matches!(
+        std::env::var("TIMELOCK_OPEN_MODE").as_deref(),
+        Ok("mock") | Ok("local")
+    ) {
+        return Ok(TimelockOpenBackend::Mock(LocalMockTimelockOpenClient));
+    }
+    DrandTimelockOpenClient::from_env().map(TimelockOpenBackend::Drand)
+}
+
+#[derive(Clone)]
+pub enum TimelockOpenBackend {
+    Drand(DrandTimelockOpenClient),
+    Mock(LocalMockTimelockOpenClient),
+}
+
+impl TimelockOpenClient for TimelockOpenBackend {
+    fn open(&mut self, request: &TimelockOpenRequest) -> TimelockOpenStatus {
+        match self {
+            Self::Drand(client) => client.open(request),
+            Self::Mock(client) => client.open(request),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LocalMockTimelockOpenClient;
 

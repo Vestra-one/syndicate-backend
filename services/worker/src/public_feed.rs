@@ -16,10 +16,7 @@ pub async fn publish_terminal_public_event(
             "match.public.settled",
             public_settlement_payload(match_id, bundle, false),
         ),
-        Outcome::Void(_) => (
-            "match.public.voided",
-            public_void_payload(match_id),
-        ),
+        Outcome::Void(_) => ("match.public.voided", public_void_payload(match_id)),
     };
     pool.get()
         .await

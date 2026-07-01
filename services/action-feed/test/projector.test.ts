@@ -52,6 +52,7 @@ test('projection worker consumes outbox messages, uploads replay bundle, and ack
       async persistReplay(history, bundle, objectUri) {
         persistedReplays.push(`${history.matchId}:${bundle.events.length}:${objectUri}`);
       },
+      async persistTerminalHistory() {},
       async persistCheckpoint(checkpoint) {
         persistedCheckpoint = checkpoint.lastSeq;
       },

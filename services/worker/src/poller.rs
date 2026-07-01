@@ -11,6 +11,7 @@ use syndicate_settlement::ops::{
 use syndicate_store::LIST_DUE_SETTLEMENT_ATTEMPTS_SQL;
 
 use crate::metrics::WorkerMetrics;
+use crate::public_feed;
 use crate::reconstruct::{reconstruct_job_from_attempt, ReconstructError};
 use crate::timelock_open::TimelockOpenClient;
 
@@ -122,12 +123,19 @@ where
             Err(e) => return Err(e.to_string()),
         };
         let started = now_ms();
+        let terminal_outcome = job.outcome.clone();
         let result = ops
             .process(&job, started)
             .await
             .map_err(|e| format!("{e:?}"))?;
         match result {
             SettlementProcessResult::Final(record) => {
+                if let Err(err) =
+                    public_feed::publish_terminal_public_event(pool, &job.match_id, &terminal_outcome)
+                        .await
+                {
+                    eprintln!("public feed publish failed for {}: {err}", job.match_id);
+                }
                 metrics.inc_attempt_final(record.status);
                 metrics.observe_submit_confirm_latency_ms(now_ms().saturating_sub(started));
             }

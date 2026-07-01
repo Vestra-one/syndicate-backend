@@ -113,7 +113,8 @@ impl SettlementBus {
     pub async fn ensure_stream(&self) -> Result<(), BusError> {
         let stream_config = StreamConfig {
             name: self.config.stream_name.clone(),
-            subjects: vec![format!("{}.*", SETTLEMENT_SUBJECT_PREFIX)],
+            // `requested.<match>` is two tokens under the prefix; `*` only matches one level.
+            subjects: vec![format!("{}.>", SETTLEMENT_SUBJECT_PREFIX)],
             retention: RetentionPolicy::Limits,
             storage: StorageType::File,
             max_age: Duration::from_secs(7 * 24 * 60 * 60),

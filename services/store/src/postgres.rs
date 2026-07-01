@@ -160,7 +160,7 @@ INSERT INTO settlement_attempts (
     status,
     next_retry_at
 )
-VALUES ($1::uuid, $2, $3, $4, $5, 'pending', CASE WHEN $6 IS NULL THEN NULL ELSE to_timestamp($6::double precision / 1000.0) END)
+VALUES ($1::uuid, $2, $3, $4, $5, 'pending', CASE WHEN $6::double precision IS NULL THEN NULL ELSE to_timestamp($6::double precision / 1000.0) END)
 ON CONFLICT (idempotency_key) DO UPDATE
 SET updated_at = now(),
     oracle_audit = COALESCE(settlement_attempts.oracle_audit, EXCLUDED.oracle_audit)

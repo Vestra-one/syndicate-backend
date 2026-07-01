@@ -133,6 +133,11 @@ impl InMemoryLeaseCoordinator {
         Ok(renewed)
     }
 
+    /// Mirror a Postgres-acquired lease into the in-memory authorizer used by gameplay paths.
+    pub fn install_lease(&mut self, lease: MatchLease) {
+        self.records.insert(lease.match_id.clone(), lease);
+    }
+
     pub fn assert_current(&self, lease: &MatchLease, now_ms: u64) -> Result<(), MatchServiceError> {
         <Self as LeaseAuthorizer>::assert_current(self, lease, now_ms)
     }
@@ -337,16 +342,18 @@ impl FencedMatchRuntime {
         if seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));
         }
-        let registered =
-            self.registered_defaults
-                .get(&seat_index)
-                .ok_or(MatchServiceError::InvalidIntent(
+        match self.registered_defaults.get(&seat_index) {
+            Some(registered) if registered.policy != default => {
+                return Err(MatchServiceError::InvalidIntent(
+                    "timeout default does not match registered policy",
+                ));
+            }
+            None if default != DefaultAction::CheckFold => {
+                return Err(MatchServiceError::InvalidIntent(
                     "no registered default policy",
-                ))?;
-        if registered.policy != default {
-            return Err(MatchServiceError::InvalidIntent(
-                "timeout default does not match registered policy",
-            ));
+                ));
+            }
+            _ => {}
         }
         self.engine.apply_timeout(seat_index, default)?;
         Ok(self.append_event(EngineLogEvent::TimeoutDefaultApplied {
@@ -551,7 +558,9 @@ impl FencedMatchRuntime {
                     let Some(e) = engine.as_mut() else {
                         return Err(MatchServiceError::Replay("timeout before match start"));
                     };
-                    if !registered_defaults.contains_key(seat_index) {
+                    if !registered_defaults.contains_key(seat_index)
+                        && *default != DefaultAction::CheckFold
+                    {
                         return Err(MatchServiceError::Replay(
                             "timeout without registered default",
                         ));
@@ -601,6 +610,11 @@ impl FencedMatchRuntime {
         &self.lease
     }
 
+    pub fn set_lease(&mut self, lease: MatchLease) {
+        assert_eq!(self.config.match_id, lease.match_id, "lease must match config");
+        self.lease = lease;
+    }
+
     pub fn record_prediction_sealed(
         &mut self,
         player_id: PlayerId,
@@ -608,7 +622,7 @@ impl FencedMatchRuntime {
         ciphertext: Vec<u8>,
         commitment: SignedPredictionCommitment,
     ) -> Result<&EventEnvelope, MatchServiceError> {
-        self.validate_prediction_commitment(&commitment)?;
+        self.validate_prediction_commitment(target_round, &commitment)?;
         Ok(self.append_event(EngineLogEvent::PredictionSealed {
             player_id: player_id.0,
             target_round,
@@ -621,11 +635,19 @@ impl FencedMatchRuntime {
         if !self.engine.is_complete() {
             return None;
         }
+        let resolved_target = self.resolved_timelock_target_round().unwrap_or(timelock_target_round);
         let event_root = hex::encode(self.head);
         Some(self.append_event(EngineLogEvent::MatchCompleted {
             event_root,
-            timelock_target_round,
+            timelock_target_round: resolved_target,
         }))
+    }
+
+    fn resolved_timelock_target_round(&self) -> Option<u64> {
+        self.events.iter().find_map(|envelope| match &envelope.event {
+            EngineLogEvent::PredictionSealed { target_round, .. } => Some(*target_round),
+            _ => None,
+        })
     }
 
     pub fn engine(&self) -> &Engine {
@@ -713,6 +735,7 @@ impl FencedMatchRuntime {
 
     fn validate_prediction_commitment(
         &self,
+        timelock_target: u64,
         commitment: &SignedPredictionCommitment,
     ) -> Result<(), MatchServiceError> {
         if commitment.blinding.iter().all(|b| *b == 0) {
@@ -727,7 +750,7 @@ impl FencedMatchRuntime {
             match_id_signing_key(&self.config.match_id),
             self.config.onchain_match_id,
             commitment.player_id,
-            commitment.seal_seq,
+            timelock_target,
             &commitment.commitment,
         )
         .map_err(map_verify_err)
@@ -907,8 +930,11 @@ fn allow_dev_signature(signature: &str) -> bool {
 }
 
 fn match_id_signing_key(match_id: &str) -> u64 {
-    let h = intent::simple_sha256(match_id.as_bytes());
-    u64::from_le_bytes(h[..8].try_into().expect("8 bytes"))
+    let mut hash: u64 = 0;
+    for b in match_id.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(u64::from(b));
+    }
+    hash
 }
 
 fn action_to_tag_amount(action: Action) -> (u8, u64) {
