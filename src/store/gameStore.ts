@@ -80,6 +80,8 @@ interface GameState {
   yourTurn: { toCall: number; minRaiseTo: number; deadline: number } | null
   /** Epoch-ms the fill window closes (room voids if under min). Drives the waiting-room countdown. */
   fillDeadline: number | null
+  /** Epoch-ms the current round began — anchors the price-board chart's x-axis to the round. */
+  roundStartedAt: number | null
 
   // self-centric, derived from the feed
   sealStatus: SealStatus
@@ -102,6 +104,7 @@ interface GameState {
   lobbySeated: number | null // seats already taken in the room being joined (from the lobby listing)
   lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
   txProgress: TxCommit | null // live commit tx being narrated by the waiting ceremony
+  pendingInvite: string | null // matchId from a ?table=… deep-link, awaiting the user's accept
 
   // actions
   fetchBalance: () => Promise<void>
@@ -115,6 +118,7 @@ interface GameState {
   disconnect: () => void
   joinGame: (matchId: string) => Promise<void>
   createGame: () => Promise<void>
+  dismissInvite: () => void
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
   dismissTxProgress: () => void
@@ -227,6 +231,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   match: null,
   yourTurn: null,
   fillDeadline: null,
+  roundStartedAt: null,
 
   sealStatus: 'unsealed',
   yourPrediction: null,
@@ -247,10 +252,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   lobbySeated: null,
   lastTx: null,
   txProgress: null,
+  pendingInvite: null,
 
   fetchBalance: async () => {
     if (!adapters) adapters = createAdapters()
-    await refreshBalance(set)
+    // Explicit user/post-tx refresh — always hit the chain, never coalesce away.
+    await refreshBalance(set, true)
   },
 
   loadDiscovery: async () => {
@@ -315,6 +322,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       match: null,
       lobbySeated: null,
       fillDeadline: null,
+      roundStartedAt: null,
     })
     void get().loadDiscovery()
   },
@@ -324,7 +332,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!adapters) adapters = createAdapters()
     joinRoom = null
     createCtx = null
-    set({ playError: null })
+    set({ playError: null, pendingInvite: null })
 
     try {
       const addr = await adapters.wallet.connect()
@@ -596,6 +604,8 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   dismissTxProgress: () => set({ txProgress: null }),
 
+  dismissInvite: () => set({ pendingInvite: null }),
+
   sealPrediction: async (price) => {
     const { terms, match, sealStatus } = get()
     if (!adapters || !gateway || !terms || !match) return
@@ -649,8 +659,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { match } = get()
     if (!adapters || !match) return null
     const sig = await adapters.chain.claim(match.matchId)
-    // Payout is derived on-chain; re-read the SPL balance after finality.
-    void refreshBalance(set)
+    set({ lastTx: { sig, label: 'Payout claimed on-chain' } })
+    // Payout is derived on-chain; re-read the SPL balance after finality (force past the throttle).
+    void refreshBalance(set, true)
     return sig
   },
 
@@ -658,7 +669,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { match } = get()
     if (!adapters || !match) return null
     const sig = await adapters.chain.refund(match.matchId)
-    void refreshBalance(set)
+    set({ lastTx: { sig, label: 'Refund confirmed on-chain' } })
+    void refreshBalance(set, true)
     return sig
   },
 
@@ -679,6 +691,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       feed: [],
       priceHistory: [],
       fillDeadline: null,
+      roundStartedAt: null,
     })
     await get().createGame()
   },
@@ -772,10 +785,16 @@ function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameS
   // Convert the protocol's fixed-point feed price to a float for the chart.
   const decimals = terms?.decimals ?? 2
   const point: PricePoint = { price: state.feedPrice / 10 ** decimals, ts: Date.now() }
+  const now = Date.now()
+  // A new round (or the match's first LIVE state) restarts the price-board's
+  // x-axis — the client-observed instant is close enough for a chart axis.
+  const prevRound = get().match?.round
+  const isNewRound = prevRound == null || state.round !== prevRound
 
   set((s) => ({
     match: state,
     priceHistory: [...s.priceHistory, point].slice(-MAX_HISTORY),
+    roundStartedAt: isNewRound ? now : s.roundStartedAt,
   }))
   // No auto-deposit — real custody always requires the explicit lobby deposit (§7).
 }
@@ -788,10 +807,12 @@ let balanceInFlight: Promise<void> | null = null
 let lastBalanceFetchAt = 0
 const BALANCE_MIN_INTERVAL_MS = 2500
 
-async function refreshBalance(set: SetState) {
+async function refreshBalance(set: SetState, force = false) {
   if (!adapters) return
   if (balanceInFlight) return balanceInFlight
-  if (Date.now() - lastBalanceFetchAt < BALANCE_MIN_INTERVAL_MS) return
+  // Post-transaction refreshes (claim/refund/reclaim) must bypass the rate-limit
+  // coalescing, or the balance can stay stale right after the balance actually moved.
+  if (!force && Date.now() - lastBalanceFetchAt < BALANCE_MIN_INTERVAL_MS) return
   balanceInFlight = (async () => {
     try {
       const balance = await adapters!.chain.chipBalance()

@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState, useCallback, useRef } from 'react'
+import { useMemo, useEffect, useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
@@ -6,6 +6,7 @@ import { ratedScore } from '@/lib/discovery'
 import { createAdapters } from '@/lib/adapters'
 import type { DashboardSortKey, LiveGame, UpcomingGame } from '@/lib/protocol'
 import { ReclaimCard } from './ReclaimCard'
+import { WalletMenu } from './WalletMenu'
 import './hud.css'
 
 const SORTS: { key: DashboardSortKey; label: string }[] = [
@@ -50,166 +51,6 @@ function fillDeadlineLabel(ts: number | undefined, now: number): string {
 
 function fmt(amount: number) {
   return (amount / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })
-}
-
-// ---------------------------------------------------------------------------
-// WalletButton — top-right wallet chip with dropdown
-// ---------------------------------------------------------------------------
-
-function WalletButton({
-  usdcBalance,
-  solBalance,
-  onRefreshBalance,
-}: {
-  usdcBalance: number | null
-  solBalance: number | null
-  onRefreshBalance: () => Promise<void>
-}) {
-  const { connected, connecting, disconnect, publicKey } = useWallet()
-  const { setVisible } = useWalletModal()
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const [copied, setCopied] = useState(false)
-  const [balRefreshing, setBalRefreshing] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  const addr = publicKey?.toBase58() ?? ''
-  const short = addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : ''
-
-  const copyAddr = () => {
-    void navigator.clipboard.writeText(addr)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
-  }
-
-  const handleRefreshBalance = async () => {
-    setBalRefreshing(true)
-    try { await onRefreshBalance() } finally { setBalRefreshing(false) }
-  }
-
-  if (!connected) {
-    return (
-      <button className="wc-btn" onClick={() => setVisible(true)} disabled={connecting}>
-        {connecting ? <><span className="wc-spinner" /> Connecting…</> : <>◎ Connect Wallet</>}
-      </button>
-    )
-  }
-
-  const usdcFmt = usdcBalance != null ? (usdcBalance / 1e6).toFixed(2) : '—'
-  const solFmt  = solBalance  != null ? solBalance.toFixed(4) : '—'
-
-  return (
-    <div className="wc-wrap" ref={ref}>
-      {/* chip */}
-      <button
-        className="wc-chip"
-        aria-expanded={open}
-        onClick={() => setOpen(o => !o)}
-      >
-        <span className="wc-dot" />
-        <span className="wc-chip-bal">{usdcFmt} USDC</span>
-        <span className="wc-chip-rule" />
-        <span className="wc-chip-addr">{short}</span>
-        <span className="wc-chevron">▾</span>
-      </button>
-
-      {/* dropdown */}
-      {open && (
-        <div className="wc-dropdown">
-
-          {/* address + copy */}
-          <div className="wc-addr-row">
-            <div className="wc-addr-info">
-              <span className="wc-addr-network">Solana · Devnet</span>
-              <span className="wc-addr-text">{short}</span>
-            </div>
-            <button
-              className={`wc-copy-btn ${copied ? 'wc-copy-btn--done' : ''}`}
-              onClick={copyAddr}
-              title="Copy address"
-            >
-              {copied ? '✓' : '⧉'}
-            </button>
-          </div>
-
-          {/* balances */}
-          <div className="wc-balances">
-            <div className="wc-balances-head">
-              <span className="wc-addr-network">Balance</span>
-              <button
-                className={`wc-bal-refresh ${balRefreshing ? 'wc-bal-refresh--spinning' : ''}`}
-                onClick={() => { void handleRefreshBalance() }}
-                title="Refresh balance"
-                disabled={balRefreshing}
-              >↻</button>
-            </div>
-            <div className="wc-token-row">
-              <span className="wc-token-stripe wc-token-stripe--usdc" />
-              <div className="wc-token-info">
-                <span className="wc-token-symbol">USDC</span>
-                <span className="wc-token-amount wc-token-amount--usdc">{usdcFmt}</span>
-              </div>
-            </div>
-            <div className="wc-token-row">
-              <span className="wc-token-stripe wc-token-stripe--sol" />
-              <div className="wc-token-info">
-                <span className="wc-token-symbol">SOL</span>
-                <span className="wc-token-amount wc-token-amount--sol">{solFmt}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* faucets — devnet only */}
-          <div className="wc-faucets">
-            <div className="wc-faucet-label">Get testnet tokens</div>
-            <div className="wc-faucet-links">
-              <a
-                className="wc-faucet-link"
-                href="https://faucet.solana.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="wc-faucet-stripe wc-faucet-stripe--sol" />
-                SOL
-                <span className="wc-faucet-arrow">↗</span>
-              </a>
-              <a
-                className="wc-faucet-link"
-                href="https://faucet.circle.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="wc-faucet-stripe wc-faucet-stripe--usdc" />
-                USDC
-                <span className="wc-faucet-arrow">↗</span>
-              </a>
-            </div>
-          </div>
-
-          {/* disconnect */}
-          <div className="wc-disconnect">
-            <button
-              className="wc-disconnect-btn"
-              onClick={() => { setOpen(false); void disconnect() }}
-            >
-              Disconnect
-            </button>
-          </div>
-
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -319,27 +160,13 @@ export function Dashboard() {
   const joinGame      = useGameStore((s) => s.joinGame)
   const createGame    = useGameStore((s) => s.createGame)
   const playError     = useGameStore((s) => s.playError)
-  const usdcBalance   = useGameStore((s) => s.chipBalance)
+  const pendingInvite = useGameStore((s) => s.pendingInvite)
+  const dismissInvite = useGameStore((s) => s.dismissInvite)
 
-  const { connected, publicKey } = useWallet()
+  const { connected } = useWallet()
   const { connection } = useConnection()
   const { setVisible } = useWalletModal()
-  const [solBalance, setSolBalance] = useState<number | null>(null)
   const [wrongNetwork, setWrongNetwork] = useState(false)
-
-  const refreshAll = useCallback(async () => {
-    void fetchBalance()
-    if (publicKey) {
-      try {
-        const lamports = await connection.getBalance(publicKey)
-        setSolBalance(lamports / 1e9)
-      } catch { /* ignore */ }
-    }
-  }, [fetchBalance, publicKey, connection])
-
-  useEffect(() => {
-    if (connected) void refreshAll()
-  }, [connected, refreshAll])
 
   // Detect mainnet wallet connected to a devnet app via genesis hash.
   // Devnet genesis: EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
@@ -371,7 +198,7 @@ export function Dashboard() {
 
       {/* ── Wallet button — fixed top-right of the page ── */}
       <div className="dash-wallet-anchor">
-        <WalletButton usdcBalance={usdcBalance} solBalance={solBalance} onRefreshBalance={refreshAll} />
+        <WalletMenu />
       </div>
 
       <div className="dash-panel">
@@ -386,6 +213,25 @@ export function Dashboard() {
 
         {/* ── Scrollable body ── */}
         <div className="dash-body">
+
+          {pendingInvite && (
+            <div className="dash-invite">
+              <div className="dash-invite-glyph" aria-hidden="true">♠</div>
+              <div className="dash-invite-body">
+                <div className="eyebrow">you've been invited</div>
+                <div className="dash-invite-title">Join this table</div>
+                <div className="dash-invite-sub">Someone shared a Satoshi's Table hand with you.</div>
+              </div>
+              <div className="dash-invite-actions">
+                <button className="play-now-btn" onClick={() => handleJoin(pendingInvite)}>
+                  {connected ? 'Join table' : 'Connect & join'}
+                </button>
+                <button className="dash-invite-dismiss" onClick={dismissInvite}>
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           {wrongNetwork && (
             <div className="dash-network-warn">
@@ -498,7 +344,7 @@ export function Dashboard() {
         {/* ── Footer — just network + refresh ── */}
         <footer className="dash-foot">
           <span className="eyebrow" style={{ opacity: 0.3 }}>Solana · Devnet</span>
-          <button className="dash-refresh" onClick={() => { void loadDiscovery(); void refreshAll() }}>
+          <button className="dash-refresh" onClick={() => { void loadDiscovery(); void fetchBalance() }}>
             Refresh
           </button>
         </footer>

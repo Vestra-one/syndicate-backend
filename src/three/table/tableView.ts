@@ -52,9 +52,9 @@ export function seatAngles(n: number): number[] {
   return [...l, ...r]
 }
 
-function seatWorld(angleDeg: number): THREE.Vector3 {
+function seatWorld(angleDeg: number, radius = R_SEAT, y = Y_SEAT): THREE.Vector3 {
   const a = (angleDeg * Math.PI) / 180
-  return new THREE.Vector3(Math.sin(a) * R_SEAT, Y_SEAT, Math.cos(a) * R_SEAT)
+  return new THREE.Vector3(Math.sin(a) * radius, y, Math.cos(a) * radius)
 }
 // The 3D coin heap is centred on (0, felt, 1.1); the amount label floats just
 // above the top of the pile and a touch toward the camera so the number reads
@@ -99,6 +99,16 @@ function project(world: THREE.Vector3): ScreenPoint | null {
 
 export function projectSeatAngle(angleDeg: number): ScreenPoint | null {
   return project(seatWorld(angleDeg))
+}
+/**
+ * A tighter seat ring for the pre-game waiting console: pulled off the far
+ * outer rim and lowered a touch so the medallions sit ON the open felt in
+ * front of the cabinet, clear of the flanking rails.
+ */
+const R_WAIT = 3.35
+const Y_WAIT = 0.5
+export function projectWaitingSeat(angleDeg: number): ScreenPoint | null {
+  return project(seatWorld(angleDeg, R_WAIT, Y_WAIT))
 }
 export function projectPot(): ScreenPoint | null {
   return project(POT_WORLD)

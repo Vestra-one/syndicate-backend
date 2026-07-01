@@ -1,6 +1,6 @@
 import { useGameStore } from '@/store/gameStore'
 import type { MatchPhase } from '@/lib/protocol'
-import { useWaiting, WaitingStake } from './WaitingRoom'
+import { useWaiting } from './WaitingRoom'
 
 const PHASE_COPY: Record<MatchPhase, string> = {
   FILLING: 'Filling table',
@@ -21,8 +21,9 @@ export function RoundStatus() {
   const terms = useGameStore((s) => s.terms)
   const { active: waiting } = useWaiting()
 
-  // Pre-game: "pot 0 / current bet 0" is meaningless — show the committed-stake recap instead.
-  if (waiting) return <WaitingStake />
+  // Pre-game: the full-surface waiting console (WaitingRoom) owns this state; the
+  // footer is suppressed by the HUD while filling, so there's nothing to show here.
+  if (waiting) return null
 
   if (!match) {
     return (

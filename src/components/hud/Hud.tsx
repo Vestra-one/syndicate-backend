@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Brand } from './Brand'
-import { WalletBadge } from './WalletBadge'
+import { WalletMenu } from './WalletMenu'
 import { RoundStatus } from './RoundStatus'
 import { BettingPanel } from './BettingPanel'
 import { YourPosition } from './YourPosition'
@@ -9,7 +9,7 @@ import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
 import { TxCeremony } from './TxCeremony'
-import { WaitingRoom } from './WaitingRoom'
+import { WaitingRoom, useWaiting } from './WaitingRoom'
 import { useGameStore } from '@/store/gameStore'
 import './hud.css'
 
@@ -52,24 +52,32 @@ function TxBanner() {
  * settle/void. The market chart lives on the 3D board itself.
  */
 export function Hud() {
+  // While the table is filling, the full-surface WaitingRoom console owns the
+  // screen (its own rails, seat ring, dock). Suppress the in-match chrome so the
+  // two layouts don't stack; the brand + wallet header stays put in both.
+  const { active: waiting } = useWaiting()
   return (
     <div className="hud">
-      <Seats />
+      {!waiting && <Seats />}
 
       <header className="hud-top">
         <Brand />
-        <WalletBadge />
+        <WalletMenu />
       </header>
 
-      <div className="hud-mid">
-        <ActionFeed />
-      </div>
+      {!waiting && (
+        <div className="hud-mid">
+          <ActionFeed />
+        </div>
+      )}
 
-      <footer className="hud-bottom">
-        <YourPosition />
-        <BettingPanel />
-        <RoundStatus />
-      </footer>
+      {!waiting && (
+        <footer className="hud-bottom">
+          <YourPosition />
+          <BettingPanel />
+          <RoundStatus />
+        </footer>
+      )}
 
       <WaitingRoom />
       <TxBanner />

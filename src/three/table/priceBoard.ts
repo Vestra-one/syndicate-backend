@@ -246,10 +246,22 @@ export function createPriceBoard(): PriceBoardHandle {
     v >= 1000
       ? v.toLocaleString('en-US', { maximumFractionDigits: 0 })
       : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  // the trailing slice of time the board shows; the line is resampled onto a
+  // Pre-match / idle-lobby fallback: the trailing slice of time the board shows
+  // when there's no live round to anchor to. The line is resampled onto a
   // uniform grid across this window so spacing is even regardless of how
   // irregularly ticks actually arrived.
   const WINDOW_MS = 60_000
+  // Fallback round length if the table's terms don't say (shouldn't happen once wired).
+  const DEFAULT_ROUND_MS = 10 * 60_000
+
+  /** "1:30" / "45s" style axis label for an elapsed-ms duration. */
+  const fmtAxisTime = (ms: number) => {
+    const totalSec = Math.max(0, Math.round(ms / 1000))
+    if (totalSec < 90) return `${totalSec}s`
+    const m = Math.floor(totalSec / 60)
+    const s = totalSec % 60
+    return s === 0 ? `${m}m` : `${m}:${String(s).padStart(2, '0')}`
+  }
 
   // canvas rounded-rect path
   const rr = (x: number, y: number, w: number, h: number, r: number) => {
@@ -317,6 +329,8 @@ export function createPriceBoard(): PriceBoardHandle {
     prediction: number | null,
     tNow: number,
     clock: number,
+    roundStart: number | null,
+    roundDurationMs: number | null,
   ) {
     cx.clearRect(0, 0, SCW, SCH)
     // warm near-black, like dark glass over candlelit wood — not the cold blue
@@ -353,11 +367,18 @@ export function createPriceBoard(): PriceBoardHandle {
       return
     }
 
-    // ---- resample the raw ticks onto a uniform trailing window ----
-    const tEnd = Math.max(raw[raw.length - 1].ts, clock)
-    const tStart = Math.max(raw[0].ts, tEnd - WINDOW_MS)
+    // ---- fixed to the round's timeline when one is live: the x-axis spans the
+    // whole round (0 → its duration) instead of scrolling, so the line starts at
+    // the left edge on round start and travels toward the right edge as the round
+    // plays out — rather than always sitting pinned at "now" on the right. Falls
+    // back to a trailing window pre-match (idle lobby ticker, no round to anchor to). ----
+    const hasRound = roundStart != null && roundDurationMs != null
+    const tStart = hasRound ? roundStart! : Math.max(raw[0].ts, Math.max(raw[raw.length - 1].ts, clock) - WINDOW_MS)
+    const tEnd = hasRound ? roundStart! + roundDurationMs! : Math.max(raw[raw.length - 1].ts, clock)
+    // the live edge of the drawn line — "now", clamped inside the round's span
+    const dataEnd = hasRound ? Math.min(clock, tEnd) : tEnd
     const SAMPLES = 96
-    const sampled = resample(raw, tStart, tEnd, SAMPLES)
+    const sampled = resample(raw, tStart, dataEnd, SAMPLES)
     const n = sampled.length
     // Pin the last sample to the (eased) live price, then run several light
     // smoothing passes with the endpoints held fixed. This both rounds single-
@@ -449,9 +470,11 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.fillText(fmtPrice(v), gx1 + 14, gy)
     }
 
-    // ---- vertical grid + bottom time axis (relative elapsed, spans the data) ----
-    // Quarters of the actual window so the axis is always populated and every
-    // label is distinct — "−45s … now" once warm, sensible seconds while filling.
+    // ---- vertical grid + bottom time axis ----
+    // Round-anchored: quarters of the whole round span, labelled as elapsed time
+    // since round start (0:00 … full duration) — a fixed ruler the live point
+    // travels across, not a "how long ago" readout.
+    // Pre-match: quarters of the trailing window, relative to "now" on the right.
     cx.textBaseline = 'top'
     cx.fillStyle = dim
     const winSec = (tEnd - tStart) / 1000
@@ -465,9 +488,14 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.moveTo(gx, gy0)
       cx.lineTo(gx, gy1)
       cx.stroke()
-      const back = Math.round((winSec * (4 - i)) / 4)
-      const label = i === 4 || back === 0 ? 'now' : `−${back}s`
-      if (label === lastLabel) continue // don't repeat a label when the window is tiny
+      let label: string
+      if (hasRound) {
+        label = fmtAxisTime(ts - tStart)
+      } else {
+        const back = Math.round((winSec * (4 - i)) / 4)
+        label = i === 4 || back === 0 ? 'now' : `−${back}s`
+      }
+      if (label === lastLabel) continue // don't repeat a label when the span is tiny
       lastLabel = label
       cx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center'
       cx.fillText(label, gx, gy1 + 14)
@@ -538,7 +566,10 @@ export function createPriceBoard(): PriceBoardHandle {
     }
 
     // ---- latest point: dashed guide, pulsing live marker, live-price pill ----
-    const lx = toX(tEnd)
+    // toX(dataEnd), not tEnd: in round mode this is "now", which sits at the left
+    // edge on round start and travels rightward, only reaching the right edge as
+    // the round actually ends — tEnd is the fixed round-end anchor, not "now".
+    const lx = toX(dataEnd)
     cx.strokeStyle = 'rgba(233,162,59,0.32)'
     cx.lineWidth = 1
     cx.setLineDash([5, 5])

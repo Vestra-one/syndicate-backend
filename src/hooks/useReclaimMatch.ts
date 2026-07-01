@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createAdapters } from '@/lib/adapters'
 import type { OnchainMatchStatus, OnchainSeatInfo } from '@/lib/adapters'
 import type { Chips } from '@/lib/protocol'
+import { useGameStore } from '@/store/gameStore'
 
 export type ReclaimPhase = 'idle' | 'checking' | 'voiding' | 'refunding' | 'done' | 'error'
 
@@ -33,6 +34,8 @@ export interface UseReclaimMatch {
   error: string | null
   /** Total (buy-in + entry fee) returned on success, in token base units. */
   refundedAmount: Chips | null
+  /** Signature of the refund tx once it lands — drives the explorer link on the done card. */
+  txSig: string | null
   refresh: () => Promise<void>
   cancelAndReclaim: () => Promise<void>
 }
@@ -45,8 +48,17 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
   const [seat, setSeat] = useState<OnchainSeatInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refundedAmount, setRefundedAmount] = useState<Chips | null>(null)
+  const [txSig, setTxSig] = useState<string | null>(null)
   const [nowSec, setNowSec] = useState(() => Date.now() / 1000)
   const busyRef = useRef(false)
+
+  // On a successful reclaim: surface the tx in the global banner and re-read the
+  // on-chain balance (force past the throttle) so the wallet chip reflects the refund.
+  const onReclaimed = useCallback((sig: string) => {
+    setTxSig(sig)
+    useGameStore.setState({ lastTx: { sig, label: 'Refund confirmed on-chain' } })
+    void useGameStore.getState().fetchBalance()
+  }, [])
 
   const refresh = useCallback(async () => {
     if (!onchainMatchId) {
@@ -107,9 +119,10 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
           // wallet prompt, so a lost race (someone else's void beat us to it) fails here
           // with no wasted signature — just fall back to the sequential pair below.
           try {
-            await chain.cancelAndRefundSelf(onchainMatchId)
+            const sig = await chain.cancelAndRefundSelf(onchainMatchId)
             setSeat(await chain.getMySeat(onchainMatchId))
             setRefundedAmount(s.buyIn + s.entryFee)
+            onReclaimed(sig)
             setPhase('done')
             return
           } catch {
@@ -136,8 +149,9 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
         }
 
         setPhase('refunding')
+        let refundSig: string | null = null
         try {
-          await chain.refundSelf(onchainMatchId)
+          refundSig = await chain.refundSelf(onchainMatchId)
         } catch (err) {
           const code = (err as Error).message
           if (code === 'AlreadyClaimed') {
@@ -153,6 +167,7 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
 
         setSeat(await chain.getMySeat(onchainMatchId))
         setRefundedAmount(s.buyIn + s.entryFee)
+        if (refundSig) onReclaimed(refundSig)
         setPhase('done')
         return
       }
@@ -164,7 +179,7 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
     } finally {
       busyRef.current = false
     }
-  }, [chain, onchainMatchId])
+  }, [chain, onchainMatchId, onReclaimed])
 
   return {
     phase,
@@ -174,6 +189,7 @@ export function useReclaimMatch(onchainMatchId: string | null | undefined): UseR
     secondsToFillDeadline,
     error,
     refundedAmount,
+    txSig,
     refresh,
     cancelAndReclaim,
   }

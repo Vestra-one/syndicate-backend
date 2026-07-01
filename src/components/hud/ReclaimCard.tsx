@@ -15,7 +15,7 @@ function fmtCountdown(seconds: number): string {
  * standalone "my matches" list, with no active gateway/match state required.
  */
 export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null | undefined }) {
-  const { phase, status, seat, reclaimable, secondsToFillDeadline, error, refundedAmount, cancelAndReclaim } =
+  const { phase, status, seat, reclaimable, secondsToFillDeadline, error, refundedAmount, txSig, cancelAndReclaim } =
     useReclaimMatch(onchainMatchId)
 
   if (!onchainMatchId) return null
@@ -26,9 +26,19 @@ export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null 
     return (
       <div className="reclaim-card reclaim-card--done panel">
         <span className="reclaim-icon" aria-hidden="true">✓</span>
-        <div>
+        <div className="reclaim-done-body">
           <div className="reclaim-title">Refunded {fmt(refundedAmount ?? 0)} USDC</div>
           <div className="reclaim-sub eyebrow">+ reclaimed seat rent · room cancelled</div>
+          {txSig && (
+            <a
+              className="reclaim-tx-link"
+              href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View transaction ↗
+            </a>
+          )}
         </div>
       </div>
     )
@@ -65,8 +75,20 @@ export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null 
       </div>
       {error && <div className="reclaim-error eyebrow">{error}</div>}
       <button className="seal-btn reclaim-btn" onClick={() => void cancelAndReclaim()} disabled={busy}>
-        {busy ? busyLabel : 'Cancel & reclaim funds'}
+        {busy ? (
+          <span className="reclaim-busy">
+            <span className="lobby-spinner reclaim-spinner" />
+            {busyLabel}
+          </span>
+        ) : (
+          'Cancel & reclaim funds'
+        )}
       </button>
+      {busy && (
+        <div className="reclaim-sub eyebrow">
+          Approve the transaction in your wallet — this can take a few seconds to finalize.
+        </div>
+      )}
     </div>
   )
 }
