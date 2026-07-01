@@ -257,20 +257,22 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                 .to_string(),
             );
         } else if input.result.action == "void" {
+            // Use the permissionless deadline-void path: only needs the match PDA, checks
+            // fill_deadline_ts on-chain. The admin emergency void (/void-match) requires the
+            // settlement-chain signer to be emergency_void_admin — not appropriate here.
             let void_body = serde_json::json!({
-                "matchId": input.match_id,
-                "match": { "onchainMatchId": onchain_match_id.to_string(), "seatWallets": [] },
+                "onchainMatchId": onchain_match_id.to_string(),
             });
             if let Err(resp) = require_downstream(
                 cfg,
                 post_json(
                     &cfg.settlement_chain,
-                    "/internal/solana/void-match",
+                    "/internal/solana/void-before-start",
                     &cfg.auth,
                     void_body,
                 )
                 .await,
-                "void-match",
+                "void-before-start",
             )
             .await
             {
