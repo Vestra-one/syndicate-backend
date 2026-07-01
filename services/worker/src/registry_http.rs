@@ -154,7 +154,7 @@ async fn insert_match_handler(
             );
         }
     };
-    let max_conf = match input.max_oracle_confidence.parse::<i64>() {
+    let max_conf_u64 = match input.max_oracle_confidence.parse::<u64>() {
         Ok(v) => v,
         Err(e) => {
             return (
@@ -164,6 +164,8 @@ async fn insert_match_handler(
             );
         }
     };
+    // Postgres `bigint` is signed i64; on-chain uses u64 (often u64::MAX = "no practical cap").
+    let max_conf = i64::try_from(max_conf_u64).unwrap_or(i64::MAX);
     let fill_deadline = Utc
         .timestamp_millis_opt(input.fill_deadline_ms)
         .single()
@@ -350,5 +352,13 @@ mod tests {
         assert_eq!(parsed.match_key, "1");
         assert_eq!(parsed.onchain_match_id, "42");
         assert_eq!(parsed.oracle_exponent, -18);
+        assert_eq!(parsed.max_oracle_confidence, "18446744073709551615");
+    }
+
+    #[test]
+    fn max_oracle_confidence_u64_max_clamps_to_i64_max() {
+        let u64_max: u64 = u64::MAX;
+        let as_i64 = i64::try_from(u64_max).unwrap_or(i64::MAX);
+        assert_eq!(as_i64, i64::MAX);
     }
 }
