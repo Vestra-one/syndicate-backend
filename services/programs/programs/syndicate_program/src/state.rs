@@ -102,7 +102,7 @@ pub struct MatchAccount {
     /// Bound at create: SEALING window length.
     pub seal_window_sec: u64,
     /// Bound at create: max delay after `seal_deadline_ts` within which the operator must
-    /// call `begin_live` (default 5s). Keeps `scheduled_end_ts` tightly pinned to the seal
+    /// call `begin_live` (default 30s). Keeps `scheduled_end_ts` tightly pinned to the seal
     /// round so a timelock target can't be decrypted mid-match (plan_v2 §I hardening).
     pub begin_live_window_sec: u64,
 

@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -137,20 +138,60 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                 "matchId": input.match_id,
                 "onchainMatchId": onchain_match_id.to_string(),
             });
-            if let Err(resp) = require_downstream(
-                cfg,
-                post_json(
-                    &cfg.settlement_chain,
-                    "/internal/solana/lock-match",
-                    &cfg.auth,
-                    lock_body,
-                )
-                .await,
-                "lock-match",
+            let lock_resp = match post_json(
+                &cfg.settlement_chain,
+                "/internal/solana/lock-match",
+                &cfg.auth,
+                lock_body,
             )
             .await
             {
-                return resp;
+                Ok(resp) if (200..300).contains(&resp.status) => resp,
+                Ok(resp) if cfg.stub_mode => {
+                    eprintln!(
+                        "orchestrator stub: lock-match returned HTTP {}",
+                        resp.status
+                    );
+                    PostResult {
+                        status: 200,
+                        body: String::new(),
+                    }
+                }
+                Ok(resp) => {
+                    return (
+                        "502 Bad Gateway",
+                        format!(
+                            r#"{{"error":"lock-match failed with HTTP {}","detail":{}}}"#,
+                            resp.status,
+                            serde_json::to_string(&resp.body).unwrap_or_else(|_| "\"\"".into())
+                        ),
+                    );
+                }
+                Err(err) if cfg.stub_mode => {
+                    eprintln!("orchestrator stub: lock-match transport error: {err}");
+                    PostResult {
+                        status: 200,
+                        body: String::new(),
+                    }
+                }
+                Err(err) => {
+                    return (
+                        "503 Service Unavailable",
+                        format!(r#"{{"error":"lock-match unavailable","detail":"{err}"}}"#),
+                    );
+                }
+            };
+
+            // begin_live is rejected on-chain until seal_deadline_ts has elapsed
+            // (SealDeadlineNotReached = 6024). Prefer the stamped chain deadline returned by
+            // settlement-chain; fall back only for old/stubbed lock responses.
+            if let Some(deadline) = parse_lock_deadline_response(&lock_resp.body) {
+                let now = unix_now();
+                if deadline > now {
+                    tokio::time::sleep(Duration::from_secs(deadline - now + 1)).await;
+                }
+            } else if !cfg.stub_mode {
+                tokio::time::sleep(Duration::from_secs(21)).await;
             }
             // begin_live: settlement-chain generates the backend-native button_randomness, enumerates
             // the authoritative seat set from chain (getProgramAccounts), derives the button on-chain,
@@ -169,7 +210,10 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             {
                 Ok(resp) if (200..300).contains(&resp.status) => resp,
                 Ok(resp) if cfg.stub_mode => {
-                    eprintln!("orchestrator stub: begin-live returned HTTP {}", resp.status);
+                    eprintln!(
+                        "orchestrator stub: begin-live returned HTTP {}",
+                        resp.status
+                    );
                     PostResult {
                         status: 200,
                         body: String::new(),
@@ -294,6 +338,22 @@ pub fn hash_match_id(match_id: &str) -> u64 {
     hash
 }
 
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn parse_lock_deadline_response(body: &str) -> Option<u64> {
+    if body.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("sealDeadlineTs").and_then(json_u64))
+}
+
 /// Parse the begin-live response into `(button, live_start_ts, scheduled_end_ts)`. The button is
 /// the on-chain-derived dealer seat; timing fields arrive as numeric strings (or null in stub mode).
 fn parse_begin_live_response(body: &str, fallback: Option<u8>) -> (u8, Option<u64>, Option<u64>) {
@@ -310,7 +370,8 @@ fn parse_begin_live_response(body: &str, fallback: Option<u8>) -> (u8, Option<u6
 
 /// Accept a u64 from either a JSON number or a numeric string (settlement-chain stringifies u64s).
 fn json_u64(v: &serde_json::Value) -> Option<u64> {
-    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 struct PostResult {
@@ -401,12 +462,26 @@ mod tests {
 
     #[test]
     fn parse_begin_live_response_extracts_button_and_timing() {
-        let body = r#"{"ok":true,"button":2,"liveStartTs":"1782744656","scheduledEndTs":"1782745256"}"#;
+        let body =
+            r#"{"ok":true,"button":2,"liveStartTs":"1782744656","scheduledEndTs":"1782745256"}"#;
         let (button, live, end) = parse_begin_live_response(body, None);
         assert_eq!(button, 2);
         assert_eq!(live, Some(1_782_744_656));
         assert_eq!(end, Some(1_782_745_256));
         // empty body (stub mode) falls back to the provided button, no timing.
         assert_eq!(parse_begin_live_response("", Some(1)), (1, None, None));
+    }
+
+    #[test]
+    fn parse_lock_deadline_response_accepts_string_or_number() {
+        assert_eq!(
+            parse_lock_deadline_response(r#"{"sealDeadlineTs":"1782744656"}"#),
+            Some(1_782_744_656)
+        );
+        assert_eq!(
+            parse_lock_deadline_response(r#"{"sealDeadlineTs":1782744656}"#),
+            Some(1_782_744_656)
+        );
+        assert_eq!(parse_lock_deadline_response("{}"), None);
     }
 }

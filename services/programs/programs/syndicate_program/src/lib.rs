@@ -60,7 +60,7 @@ pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
 
 /// Default `begin_live_window_sec` if a caller passes 0 (operator must go live within this
 /// many seconds of the seal deadline).
-pub const DEFAULT_BEGIN_LIVE_WINDOW_SEC: u64 = 5;
+pub const DEFAULT_BEGIN_LIVE_WINDOW_SEC: u64 = 30;
 
 /// Expected unix publish time (seconds) of a drand round for the pinned beacon.
 pub fn drand_round_publish_ts(round: u64) -> Option<u64> {
@@ -1125,7 +1125,7 @@ pub struct CreateParams {
     /// `scheduled_end_ts` is derived on-chain at begin_live (= live_start + this).
     pub total_betting_duration_sec: u64,
     pub seal_window_sec: u64,
-    /// Max delay after seal deadline for the operator to call begin_live (0 → default 5s).
+    /// Max delay after seal deadline for the operator to call begin_live (0 → default 30s).
     pub begin_live_window_sec: u64,
     /// Public-queue fill window (seconds). The on-chain `fill_deadline_ts` is derived as
     /// `create_ts + fill_window_sec`; must lie within the operator-governed bounds.

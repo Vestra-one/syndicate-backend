@@ -15,6 +15,9 @@ export interface StartContext {
   bigBlind: number;
   roundCount: number;
   actionTimeoutMs: number;
+  roundDurationsSec?: number[];
+  observationWindowsSec?: number[];
+  timeBankSec?: number;
 }
 
 function stubEnabled(explicit?: boolean): boolean {
@@ -45,6 +48,9 @@ export function createOrchestratorClient(
           bigBlind: ctx.bigBlind,
           roundCount: ctx.roundCount,
           actionTimeoutMs: ctx.actionTimeoutMs,
+          roundDurationsSec: ctx.roundDurationsSec,
+          observationWindowsSec: ctx.observationWindowsSec,
+          timeBankSec: ctx.timeBankSec,
         }),
       });
       if (!res.ok) {

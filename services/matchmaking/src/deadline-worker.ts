@@ -89,6 +89,9 @@ export class DeadlineWorker {
           bigBlind: config.bigBlind,
           roundCount: config.roundCount,
           actionTimeoutMs: config.actionTimerSec * 1000,
+          roundDurationsSec: config.roundDurationsSec,
+          observationWindowsSec: config.observationWindowsSec,
+          timeBankSec: config.timeBankSec,
         });
       }
     } else {

@@ -420,6 +420,9 @@ export class MatchmakingRuntime {
       bigBlind: config.bigBlind,
       roundCount: config.roundCount,
       actionTimeoutMs: config.actionTimerSec * 1000,
+      roundDurationsSec: config.roundDurationsSec,
+      observationWindowsSec: config.observationWindowsSec,
+      timeBankSec: config.timeBankSec,
     };
     await this.orchestrator.triggerStartPolicy(rec.matchId, policy, ctx);
     await this.publishRoomsUpdate(rec, 'started');

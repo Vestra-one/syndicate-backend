@@ -63,7 +63,7 @@ export interface CreateMatchInput {
   totalBettingDurationSec?: number | string | bigint;
   /** SEALING window length (plan_v2 §1). */
   sealWindowSec?: number | string | bigint;
-  /** Max delay after the seal deadline for the operator to call begin_live (default 5s,
+  /** Max delay after the seal deadline for the operator to call begin_live (default 30s,
    *  plan_v2 §I). Must match the on-chain CreateParams field order. */
   beginLiveWindowSec?: number | string | bigint;
   /** Creator-selected fill window (seconds). The on-chain `fill_deadline_ts` is derived as
@@ -155,8 +155,8 @@ export function encodeCreateParams(input: CreateMatchInput, onchainMatchId: bigi
   const maxPlayers = input.maxPlayers;
   const totalBettingDuration = parseU64(input.totalBettingDurationSec ?? 600, 'totalBettingDurationSec');
   const sealWindow = parseU64(input.sealWindowSec ?? 20, 'sealWindowSec');
-  // 0 → on-chain DEFAULT_BEGIN_LIVE_WINDOW_SEC (5s).
-  const beginLiveWindow = parseU64(input.beginLiveWindowSec ?? 5, 'beginLiveWindowSec');
+  // 0 → on-chain DEFAULT_BEGIN_LIVE_WINDOW_SEC (30s).
+  const beginLiveWindow = parseU64(input.beginLiveWindowSec ?? 30, 'beginLiveWindowSec');
   const fillWindowSec = parseU64(input.fillWindowSec ?? 300, 'fillWindowSec');
   const maxConfidence = cfg.maxOracleConfidence ?? 2n ** 64n - 1n;
   const exponent = cfg.oracleExponent ?? -18;
@@ -596,7 +596,16 @@ export async function submitLockMatch(cfg: CustodyConfig, body: {
     buildLockInstruction(programId, signer.publicKey, pdas.protocol, pdas.match),
   );
   const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
-  return { ok: true as const, txSig, tx_sig: txSig, matchPda: pdas.match.toBase58() };
+  const info = await connection.getAccountInfo(pdas.match, 'confirmed');
+  const match = info?.data ? decodeMatchAccount(info.data as Buffer) : undefined;
+  return {
+    ok: true as const,
+    txSig,
+    tx_sig: txSig,
+    matchPda: pdas.match.toBase58(),
+    sealDeadlineTs: match ? match.sealDeadlineTs.toString() : null,
+    beginLiveWindowSec: match ? match.beginLiveWindowSec.toString() : null,
+  };
 }
 
 export async function buildClaimPreview(

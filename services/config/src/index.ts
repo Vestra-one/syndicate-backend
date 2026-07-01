@@ -83,7 +83,7 @@ export const DEFAULT_SEAL_WINDOW_SEC = 20;
 /** Default non-sealer penalty: 25% of buy-in forfeited to the pot (plan_v2 §5). */
 export const DEFAULT_NONSEAL_PENALTY_BPS = 2500;
 /** Default begin_live window — matches on-chain DEFAULT_BEGIN_LIVE_WINDOW_SEC (plan_v2 §I). */
-export const DEFAULT_BEGIN_LIVE_WINDOW_SEC = 5;
+export const DEFAULT_BEGIN_LIVE_WINDOW_SEC = 30;
 /** Must equal the on-chain MAX_TIMELOCK_SKEW_SEC (plan_v2 §I). */
 export const MAX_TIMELOCK_SKEW_SEC = 20;
 
