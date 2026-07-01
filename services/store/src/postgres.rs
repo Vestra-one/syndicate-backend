@@ -619,8 +619,43 @@ INSERT INTO matches (
     room_status
 )
 VALUES ($1, $2, $3::uuid, 'created', $4::timestamptz, 'Filling')
-ON CONFLICT (match_key) DO NOTHING
+ON CONFLICT (match_key) DO UPDATE SET match_key = EXCLUDED.match_key
 RETURNING id::text, match_key, onchain_match_id, status::text, room_status
+"#;
+
+/// Upsert a match_configs row keyed by rules-only config_hash (32 bytes).
+///
+/// Parameters:
+/// 1. config_version integer
+/// 2. price_feed_symbol text
+/// 3. pyth_feed_id bytea (32 bytes — signed-price token padded to 32)
+/// 4. oracle_exponent smallint
+/// 5. max_oracle_confidence bigint
+/// 6. buy_in_chips bigint
+/// 7. entry_fee_chips bigint
+/// 8. rake_bps integer
+/// 9. rake_cap_chips bigint
+/// 10. max_players smallint
+/// 11. created_by text
+/// 12. config_hash bytea (32 bytes)
+pub const UPSERT_MATCH_CONFIG_BY_HASH_SQL: &str = r#"
+INSERT INTO match_configs (
+    config_version,
+    price_feed_symbol,
+    pyth_feed_id,
+    oracle_exponent,
+    max_oracle_confidence,
+    buy_in_chips,
+    entry_fee_chips,
+    rake_bps,
+    rake_cap_chips,
+    max_players,
+    created_by,
+    config_hash
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT (config_hash) DO UPDATE SET config_hash = EXCLUDED.config_hash
+RETURNING id::text
 "#;
 
 /// Insert a seat row on a verified deposit (host or joiner).
@@ -919,13 +954,14 @@ mod tests {
         // Create: idempotent on re-reported txhash, starts in Filling, leaves
         // scheduled_end_ts unset (begin_live pins it).
         assert!(INSERT_MATCH_SQL.contains("INSERT INTO matches"));
-        assert!(INSERT_MATCH_SQL.contains("ON CONFLICT (match_key) DO NOTHING"));
+        assert!(INSERT_MATCH_SQL.contains("ON CONFLICT (match_key) DO UPDATE"));
         assert!(INSERT_MATCH_SQL.contains("'Filling'"));
         assert!(!INSERT_MATCH_SQL.contains("scheduled_end_ts"));
 
         // Deposit: idempotent on re-reported txhash.
         assert!(INSERT_MATCH_SEAT_SQL.contains("INSERT INTO match_seats"));
         assert!(INSERT_MATCH_SEAT_SQL.contains("ON CONFLICT (match_id, seat_index) DO NOTHING"));
+        assert!(UPSERT_MATCH_CONFIG_BY_HASH_SQL.contains("ON CONFLICT (config_hash)"));
 
         // begin_live: pins timing, records sealed cohort, advances to Live.
         assert!(UPDATE_MATCH_ON_BEGIN_LIVE_SQL.contains("scheduled_end_ts = $3::timestamptz"));

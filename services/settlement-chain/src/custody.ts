@@ -462,6 +462,10 @@ export async function submitBeginLive(cfg: CustodyConfig, input: BeginLiveInput)
     status: m?.status ?? null,
     liveStartTs: m ? m.liveStartTs.toString() : null,
     scheduledEndTs: m ? m.scheduledEndTs.toString() : null,
+    lockTs: m ? m.lockTs.toString() : null,
+    sealDeadlineTs: m ? m.sealDeadlineTs.toString() : null,
+    sealedCount: m ? m.sealedCount : null,
+    nonsealPenaltyBps: m ? m.nonsealPenaltyBps : null,
   };
 }
 

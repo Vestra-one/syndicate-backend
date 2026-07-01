@@ -5,10 +5,9 @@
  * HTTP to a Postgres-backed writer (the worker owns `tokio-postgres` + the Phase 05
  * `INSERT_MATCH_SQL` / `INSERT_MATCH_SEAT_SQL` statements).
  *
- * IMPORTANT: this persistence is for history/registry projection only. Capital safety NEVER
- * depends on it — `begin_live` reads the authoritative seat set from `getProgramAccounts`, and
- * settlement/void read PDAs. A failed or absent persistence write must therefore never block a
- * verified create/deposit from being registered; it is logged and the flow continues.
+ * When `MATCH_PERSISTENCE_URL` is configured, create-time persistence failures reject the
+ * room report because match-engine requires the Postgres row before it can start. Deposit
+ * seat writes remain best-effort (logged) so a retried deposit is not blocked.
  */
 
 export interface InsertMatchRow {
@@ -17,6 +16,15 @@ export interface InsertMatchRow {
   onchainMatchId: string;
   configHash: string;
   fillDeadlineMs: number;
+  priceFeedSymbol: string;
+  oracleTokenHex: string;
+  oracleExponent?: number;
+  maxOracleConfidence?: string;
+  buyInChips: number;
+  entryFeeChips: number;
+  rakeBps: number;
+  rakeCapChips: number;
+  maxPlayers: number;
 }
 
 export interface InsertMatchSeatRow {
@@ -42,15 +50,22 @@ export const NOOP_PERSISTENCE: MatchPersistence = {
 };
 
 /**
- * HTTP-backed persistence posting to a Postgres writer service. The endpoints carry exactly
- * the Phase 05 INSERT params; the writer runs the SQL. Errors are swallowed (logged) because
- * the registry is UX-only — never let a persistence hiccup reject a verified deposit.
+ * HTTP-backed persistence posting to settlement-worker. Create failures throw so the
+ * caller can reject `POST /rooms`; deposit failures are logged only.
  */
 export function createHttpPersistence(baseUrl: string, authToken?: string): MatchPersistence {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (authToken) headers.authorization = `Bearer ${authToken}`;
 
-  async function post(path: string, body: unknown): Promise<void> {
+  async function postStrict(path: string, body: unknown): Promise<void> {
+    const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`match persistence ${path} failed (${res.status}): ${detail}`);
+    }
+  }
+
+  async function postBestEffort(path: string, body: unknown): Promise<void> {
     try {
       const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
       if (!res.ok) {
@@ -63,7 +78,7 @@ export function createHttpPersistence(baseUrl: string, authToken?: string): Matc
   }
 
   return {
-    insertMatch: (row) => post('/internal/matches', row),
-    insertMatchSeat: (row) => post('/internal/matches/seats', row),
+    insertMatch: (row) => postStrict('/internal/matches', row),
+    insertMatchSeat: (row) => postBestEffort('/internal/matches/seats', row),
   };
 }

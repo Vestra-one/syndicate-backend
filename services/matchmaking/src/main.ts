@@ -27,9 +27,13 @@ export async function startMatchmakingFromEnv(): Promise<{ close(): Promise<void
   // delegates over HTTP so it stays zero-dependency and the predicate never forks.
   const verifyBaseUrl = process.env.SETTLEMENT_CHAIN_URL ?? 'http://127.0.0.1:8085';
   const chainVerifier = createChainVerifier(verifyBaseUrl, readAuthToken('SETTLEMENT_CHAIN_AUTH_TOKEN', 'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE'));
-  // Postgres match-row writer (Phase 05). Registry is UX-only, so this is best-effort.
+  // Postgres match-row writer (Phase 05) via settlement-worker.
   const persistence = process.env.MATCH_PERSISTENCE_URL
-    ? createHttpPersistence(process.env.MATCH_PERSISTENCE_URL, process.env.MATCH_PERSISTENCE_AUTH_TOKEN)
+    ? createHttpPersistence(
+        process.env.MATCH_PERSISTENCE_URL,
+        readAuthToken('MATCH_PERSISTENCE_AUTH_TOKEN', 'MATCH_PERSISTENCE_AUTH_TOKEN_FILE')
+          || readAuthToken('SETTLEMENT_CHAIN_AUTH_TOKEN', 'SETTLEMENT_CHAIN_AUTH_TOKEN_FILE'),
+      )
     : NOOP_PERSISTENCE;
   const runtime = new MatchmakingRuntime({
     store,

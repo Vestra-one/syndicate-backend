@@ -5,6 +5,10 @@ import {
   getTemplateByHash,
   templateAllowlist,
   buildMatchConfig,
+  oracleTokenForFeed,
+  DEFAULT_ORACLE_EXPONENT,
+  DEFAULT_MAX_ORACLE_CONFIDENCE,
+  deriveBlinds,
   type TierDefinition,
 } from '../../config/src/index.ts';
 import { tableTermsForTier } from '../../config/src/table-terms.ts';
@@ -240,13 +244,32 @@ export class MatchmakingRuntime {
       createdAtMs: now,
     };
 
-    // Persist canonical match + creator seat (Phase 05). Best-effort: registry is UX-only.
-    await this.persistence.insertMatch({
-      matchKey: matchId,
-      onchainMatchId: input.onchainMatchId,
-      configHash: input.configHash,
-      fillDeadlineMs,
-    });
+    // Persist canonical match + creator seat (Phase 05). Required when persistence URL is set.
+    const oracleToken = oracleTokenForFeed(template.feed);
+    if (!oracleToken) {
+      return { ok: false, reason: `unknown feed for oracle token: ${template.feed}` };
+    }
+    const blinds = deriveBlinds(buyIn);
+    try {
+      await this.persistence.insertMatch({
+        matchKey: matchId,
+        onchainMatchId: input.onchainMatchId,
+        configHash: input.configHash,
+        fillDeadlineMs,
+        priceFeedSymbol: template.feed,
+        oracleTokenHex: oracleToken,
+        oracleExponent: DEFAULT_ORACLE_EXPONENT,
+        maxOracleConfidence: DEFAULT_MAX_ORACLE_CONFIDENCE,
+        buyInChips: buyIn,
+        entryFeeChips: entryFee,
+        rakeBps: template.config.rakeBps,
+        rakeCapChips: blinds.rakeCap,
+        maxPlayers: record.maxPlayers,
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: `match persistence failed: ${reason}` };
+    }
     await this.persistence.insertMatchSeat({
       matchKey: matchId,
       seatIndex,

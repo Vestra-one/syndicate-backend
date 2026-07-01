@@ -25,11 +25,14 @@ services:
       MATCHMAKING_HOST: 0.0.0.0
       MATCHMAKING_PORT: 8082
       ORCHESTRATOR_URL: http://match-orchestrator:8086
+      MATCH_PERSISTENCE_URL: http://settlement-worker:8084
+      MATCH_PERSISTENCE_AUTH_TOKEN_FILE: /etc/syndicate/settlement-chain.token
       SETTLEMENT_CHAIN_AUTH_TOKEN_FILE: /etc/syndicate/settlement-chain.token
       SYNDICATE_ORCHESTRATOR_STUB: ${SYNDICATE_ORCHESTRATOR_STUB:-0}
       SOLANA_RPC_URL: http://host.docker.internal:8899
     depends_on:
       - match-orchestrator
+      - settlement-worker
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -113,6 +116,7 @@ services:
       ORCHESTRATOR_PORT: 8086
       SETTLEMENT_CHAIN_URL: http://settlement-chain:8790
       MATCH_ENGINE_URL: http://match-engine:8083
+      MATCH_PERSISTENCE_URL: http://settlement-worker:8084
       SYNDICATE_ORCHESTRATOR_STUB: ${SYNDICATE_ORCHESTRATOR_STUB:-0}
       # Auth token for calling settlement-chain /internal/* routes.
       # Reads the same file mounted into settlement-chain so secrets stay in one place.
@@ -120,6 +124,7 @@ services:
     depends_on:
       - settlement-chain
       - match-engine
+      - settlement-worker
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

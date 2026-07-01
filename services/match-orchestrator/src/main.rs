@@ -60,6 +60,7 @@ struct Metrics {
 struct AppConfig {
     settlement_chain: String,
     match_engine: String,
+    match_persistence: Option<String>,
     auth: String,
     stub_mode: bool,
 }
@@ -74,6 +75,7 @@ async fn main() {
             .unwrap_or_else(|_| "http://127.0.0.1:8790".into()),
         match_engine: std::env::var("MATCH_ENGINE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8083".into()),
+        match_persistence: std::env::var("MATCH_PERSISTENCE_URL").ok().filter(|s| !s.is_empty()),
         auth: read_auth_token(),
         stub_mode: env_flag("SYNDICATE_ORCHESTRATOR_STUB"),
     });
@@ -243,8 +245,31 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                     );
                 }
             };
-            let (button, live_start_ts, scheduled_end_ts) =
+            let (button, live_timing) =
                 parse_begin_live_response(&live_resp.body, input.button);
+
+            if let Some(persist_url) = &cfg.match_persistence {
+                if let Some(timing) = &live_timing {
+                    let live_body = serde_json::json!({
+                        "matchId": input.match_id,
+                        "liveStartTs": timing.live_start_ts,
+                        "scheduledEndTs": timing.scheduled_end_ts,
+                        "lockTs": timing.lock_ts,
+                        "sealDeadlineTs": timing.seal_deadline_ts,
+                        "sealedCount": timing.sealed_count,
+                        "nonsealPenaltyBps": timing.nonseal_penalty_bps,
+                    });
+                    if let Err(resp) = require_downstream(
+                        cfg,
+                        post_json(persist_url, "/internal/matches/live", &cfg.auth, live_body).await,
+                        "match persistence begin_live",
+                    )
+                    .await
+                    {
+                        return resp;
+                    }
+                }
+            }
 
             // engine start — forward the on-chain button + template wall-clock timing so every client
             // renders identical street deadlines anchored on live_start_ts.
@@ -272,7 +297,7 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
             if let Some(t) = input.time_bank_sec {
                 start_body["timeBankSec"] = serde_json::json!(t);
             }
-            if let Some(ls) = live_start_ts {
+            if let Some(ls) = live_timing.as_ref().map(|t| t.live_start_ts) {
                 start_body["liveStartTs"] = serde_json::json!(ls);
             }
             if let Err(resp) = require_downstream(
@@ -295,8 +320,8 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
                 serde_json::json!({
                     "ok": true,
                     "button": button,
-                    "liveStartTs": live_start_ts,
-                    "scheduledEndTs": scheduled_end_ts,
+                    "liveStartTs": live_timing.as_ref().map(|t| t.live_start_ts),
+                    "scheduledEndTs": live_timing.as_ref().map(|t| t.scheduled_end_ts),
                 })
                 .to_string(),
             );
@@ -354,18 +379,51 @@ fn parse_lock_deadline_response(body: &str) -> Option<u64> {
         .and_then(|v| v.get("sealDeadlineTs").and_then(json_u64))
 }
 
-/// Parse the begin-live response into `(button, live_start_ts, scheduled_end_ts)`. The button is
-/// the on-chain-derived dealer seat; timing fields arrive as numeric strings (or null in stub mode).
-fn parse_begin_live_response(body: &str, fallback: Option<u8>) -> (u8, Option<u64>, Option<u64>) {
+/// Parsed on-chain timing stamped by begin_live (and lock fields read back from the match account).
+#[derive(Debug, PartialEq)]
+struct BeginLiveTiming {
+    live_start_ts: u64,
+    scheduled_end_ts: u64,
+    lock_ts: u64,
+    seal_deadline_ts: u64,
+    sealed_count: u16,
+    nonseal_penalty_bps: u32,
+}
+
+/// Parse the begin-live response into dealer button + on-chain timing for engine/DB persistence.
+fn parse_begin_live_response(body: &str, fallback: Option<u8>) -> (u8, Option<BeginLiveTiming>) {
     if !body.is_empty() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let button = v.get("button").and_then(|x| x.as_u64()).map(|b| b as u8);
             let live = v.get("liveStartTs").and_then(json_u64);
             let end = v.get("scheduledEndTs").and_then(json_u64);
-            return (button.or(fallback).unwrap_or(0), live, end);
+            let lock = v.get("lockTs").and_then(json_u64);
+            let seal = v.get("sealDeadlineTs").and_then(json_u64);
+            let sealed = v
+                .get("sealedCount")
+                .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|n| n as u64)))
+                .map(|n| n as u16);
+            let penalty = v
+                .get("nonsealPenaltyBps")
+                .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|n| n as u64)))
+                .map(|n| n as u32);
+            let timing = match (live, end, lock, seal, sealed) {
+                (Some(live_start_ts), Some(scheduled_end_ts), Some(lock_ts), Some(seal_deadline_ts), Some(sealed_count)) => {
+                    Some(BeginLiveTiming {
+                        live_start_ts,
+                        scheduled_end_ts,
+                        lock_ts,
+                        seal_deadline_ts,
+                        sealed_count,
+                        nonseal_penalty_bps: penalty.unwrap_or(0),
+                    })
+                }
+                _ => None,
+            };
+            return (button.or(fallback).unwrap_or(0), timing);
         }
     }
-    (fallback.unwrap_or(0), None, None)
+    (fallback.unwrap_or(0), None)
 }
 
 /// Accept a u64 from either a JSON number or a numeric string (settlement-chain stringifies u64s).
@@ -462,14 +520,18 @@ mod tests {
 
     #[test]
     fn parse_begin_live_response_extracts_button_and_timing() {
-        let body =
-            r#"{"ok":true,"button":2,"liveStartTs":"1782744656","scheduledEndTs":"1782745256"}"#;
-        let (button, live, end) = parse_begin_live_response(body, None);
+        let body = r#"{"ok":true,"button":2,"liveStartTs":"1782744656","scheduledEndTs":"1782745256","lockTs":"1782744600","sealDeadlineTs":"1782744620","sealedCount":2,"nonsealPenaltyBps":2500}"#;
+        let (button, timing) = parse_begin_live_response(body, None);
         assert_eq!(button, 2);
-        assert_eq!(live, Some(1_782_744_656));
-        assert_eq!(end, Some(1_782_745_256));
+        let t = timing.expect("timing");
+        assert_eq!(t.live_start_ts, 1_782_744_656);
+        assert_eq!(t.scheduled_end_ts, 1_782_745_256);
+        assert_eq!(t.lock_ts, 1_782_744_600);
+        assert_eq!(t.seal_deadline_ts, 1_782_744_620);
+        assert_eq!(t.sealed_count, 2);
+        assert_eq!(t.nonseal_penalty_bps, 2500);
         // empty body (stub mode) falls back to the provided button, no timing.
-        assert_eq!(parse_begin_live_response("", Some(1)), (1, None, None));
+        assert_eq!(parse_begin_live_response("", Some(1)), (1, None));
     }
 
     #[test]

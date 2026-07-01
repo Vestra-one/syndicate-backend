@@ -76,6 +76,14 @@ export const ORACLE_ADAPTER_PYTH = 'pyth';
 export const SETTLEMENT_MODE_EXACT_TIMESTAMP = 'exact-timestamp';
 export const DEFAULT_ORACLE_UNAVAILABLE_MESSAGE = 'Pyth Oracle price for settlement is unavailable.';
 export const DEFAULT_SUPPORTED_FEEDS = ['BTC/USD', 'ETH/USD', 'SOL/USD'] as const;
+/** Signed-price server token addresses per feed (20-byte Ethereum addresses). */
+export const ORACLE_TOKEN_BY_FEED: Record<string, string> = {
+  'BTC/USD': '0xa7BaE7da3E4950700BE9f107EB186e89a474d180',
+  'ETH/USD': '0x6Dd0C6a2e058bc3F7D6AaCe23965180BcBbb2635',
+  'SOL/USD': '0xD31a59c85aE9D8edEFeC411D448f90841571b89c',
+};
+export const DEFAULT_ORACLE_EXPONENT = -18;
+export const DEFAULT_MAX_ORACLE_CONFIDENCE = '18446744073709551615';
 export const DEFAULT_GEOFENCE_BLOCKLIST = ['IN'] as const;
 export const DEFAULT_ENTRY_FEE = 0;
 export const DEFAULT_RAKE_BPS = 300;
@@ -440,4 +448,9 @@ export function templateAllowlist(): Set<string> {
 
 export function getTemplateByHash(configHash: string): GameTemplate | undefined {
   return buildTemplateHashMap().get(configHash);
+}
+
+/** Resolve the signed-price oracle token for a feed symbol. */
+export function oracleTokenForFeed(feedId: string): string | undefined {
+  return ORACLE_TOKEN_BY_FEED[feedId];
 }

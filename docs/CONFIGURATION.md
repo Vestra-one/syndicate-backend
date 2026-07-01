@@ -244,6 +244,7 @@ Source: `services/match-orchestrator/src/main.rs`.
 | `ORCHESTRATOR_HOST` / `ORCHESTRATOR_PORT` | `127.0.0.1` / `8086` | Bind host/port. |
 | `SETTLEMENT_CHAIN_URL` | `http://127.0.0.1:8790` | Settlement-chain URL. |
 | `MATCH_ENGINE_URL` | `http://127.0.0.1:8083` | Match-engine URL. |
+| `MATCH_PERSISTENCE_URL` | *(unset)* | Settlement-worker URL for `POST /internal/matches/live` after begin_live. |
 | `ORCHESTRATOR_AUTH_TOKEN` | `""` | Bearer token (optional). |
 | `SYNDICATE_ORCHESTRATOR_STUB` | *(unset)* | Stub mode (`1`/`true`/`yes`/`on`) for local dev. |
 
@@ -282,7 +283,7 @@ Source: `services/matchmaking/src/`.
 | `ORCHESTRATOR_URL` / `ORCHESTRATOR_AUTH_TOKEN` | `http://127.0.0.1:8086` / *(unset)* | Orchestrator. |
 | `SYNDICATE_ORCHESTRATOR_STUB` | `0` | Stub mode for local dev. |
 | `SETTLEMENT_CHAIN_URL` / `SETTLEMENT_CHAIN_AUTH_TOKEN` | `http://127.0.0.1:8085` / *(unset)* | Settlement-chain. ⚠️ Code default port `8085` is stale (settlement-chain listens on **8790**, §6d). Deploys override `SETTLEMENT_CHAIN_URL` to `http://settlement-chain:8790`; set it explicitly on bare metal. |
-| `MATCH_PERSISTENCE_URL` / `MATCH_PERSISTENCE_AUTH_TOKEN` | *(unset)* | HTTP persistence endpoint. |
+| `MATCH_PERSISTENCE_URL` / `MATCH_PERSISTENCE_AUTH_TOKEN` / `MATCH_PERSISTENCE_AUTH_TOKEN_FILE` | *(unset)* | HTTP match-row writer on settlement-worker (`POST /internal/matches`, `/seats`, `/live`). Required when match-engine uses Postgres leases. Falls back to `SETTLEMENT_CHAIN_AUTH_TOKEN(_FILE)` in matchmaking if unset. |
 | `WALLET_ROOM_CAP` | `3` (`DEFAULT_WALLET_ROOM_CAP`) | Max active rooms per wallet (anti-spam). |
 
 `code` constants: `TABLE_TTL_SEC` `2_592_000` (30 d) Redis snapshot TTL; rating buckets

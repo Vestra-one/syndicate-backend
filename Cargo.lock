@@ -2901,7 +2901,12 @@ version = "0.1.0"
 name = "syndicate-store"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "deadpool-postgres",
+ "hex",
  "sha2 0.10.9",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

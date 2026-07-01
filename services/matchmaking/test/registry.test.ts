@@ -73,6 +73,8 @@ test('verified create registers a room and persists match + creator seat', async
   assert.equal(seats.length, 1);
   assert.deepEqual((matches[0] as { onchainMatchId: string }).onchainMatchId, '111');
   assert.equal((matches[0] as { matchKey: string }).matchKey, '111');
+  assert.equal((matches[0] as { priceFeedSymbol: string }).priceFeedSymbol, TEMPLATE.feed);
+  assert.ok((matches[0] as { oracleTokenHex: string }).oracleTokenHex.startsWith('0x'));
   assert.equal((out as { matchId: string }).matchId, '111');
   assert.equal((out as { matchPda: string }).matchPda, 'PDA1');
   const rooms = await rt.listRooms({});
