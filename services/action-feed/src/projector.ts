@@ -237,13 +237,13 @@ export async function hydrateHistoricalGamesFromPsql(state: ProjectionState, dat
   const sql = `
     SELECT
       COALESCE(m.onchain_match_id::text, mh.match_id::text),
-      status::text,
-      price_feed_symbol,
-      floor(extract(epoch from scheduled_end_ts) * 1000)::bigint,
-      floor(extract(epoch from projected_at) * 1000)::bigint,
-      settlement_price,
-      replay_bundle_uri,
-      summary::text
+      mh.status::text,
+      mh.price_feed_symbol,
+      floor(extract(epoch from mh.scheduled_end_ts) * 1000)::bigint,
+      floor(extract(epoch from mh.projected_at) * 1000)::bigint,
+      mh.settlement_price,
+      mh.replay_bundle_uri,
+      mh.summary::text
     FROM match_history mh
     LEFT JOIN matches m ON m.id = mh.match_id
     WHERE mh.status IN ('settled', 'voided')
