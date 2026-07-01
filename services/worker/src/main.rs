@@ -12,6 +12,7 @@ mod health;
 mod metrics;
 mod poller;
 mod reconstruct;
+mod registry_http;
 mod relay;
 mod timelock_open;
 
@@ -103,7 +104,27 @@ async fn run_production() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8084);
-    health::spawn_health_server(&host, port, metrics.clone());
+    let registry_store = syndicate_store::MatchRegistryStore::from_database_url(&runtime.database_url)
+        .expect("connect postgres for match registry");
+    let registry_auth = read_optional_secret(
+        "MATCH_PERSISTENCE_AUTH_TOKEN",
+        "MATCH_PERSISTENCE_AUTH_TOKEN_FILE",
+    )
+    .or_else(|| {
+        std::env::var("SETTLEMENT_CHAIN_AUTH_TOKEN_FILE")
+            .ok()
+            .map(|path| read_secret_file("SETTLEMENT_CHAIN_AUTH_TOKEN_FILE", &path))
+    })
+    .unwrap_or_default();
+    registry_http::spawn_registry_server(
+        &host,
+        port,
+        registry_http::RegistryHttpState {
+            store: registry_store,
+            auth_token: registry_auth,
+            metrics: metrics.clone(),
+        },
+    );
 
     let pool = PostgresAttemptStore::pool_from_url(&runtime.database_url)
         .expect("connect postgres for settlement worker");
@@ -292,6 +313,18 @@ fn read_secret_file(name: &str, path: &str) -> String {
         panic!("{name} points to an empty secret file");
     }
     value
+}
+
+fn read_optional_secret(direct: &str, file_env: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(direct) {
+        let trimmed = value.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    std::env::var(file_env)
+        .ok()
+        .map(|path| read_secret_file(file_env, &path))
 }
 
 mod demo {
