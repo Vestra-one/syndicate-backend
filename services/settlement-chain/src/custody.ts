@@ -471,6 +471,12 @@ export async function submitVoidBeforeStart(cfg: CustodyConfig, onchainMatchId: 
   const programId = new PublicKey(cfg.programId);
   const signer = operatorSigner(cfg);
   const pdas = deriveMatchPdas(programId, onchainMatchId);
+  // Idempotent: if the match account was never created on-chain (e.g. matchmaking registered a
+  // room that was never backed by an on-chain tx), there is nothing to void.
+  const info = await connection.getAccountInfo(pdas.match, 'confirmed');
+  if (!info) {
+    return { ok: true as const, txSig: null, tx_sig: null, matchPda: pdas.match.toBase58(), skipped: 'not_found' as const };
+  }
   const tx = new Transaction().add(buildVoidBeforeStartInstruction(programId, pdas.match));
   const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
   return { ok: true as const, txSig, tx_sig: txSig, matchPda: pdas.match.toBase58() };
@@ -482,6 +488,10 @@ export async function submitVoidLiveAfterDeadline(cfg: CustodyConfig, onchainMat
   const programId = new PublicKey(cfg.programId);
   const signer = operatorSigner(cfg);
   const pdas = deriveMatchPdas(programId, onchainMatchId);
+  const info = await connection.getAccountInfo(pdas.match, 'confirmed');
+  if (!info) {
+    return { ok: true as const, txSig: null, tx_sig: null, matchPda: pdas.match.toBase58(), skipped: 'not_found' as const };
+  }
   const tx = new Transaction().add(buildVoidLiveAfterDeadlineInstruction(programId, pdas.match));
   const txSig = await sendSignedLegacyTx(connection, signer, tx, cfg.confirmationTimeoutMs);
   return { ok: true as const, txSig, tx_sig: txSig, matchPda: pdas.match.toBase58() };
