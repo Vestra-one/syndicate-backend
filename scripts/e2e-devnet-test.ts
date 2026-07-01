@@ -17,6 +17,7 @@
  *   SOLANA_RPC_URL      https://api.devnet.solana.com
  *   BUY_IN              1000000  (raw token units; 1 USDC @ 6 decimals)
  *   AWAIT_SETTLEMENT    1        (set to 0 to stop before settlement polling)
+ *   SETTLEMENT_TIMEOUT_MS 1200000  (tier-standard betting span is ~580s + settlement pipeline)
  */
 
 import {
@@ -38,6 +39,9 @@ import { homedir } from 'node:os';
 const RPC_URL   = process.env.SOLANA_RPC_URL ?? 'https://api.devnet.solana.com';
 const MATCHMAKING_URL = process.env.MATCHMAKING_URL ?? 'https://matchmaking.devnet.satoshitable.fun';
 const GATEWAY_URL     = process.env.GATEWAY_URL     ?? 'wss://gateway.devnet.satoshitable.fun';
+const CONFIG_URL      = process.env.CONFIG_URL      ?? 'https://config.devnet.satoshitable.fun';
+const ACTION_FEED_URL = process.env.ACTION_FEED_URL ?? 'https://api.devnet.satoshitable.fun';
+const PRICE_URL       = process.env.PRICE_URL       ?? 'https://price.devnet.satoshitable.fun';
 const PROGRAM_ID      = new PublicKey(process.env.SYNDICATE_PROGRAM_ID ?? '6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d');
 const CHIPS_MINT      = new PublicKey(process.env.CHIPS_TOKEN_MINT      ?? '3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X');
 const BASIC_AUTH      = process.env.BASIC_AUTH;
@@ -45,7 +49,7 @@ const PLAYER1_PATH    = process.env.PLAYER1_KEYPAIR ?? `${homedir()}/.config/sol
 const PLAYER2_PATH    = process.env.PLAYER2_KEYPAIR ?? '/tmp/player2.json';
 const BUY_IN          = BigInt(process.env.BUY_IN ?? '1000000');
 const AWAIT_SETTLEMENT = process.env.AWAIT_SETTLEMENT !== '0';
-const SETTLEMENT_TIMEOUT_MS = Number(process.env.SETTLEMENT_TIMEOUT_MS ?? '900000');
+const SETTLEMENT_TIMEOUT_MS = Number(process.env.SETTLEMENT_TIMEOUT_MS ?? '1200000');
 
 let CONFIG_HASH = process.env.CONFIG_HASH ?? '';
 const FEED_TOKEN_HEX  = 'a7BaE7da3E4950700BE9f107EB186e89a474d180';
@@ -92,7 +96,7 @@ async function apiPost(url: string, body: unknown): Promise<unknown> {
 
 async function loadDeployedTemplate(): Promise<void> {
   if (CONFIG_HASH && TOTAL_BETTING_DURATION_SEC && SEAL_WINDOW_SEC && BEGIN_LIVE_WINDOW_SEC) return;
-  const data = await apiGet('https://config.devnet.satoshitable.fun/config/templates') as any;
+  const data = await apiGet(`${CONFIG_URL}/config/templates`) as any;
   const template = (data?.templates ?? []).find((t: any) => t.tierId === 'tier-standard' && t.feed === 'BTC/USD');
   if (!template?.configHash || !template?.config) {
     throw new Error('deployed config template tier-standard:BTC/USD not found');
@@ -481,9 +485,9 @@ async function main() {
   log('\n--- Health checks ---');
   for (const [name, url] of [
     ['matchmaking',  `${MATCHMAKING_URL}/healthz`],
-    ['config',       'https://config.devnet.satoshitable.fun/healthz'],
-    ['action-feed',  'https://api.devnet.satoshitable.fun/healthz'],
-    ['price',        'https://price.devnet.satoshitable.fun/health'],
+    ['config',       `${CONFIG_URL}/healthz`],
+    ['action-feed',  `${ACTION_FEED_URL}/healthz`],
+    ['price',        `${PRICE_URL}/health`],
   ] as const) {
     try {
       const data = await apiGet(url as string);
@@ -495,7 +499,7 @@ async function main() {
   log('\n--- Config ---');
   try {
     await loadDeployedTemplate();
-    const catalog = await apiGet('https://config.devnet.satoshitable.fun/config/catalog') as any;
+    const catalog = await apiGet(`${CONFIG_URL}/config/catalog`) as any;
     log(`  Tiers: ${(catalog?.tiers ?? []).map((t: any) => t.tierId).join(', ')}`);
   } catch (e) { fail('config unavailable or missing deployed template', e); }
   log(`  Config hash: ${CONFIG_HASH}`);
@@ -623,7 +627,7 @@ async function main() {
   // ── 12. Host triggers match start ────────────────────────────────────────
   log('\n--- Step 8: POST /rooms/:roomCode/start + seal during backend Sealing window ---');
   log('  This calls: matchmaking → orchestrator → lock-match, then the request waits for seal_deadline before begin_live.');
-  log('  Acting as users, both wallets submit register_prediction_commitment while that backend request is in flight.');
+  log('  Acting as users, both wallets submit register_prediction_commitment after lock confirms on-chain.');
 
   const blinding1 = randomBytes(32);
   const blinding2 = randomBytes(32);
@@ -632,19 +636,15 @@ async function main() {
   const commitment1 = computeCommitment(prediction1, blinding1);
   const commitment2 = computeCommitment(prediction2, blinding2);
 
-  // Public matchmaking does not return lock's exact sealDeadlineTs until start completes, so the
-  // user-flow harness estimates from the host-start request time. If this fails, the backend needs
-  // a public Sealing/terms update carrying the exact timelock target.
-  const startRequestUnix = BigInt(Math.floor(Date.now() / 1000));
-  const projectedSealDeadline = startRequestUnix + SEAL_WINDOW_SEC;
-  const timelockTarget = pickTimelockTargetFromProjectedSeal(projectedSealDeadline);
-  log(`  projected seal_deadline_ts=${projectedSealDeadline}; timelockTarget=${timelockTarget} publishTs=${drandPublishTs(timelockTarget)}`);
-
   const startPromise = apiPost(`${MATCHMAKING_URL}/rooms/${roomCode}/start`, {
     host: player1.publicKey.toBase58(),
   }) as Promise<any>;
 
-  await sleep(2_000);
+  const onchain = await waitForSealingMatch(conn, pdas.matchPda, 90_000);
+  const latestMatchEnd = onchain.sealDeadlineTs + onchain.totalBettingDurationSec + onchain.beginLiveWindowSec;
+  const timelockTarget = pickTimelockTargetForLatestMatchEnd(latestMatchEnd);
+  log(`  on-chain seal_deadline_ts=${onchain.sealDeadlineTs}; latest_match_end=${latestMatchEnd}; timelockTarget=${timelockTarget} publishTs=${drandPublishTs(timelockTarget)}`);
+
   const [sealTx1, sealTx2] = await Promise.all([
     submitRegisterCommitmentWithRetry(conn, player1, pdas.matchPda, seat1, commitment1, timelockTarget, 'Player 1'),
     submitRegisterCommitmentWithRetry(conn, player2, pdas.matchPda, seat2, commitment2, timelockTarget, 'Player 2'),
@@ -785,7 +785,9 @@ async function main() {
 
   // ── 18. Backend-visible settlement ───────────────────────────────────────
   log('\n--- Step 14: Backend-visible settlement / resolution ---');
+  await waitForHistoryLive(matchId, 60_000);
   if (AWAIT_SETTLEMENT) {
+    warn(`tier-standard matches run ~${TOTAL_BETTING_DURATION_SEC}s of on-chain betting before scheduled_end; settlement follows timelock + worker submit. Timeout=${SETTLEMENT_TIMEOUT_MS}ms.`);
     const resolution = await waitForBackendResolution(matchId, SETTLEMENT_TIMEOUT_MS);
     ok(`Backend resolution visible: status=${resolution.status}`);
   } else {
@@ -850,19 +852,42 @@ async function sendSealPayloads(
   warn('No public ack exists for seal persistence; settlement outcome is the acceptance proof.');
 }
 
-async function waitForBackendResolution(matchId: string, timeoutMs: number): Promise<{ status: string; raw: unknown }> {
+async function waitForHistoryLive(matchId: string, timeoutMs: number): Promise<void> {
+  const historyBase = ACTION_FEED_URL.replace(/\/$/, '');
   const deadline = Date.now() + timeoutMs;
   let last: unknown = undefined;
   while (Date.now() < deadline) {
     try {
-      const r = await apiGet(`https://api.devnet.satoshitable.fun/matches/${encodeURIComponent(matchId)}/history`) as any;
+      const r = await apiGet(`${historyBase}/matches/${encodeURIComponent(matchId)}/history`) as any;
+      last = r;
+      if (r?.match?.status === 'live') {
+        ok(`Action-feed history visible: status=live`);
+        return;
+      }
+      log(`  history status=${r?.match?.status ?? 'unknown'}; waiting for live projection...`);
+    } catch (e) {
+      last = e instanceof Error ? e.message : String(e);
+      log(`  history not available yet (${last}); waiting...`);
+    }
+    await sleep(3_000);
+  }
+  fail(`action-feed never projected live history for match ${matchId}`, last);
+}
+
+async function waitForBackendResolution(matchId: string, timeoutMs: number): Promise<{ status: string; raw: unknown }> {
+  const historyBase = ACTION_FEED_URL.replace(/\/$/, '');
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      const r = await apiGet(`${historyBase}/matches/${encodeURIComponent(matchId)}/history`) as any;
       last = r;
       const status = r?.match?.status;
       if (status === 'settled' || status === 'voided') return { status, raw: r };
-      log(`  history status=${status ?? 'not-terminal'}; waiting...`);
+      log(`  history status=${status ?? 'unknown'}; waiting for terminal state...`);
     } catch (e) {
       last = e instanceof Error ? e.message : String(e);
-      log(`  history not available yet; waiting...`);
+      log(`  history not available yet (${last}); waiting...`);
     }
     await sleep(15_000);
   }
@@ -909,14 +934,48 @@ function drandPublishTs(round: bigint): bigint {
   return DRAND_GENESIS_TIME + round * DRAND_PERIOD_SEC;
 }
 
-function pickTimelockTargetFromProjectedSeal(sealDeadlineTs: bigint): bigint {
-  const latestMatchEnd = sealDeadlineTs + TOTAL_BETTING_DURATION_SEC + BEGIN_LIVE_WINDOW_SEC;
+function pickTimelockTargetForLatestMatchEnd(latestMatchEnd: bigint): bigint {
   let round = (latestMatchEnd - DRAND_GENESIS_TIME) / DRAND_PERIOD_SEC + 1n;
   while (drandPublishTs(round) <= latestMatchEnd) round += 1n;
   if (drandPublishTs(round) > latestMatchEnd + MAX_TIMELOCK_SKEW_SEC) {
-    throw new Error(`no valid drand round for projected latestMatchEnd=${latestMatchEnd}`);
+    throw new Error(`no valid drand round for latestMatchEnd=${latestMatchEnd}`);
   }
   return round;
+}
+
+interface OnchainMatchTiming {
+  status: string;
+  sealDeadlineTs: bigint;
+  totalBettingDurationSec: bigint;
+  beginLiveWindowSec: bigint;
+}
+
+async function waitForSealingMatch(
+  conn: Connection,
+  matchPda: PublicKey,
+  timeoutMs: number,
+): Promise<OnchainMatchTiming> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const info = await conn.getAccountInfo(matchPda, 'confirmed');
+    if (info?.data && info.data.length >= 237) {
+      const decoded = decodeMatchTiming(Buffer.from(info.data));
+      if (decoded.status === 'Sealing') return decoded;
+    }
+    await sleep(1_000);
+  }
+  throw new Error(`match ${matchPda.toBase58()} did not enter Sealing within ${timeoutMs}ms`);
+}
+
+function decodeMatchTiming(data: Buffer): OnchainMatchTiming {
+  const statuses = ['Filling', 'Sealing', 'Live', 'Settled', 'Void'];
+  const statusCode = data.readUInt8(120);
+  return {
+    status: statuses[statusCode] ?? `Unknown(${statusCode})`,
+    sealDeadlineTs: data.readBigUInt64LE(189),
+    totalBettingDurationSec: data.readBigUInt64LE(213),
+    beginLiveWindowSec: data.readBigUInt64LE(229),
+  };
 }
 
 // ─── Next-steps printer ───────────────────────────────────────────────────────
