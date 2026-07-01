@@ -17,10 +17,11 @@ Configures **nginx** (already running on the VPS) as a TLS-terminating reverse p
 | `wss://gateway.devnet.satoshitable.fun` | `127.0.0.1:18081` | Gateway (WebSocket) |
 | `https://api.devnet.satoshitable.fun` | `127.0.0.1:18080` | Action-feed (REST) |
 | `https://config.devnet.satoshitable.fun` | `127.0.0.1:18085` | Config (REST) |
+| `https://matchmaking.devnet.satoshitable.fun` | `127.0.0.1:18082` | Matchmaking REST (`POST /rooms`, `POST /matches/:id/deposits`) |
 | `https://price.devnet.satoshitable.fun` | `127.0.0.1:18088` | Signed-price feed — read-only |
 | `https://satoshitable.fun` | — | Frontend SPA → **Netlify** (not this guide) |
 
-**Not exposed publicly** (localhost / ops only): match-engine, matchmaking, settlement-chain, settlement-worker, Postgres, Redis.
+**Not exposed publicly** (localhost / ops only): match-engine, settlement-chain, settlement-worker, Postgres, Redis.
 
 > **Signed-price feed is read-only.** nginx blocks `/internal/*` and `/metrics` with `404` — those failover admin routes are unauthenticated on devnet and must never reach the internet.
 
@@ -93,10 +94,11 @@ sudo certbot --nginx \
   -d gateway.devnet.satoshitable.fun \
   -d api.devnet.satoshitable.fun \
   -d config.devnet.satoshitable.fun \
+  -d matchmaking.devnet.satoshitable.fun \
   -d price.devnet.satoshitable.fun \
   --non-interactive --agree-tos \
   -m hello@satoshitable.fun
-```
+```x
 
 certbot will:
 1. Issue a Let's Encrypt certificate covering all four domains
@@ -203,6 +205,7 @@ Use **different hostnames** — never reuse devnet subdomains for real money.
 | `502` on `api.devnet…` | `curl http://127.0.0.1:18080/healthz`; `$COMPOSE_APP up -d action-feed` |
 | `502` on `gateway.devnet…` | `curl http://127.0.0.1:18081/healthz`; `$COMPOSE_APP up -d gateway` |
 | `502` on `config.devnet…` | `curl http://127.0.0.1:18085/healthz`; `$COMPOSE_APP up -d config` |
+| `502` on `matchmaking.devnet…` | `curl http://127.0.0.1:18082/healthz`; `$COMPOSE_APP up -d matchmaking` |
 | `502` on `price.devnet…` | `curl http://127.0.0.1:18088/health`; `$COMPOSE_APP up -d signed-price-server` |
 | `price.devnet…/metrics` returns 200 | `location ~* ^/(internal\|metrics)` block missing — check nginx config and reload |
 | WebSocket drops after 60 s | Add `proxy_read_timeout 3600s; proxy_send_timeout 3600s;` to the gateway server block |

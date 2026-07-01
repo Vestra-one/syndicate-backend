@@ -73,7 +73,7 @@ async fn main() {
             .unwrap_or_else(|_| "http://127.0.0.1:8790".into()),
         match_engine: std::env::var("MATCH_ENGINE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8083".into()),
-        auth: std::env::var("ORCHESTRATOR_AUTH_TOKEN").unwrap_or_default(),
+        auth: read_auth_token(),
         stub_mode: env_flag("SYNDICATE_ORCHESTRATOR_STUB"),
     });
 
@@ -259,7 +259,7 @@ async fn handle_request(request: &str, cfg: &AppConfig) -> (&'static str, String
         } else if input.result.action == "void" {
             let void_body = serde_json::json!({
                 "matchId": input.match_id,
-                "match": { "onchainMatchId": onchain_match_id, "seatWallets": [] },
+                "match": { "onchainMatchId": onchain_match_id.to_string(), "seatWallets": [] },
             });
             if let Err(resp) = require_downstream(
                 cfg,
@@ -361,6 +361,24 @@ async fn require_downstream(
             format!(r#"{{"error":"{step} unavailable","detail":"{err}"}}"#),
         )),
     }
+}
+
+// Reads ORCHESTRATOR_AUTH_TOKEN directly, or falls back to reading the file path given by
+// ORCHESTRATOR_AUTH_TOKEN_FILE. This mirrors how settlement-chain loads its own token so the
+// orchestrator can share the same secret file mount in docker-compose.
+fn read_auth_token() -> String {
+    if let Ok(tok) = std::env::var("ORCHESTRATOR_AUTH_TOKEN") {
+        if !tok.is_empty() {
+            return tok;
+        }
+    }
+    if let Ok(path) = std::env::var("ORCHESTRATOR_AUTH_TOKEN_FILE") {
+        return std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read ORCHESTRATOR_AUTH_TOKEN_FILE {path}: {e}"))
+            .trim()
+            .to_string();
+    }
+    String::new()
 }
 
 fn env_flag(name: &str) -> bool {

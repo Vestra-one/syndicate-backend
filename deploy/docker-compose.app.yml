@@ -111,6 +111,9 @@ services:
       SETTLEMENT_CHAIN_URL: http://settlement-chain:8790
       MATCH_ENGINE_URL: http://match-engine:8083
       SYNDICATE_ORCHESTRATOR_STUB: ${SYNDICATE_ORCHESTRATOR_STUB:-0}
+      # Auth token for calling settlement-chain /internal/* routes.
+      # Reads the same file mounted into settlement-chain so secrets stay in one place.
+      ORCHESTRATOR_AUTH_TOKEN_FILE: /etc/syndicate/settlement-chain.token
     depends_on:
       - settlement-chain
       - match-engine
@@ -118,6 +121,8 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "18086:8086"
+    volumes:
+      - ./secrets/settlement-chain.token:/etc/syndicate/settlement-chain.token:ro
 
   config:
     build:
