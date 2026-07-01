@@ -51,7 +51,12 @@ export interface ConfigTemplate {
   tierId: string
   label: string
   feed: string
-  buyIn: Chips
+  /** Creator-selectable buy-in range (USDC base units). Pick any value in [buyInMin, buyInMax]. */
+  buyInMin: Chips
+  buyInMax: Chips
+  /** Creator-selectable fill window range (seconds). */
+  fillWindowMinSec: number
+  fillWindowMaxSec: number
   config: TemplateConfig
   configHash: string // 64-char hex (32 bytes)
   totalBettingDurationSec: number
@@ -59,7 +64,10 @@ export interface ConfigTemplate {
 
 /** All on-chain CreateParams numeric fields a host needs (derived from a template). */
 export interface CreateTableParams {
+  /** Selected buy-in (defaults to buyInMin). Creator may choose any value in [buyInMin, buyInMax]. */
   buyIn: Chips
+  buyInMin: Chips
+  buyInMax: Chips
   entryFee: Chips
   rakeBps: number
   rakeCap: Chips
@@ -70,7 +78,10 @@ export interface CreateTableParams {
   totalBettingDurationSec: number
   sealWindowSec: number
   beginLiveWindowSec: number
+  /** Selected fill window in seconds (defaults to fillWindowMinSec). */
   fillWindowSec: number
+  fillWindowMinSec: number
+  fillWindowMaxSec: number
   /** price fixed-point decimals → on-chain oracle exponent is the negative of this. */
   decimals: number
 }
@@ -114,12 +125,12 @@ export function templateToTerms(t: ConfigTemplate): TableTerms {
     oracleAdapter: 'signed-price',
     settlementMode: 'exact-timestamp',
     oracleUnavailableMessage: c.oracleUnavailableMessage,
-    buyIn: c.buyIn,
+    buyIn: 1_000_000,        // $1 USDC
     entryFee: c.entryFee,
     rakeBps: c.rakeBps,
-    rakeCap: c.rakeCap,
-    smallBlind: c.smallBlind,
-    bigBlind: c.bigBlind,
+    rakeCap: 1_000_000,
+    smallBlind: Math.max(1, Math.floor(1_000_000 / 200)), // 5000 — derived from $1 buy-in
+    bigBlind: Math.max(2, Math.floor(1_000_000 / 100)),   // 10000
     minPlayers: c.minPlayers,
     maxPlayers: c.maxPlayers,
     roundCount: c.roundCount,
@@ -139,10 +150,12 @@ export function templateToTerms(t: ConfigTemplate): TableTerms {
 export function templateToCreateParams(t: ConfigTemplate): CreateTableParams {
   const c = t.config
   return {
-    buyIn: c.buyIn,
+    buyIn: 1_000_000,        // $1 USDC
+    buyInMin: t.buyInMin,
+    buyInMax: t.buyInMax,
     entryFee: c.entryFee,
     rakeBps: c.rakeBps,
-    rakeCap: c.rakeCap,
+    rakeCap: 1_000_000,      // rakeCap = chosen buyIn
     nonsealPenaltyBps: c.nonsealPenaltyBps,
     minPlayers: c.minPlayers,
     maxPlayers: c.maxPlayers,
@@ -150,7 +163,9 @@ export function templateToCreateParams(t: ConfigTemplate): CreateTableParams {
     totalBettingDurationSec: t.totalBettingDurationSec,
     sealWindowSec: c.sealWindowSec,
     beginLiveWindowSec: c.beginLiveWindowSec,
-    fillWindowSec: c.fillWindowSec,
+    fillWindowSec: 3600,  // 1 hour fill window
+    fillWindowMinSec: t.fillWindowMinSec,
+    fillWindowMaxSec: t.fillWindowMaxSec,
     decimals: priceDecimals(c),
   }
 }

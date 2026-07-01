@@ -9,13 +9,15 @@
 import type { CreateRoomReport, DepositReport } from '@/lib/protocol'
 
 const MM_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
-  ? '/api-proxy'
+  ? '/matchmaking-proxy'
   : (import.meta.env.VITE_MATCHMAKING_URL as string | undefined)
     ?? (import.meta.env.VITE_API_URL as string | undefined)
 
 interface ReportResult {
   ok: boolean
   roomCode?: string
+  matchId?: string
+  fillDeadline?: number
   seat?: number
   reason?: string
 }
@@ -29,7 +31,12 @@ async function post(path: string, body: unknown): Promise<ReportResult> {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8_000),
     })
-    if (!res.ok) return { ok: false, reason: `${path} ${res.status}` }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>
+      const reason = (body.reason as string | undefined) ?? (body.error as string | undefined) ?? `${path} ${res.status}`
+      console.warn(`[matchmaking] ${path} ${res.status}:`, body)
+      return { ok: false, reason }
+    }
     return (await res.json()) as ReportResult
   } catch (err) {
     return { ok: false, reason: String(err) }

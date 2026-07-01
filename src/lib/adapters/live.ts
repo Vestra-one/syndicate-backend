@@ -27,8 +27,18 @@ import { AnchorProvider, Program, BN } from '@coral-xyz/anchor'
 // Import the provider-level Wallet interface (not the NodeWallet class exported at the top level)
 import type { Wallet as AnchorWallet } from '@coral-xyz/anchor/dist/cjs/provider'
 import type { MessageSignerWalletAdapter } from '@solana/wallet-adapter-base'
+import bs58 from 'bs58'
 import { walletBridge } from '@/lib/walletBridge'
-import type { Adapters, ChainClient, CreateAndDepositInput, Tlock, Wallet } from './index'
+import type {
+  Adapters,
+  ChainClient,
+  CreateAndDepositInput,
+  OnchainMatchStatus,
+  OnchainSeatInfo,
+  ReclaimableMatch,
+  Tlock,
+  Wallet,
+} from './index'
 import type { Chips } from '@/lib/protocol'
 import IDL from '@/lib/idl/syndicate_program.json'
 // Static import avoids a Rollup "mixed static/dynamic" warning
@@ -120,6 +130,83 @@ export function newOnchainMatchId(): string {
   for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i])
   // keep it within safe u64 and non-zero
   return (v === 0n ? 1n : v).toString()
+}
+
+// ---------------------------------------------------------------------------
+// On-chain reads: MatchAccount / SeatAccount (self-serve — no backend needed).
+// Byte offsets mirror services/settlement-chain/src/matchAccount.ts, which is
+// kept in lockstep with state.rs; MatchAccount = 435 bytes, SeatAccount = 168.
+// ---------------------------------------------------------------------------
+
+const MATCH_STATUS_NAMES = ['FILLING', 'SEALING', 'LIVE', 'SETTLED', 'VOID'] as const
+const SEAT_ACCOUNT_DISCRIMINATOR = Uint8Array.from([251, 85, 162, 147, 128, 212, 122, 178])
+
+function decodeMatchStatus(data: Buffer): OnchainMatchStatus {
+  return {
+    status: MATCH_STATUS_NAMES[data.readUInt8(120)] ?? 'FILLING',
+    fillDeadlineTs: Number(data.readBigUInt64LE(173)),
+    buyIn: Number(data.readBigUInt64LE(112)),
+    entryFee: Number(data.readBigUInt64LE(289)),
+  }
+}
+
+function decodeSeatInfo(data: Buffer): OnchainSeatInfo {
+  return {
+    seatIndex: data.readUInt16LE(72),
+    deposit: Number(data.readBigUInt64LE(74)),
+    entryFeePaid: Number(data.readBigUInt64LE(82)),
+    claimed: data.readUInt8(98) !== 0,
+  }
+}
+
+/**
+ * Anchor programs log e.g. "Error Code: FillDeadlineNotReached. Error Number: 6025." on
+ * failure. Pull the symbolic code out so callers can branch on it (idempotent-refund
+ * detection, friendly countdown messaging) instead of parsing raw simulation output.
+ */
+function anchorErrorCode(err: unknown, logs?: string[]): string | null {
+  const text = [((err as Error)?.message ?? ''), ...(logs ?? (err as { logs?: string[] })?.logs ?? [])].join('\n')
+  return /Error Code:\s*(\w+)/.exec(text)?.[1] ?? null
+}
+
+/** Simulate (for a clean error code), then send + confirm. Throws Error(code) on a program error. */
+async function simulateSignAndSend(
+  conn: Connection,
+  tx: Transaction,
+  feePayer: PublicKey,
+): Promise<string> {
+  const adapter = walletBridge.adapter
+  if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash()
+  tx.recentBlockhash = blockhash
+  tx.lastValidBlockHeight = lastValidBlockHeight
+  tx.feePayer = feePayer
+
+  const sim = await conn.simulateTransaction(tx)
+  if (sim.value.err) {
+    const code = anchorErrorCode(sim.value.err, sim.value.logs ?? undefined)
+    throw new Error(code ?? `Transaction simulation failed: ${JSON.stringify(sim.value.err)}`)
+  }
+
+  const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
+  let sig: string
+  try {
+    sig = await sender.sendTransaction(tx, conn, { skipPreflight: true })
+  } catch (err) {
+    const code = anchorErrorCode(err)
+    throw code ? new Error(code) : err
+  }
+  // A bare-signature confirmTransaction(sig, commitment) has no expiry — if the RPC's
+  // signature-subscribe WS never fires (common on congested/public endpoints), this hangs
+  // forever with no error surfaced. Passing the blockhash strategy bounds it to the
+  // blockhash's ~90s validity window, so a stalled confirmation always eventually throws.
+  const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'finalized')
+  if (confirmation.value.err) {
+    const code = anchorErrorCode(confirmation.value.err)
+    throw new Error(code ?? `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`)
+  }
+  return sig
 }
 
 // ---------------------------------------------------------------------------
@@ -293,9 +380,6 @@ function createLiveChain(): ChainClient {
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, authority, authority)
 
-      // fill_deadline_ts is absolute unix seconds; the engine fills until then.
-      const fillDeadlineTs = Math.floor(Date.now() / 1000) + input.fillWindowSec
-
       const params = {
         matchId: new BN(input.onchainMatchId),
         buyIn: new BN(input.buyIn),
@@ -310,7 +394,7 @@ function createLiveChain(): ChainClient {
         totalBettingDurationSec: new BN(input.totalBettingDurationSec),
         sealWindowSec: new BN(input.sealWindowSec),
         beginLiveWindowSec: new BN(input.beginLiveWindowSec),
-        fillDeadlineTs: new BN(fillDeadlineTs),
+        fillWindowSec: new BN(input.fillWindowSec), // program derives fill_deadline_ts = create_ts + fillWindowSec
         maxOracleConfidence: new BN(0), // signed-price path; not Pyth-confidence gated
         oracleExponent: -18, // signed_price::SIGNED_PRICE_EXPONENT — WAD-18 fixed-point, not feed decimals
       }
@@ -357,7 +441,7 @@ function createLiveChain(): ChainClient {
       console.log('  totalBettingDur:   ', params.totalBettingDurationSec.toString())
       console.log('  sealWindowSec:     ', params.sealWindowSec.toString())
       console.log('  beginLiveWindow:   ', params.beginLiveWindowSec.toString())
-      console.log('  fillDeadlineTs:    ', params.fillDeadlineTs.toString())
+      console.log('  fillWindowSec:     ', params.fillWindowSec.toString())
       console.log('  maxOracleConf:     ', params.maxOracleConfidence.toString())
       console.log('  oracleExponent:    ', params.oracleExponent)
       console.log('  seatIndex:         ', input.seatIndex)
@@ -450,10 +534,7 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
-      const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
-      const sig = await sender.sendTransaction(tx, conn, { skipPreflight: false })
-      await conn.confirmTransaction(sig, 'finalized')
-      return sig
+      return simulateSignAndSend(conn, tx, player)
     },
 
     async claim(_matchId: string): Promise<string> {
@@ -554,6 +635,128 @@ function createLiveChain(): ChainClient {
       const sig = await sender.sendTransaction(tx, conn)
       await conn.confirmTransaction(sig, 'finalized')
       return sig
+    },
+
+    // -------------------------------------------------------------------
+    // Cancel & reclaim (§ stuck-room self-serve void + refund)
+    // -------------------------------------------------------------------
+
+    async getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null> {
+      const conn = getConnection()
+      const info = await conn.getAccountInfo(matchPda(onchainMatchId))
+      return info?.data ? decodeMatchStatus(info.data as Buffer) : null
+    },
+
+    async getMySeat(onchainMatchId: string): Promise<OnchainSeatInfo | null> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) return null
+      const conn = getConnection()
+      const seat = seatPda(matchPda(onchainMatchId), adapter.publicKey)
+      const info = await conn.getAccountInfo(seat)
+      return info?.data ? decodeSeatInfo(info.data as Buffer) : null
+    },
+
+    /** Permissionless: anyone can send this once `now >= fill_deadline_ts`; only pays the fee. */
+    async voidBeforeStart(onchainMatchId: string): Promise<string> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+
+      const conn = getConnection()
+      const matchAcct = matchPda(onchainMatchId)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const ix = await program.methods
+        .voidBeforeStart()
+        .accounts({ matchAccount: matchAcct })
+        .instruction()
+
+      const tx = new Transaction().add(ix)
+      return simulateSignAndSend(conn, tx, adapter.publicKey)
+    },
+
+    /**
+     * Player-signed refund that derives seatIndex from the on-chain seat account itself, so it
+     * works standalone (e.g. a "my matches" list) without any active gateway/match state.
+     */
+    async refundSelf(onchainMatchId: string): Promise<string> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
+      if (!mintAddr) throw new Error('[live] chips token mint not configured')
+
+      const conn = getConnection()
+      const player = adapter.publicKey
+      const matchAcct = matchPda(onchainMatchId)
+      const vault = vaultPda(matchAcct)
+      const seat = seatPda(matchAcct, player)
+
+      const seatInfo = await conn.getAccountInfo(seat)
+      if (!seatInfo?.data) throw new Error('NoSeat')
+      const { seatIndex } = decodeSeatInfo(seatInfo.data as Buffer)
+      const seatIdx = seatIndexPda(matchAcct, seatIndex)
+
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const ix = await program.methods
+        .refund()
+        .accounts({
+          player,
+          matchAccount: matchAcct,
+          seat,
+          seatIndexAccount: seatIdx,
+          vault,
+          playerToken,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction()
+
+      const tx = new Transaction()
+      if (createIx) tx.add(createIx)
+      tx.add(ix)
+      return simulateSignAndSend(conn, tx, player)
+    },
+
+    /** Scan the connected wallet's seats for matches stuck FILLING past deadline, or VOID. */
+    async listReclaimableMatches(): Promise<ReclaimableMatch[]> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) return []
+
+      const conn = getConnection()
+      const player = adapter.publicKey
+      const seatAccounts = await conn.getProgramAccounts(PROGRAM_ID, {
+        filters: [
+          { memcmp: { offset: 0, bytes: bs58.encode(SEAT_ACCOUNT_DISCRIMINATOR) } },
+          { memcmp: { offset: 40, bytes: player.toBase58() } }, // SeatAccount.player
+        ],
+      })
+      if (seatAccounts.length === 0) return []
+
+      const matchKeys = seatAccounts.map((a) => new PublicKey((a.account.data as Buffer).subarray(8, 40)))
+      const matchInfos = await conn.getMultipleAccountsInfo(matchKeys)
+
+      const nowSec = Date.now() / 1000
+      const out: ReclaimableMatch[] = []
+      for (let i = 0; i < seatAccounts.length; i++) {
+        const seat = decodeSeatInfo(seatAccounts[i].account.data as Buffer)
+        if (seat.claimed) continue // nothing left to reclaim
+        const matchData = matchInfos[i]?.data as Buffer | undefined
+        if (!matchData) continue
+        const status = decodeMatchStatus(matchData)
+        const reclaimable = status.status === 'VOID' || (status.status === 'FILLING' && nowSec >= status.fillDeadlineTs)
+        if (!reclaimable) continue
+        out.push({
+          ...status,
+          onchainMatchId: matchData.readBigUInt64LE(104).toString(),
+          matchPda: matchKeys[i].toBase58(),
+          seatIndex: seat.seatIndex,
+          deposit: seat.deposit,
+          entryFeePaid: seat.entryFeePaid,
+        })
+      }
+      return out
     },
   }
 }

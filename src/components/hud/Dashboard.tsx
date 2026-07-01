@@ -3,7 +3,9 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { ratedScore } from '@/lib/discovery'
+import { createAdapters } from '@/lib/adapters'
 import type { DashboardSortKey, LiveGame, UpcomingGame } from '@/lib/protocol'
+import { ReclaimCard } from './ReclaimCard'
 import './hud.css'
 
 const SORTS: { key: DashboardSortKey; label: string }[] = [
@@ -254,6 +256,41 @@ function ActiveRow({ game, onWatch, index }: { game: LiveGame; onWatch: () => vo
 }
 
 // ---------------------------------------------------------------------------
+// My matches — stuck rooms this wallet can cancel & reclaim funds from.
+// Scanned directly on-chain (seat accounts owned by the connected wallet); no backend needed.
+// ---------------------------------------------------------------------------
+
+function MyReclaimableMatches() {
+  const chain = useMemo(() => createAdapters().chain, [])
+  const { connected } = useWallet()
+  const [ids, setIds] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!connected) { setIds([]); return }
+    let alive = true
+    chain.listReclaimableMatches()
+      .then((matches) => { if (alive) setIds(matches.map((m) => m.onchainMatchId)) })
+      .catch(() => { /* best-effort — an RPC hiccup shouldn't break the dashboard */ })
+    return () => { alive = false }
+  }, [connected, chain])
+
+  if (ids.length === 0) return null
+
+  return (
+    <section className="dash-section">
+      <div className="dash-section-head">
+        <span className="dash-section-dot dash-section-dot--live" />
+        <span className="dash-section-label">Needs your attention</span>
+        <span className="dash-section-sub">stuck rooms — cancel &amp; reclaim your funds</span>
+      </div>
+      <div className="dash-reclaim-list">
+        {ids.map((id) => <ReclaimCard key={id} onchainMatchId={id} />)}
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 
@@ -375,6 +412,8 @@ export function Dashboard() {
               <button className="play-now-btn dash-open-cta" onClick={handleCreate}>+ New game</button>
             </div>
           )}
+
+          {status === 'ready' && <MyReclaimableMatches />}
 
           {!isEmpty && status === 'ready' && (
             <section className="dash-section">

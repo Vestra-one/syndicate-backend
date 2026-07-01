@@ -23,6 +23,16 @@ export type MatchPhase =
   | 'SETTLED'           // final; payouts claimable
   | 'VOID'              // aborted; full refund
 
+/**
+ * Phases meaning "this match has moved past the join window". Used as an allowlist
+ * (not `phase !== 'FILLING'`) because the gateway's subscribe response for a room it
+ * has no live engine state for yet comes back with an undocumented phase of "UNKNOWN" —
+ * a blocklist check would misread that as "already started".
+ */
+export const PAST_FILLING_PHASES: MatchPhase[] = [
+  'SEALING', 'LIVE', 'SETTLEMENT_WINDOW', 'DECRYPT', 'SETTLED', 'VOID',
+]
+
 export type Chips = number      // integer, token base units
 export type FixedPrice = number // integer fixed-point at feed `decimals`
 export type Wallet = string     // base58 Solana pubkey

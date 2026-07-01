@@ -20,6 +20,34 @@ export function ratedScore(g: LiveGame): number {
  * no synthetic fallback tables (fake tables that route nowhere are worse than an
  * honest empty/error state).
  */
+// The action-feed service reports the price feed as `feedId` (e.g. "BTC/USD"),
+// matching the convention used by the gateway's RoomListing/RoomsUpdate — not `feed`.
+function normalizeLiveGame(raw: Record<string, unknown>): LiveGame {
+  return {
+    matchId: String(raw.matchId ?? ''),
+    feed: String(raw.feedId ?? raw.feed ?? ''),
+    buyIn: Number(raw.buyIn ?? 0),
+    potSize: Number(raw.potSize ?? 0),
+    spectators: Number(raw.spectators ?? 0),
+    actionsPerMin: Number(raw.actionsPerMin ?? 0),
+    startedAt: Number(raw.startedAt ?? 0),
+  }
+}
+
+function normalizeUpcomingGame(raw: Record<string, unknown>): UpcomingGame {
+  return {
+    matchId: String(raw.matchId ?? ''),
+    onchainMatchId: raw.onchainMatchId as string | undefined,
+    feed: String(raw.feedId ?? raw.feed ?? ''),
+    buyIn: Number(raw.buyIn ?? 0),
+    entryFee: raw.entryFee as number | undefined,
+    seated: Number(raw.seated ?? 0),
+    maxPlayers: Number(raw.maxPlayers ?? 0),
+    minPlayers: raw.minPlayers as number | undefined,
+    fillDeadline: raw.fillDeadline as number | undefined,
+  }
+}
+
 export async function fetchActiveGames(): Promise<LiveGame[]> {
   if (!API_URL) throw new Error('VITE_API_URL is not set — configure the API URL in .env')
 
@@ -28,8 +56,9 @@ export async function fetchActiveGames(): Promise<LiveGame[]> {
     signal: AbortSignal.timeout(8_000),
   })
   if (!res.ok) throw new Error(`/active-games ${res.status}`)
-  const data = (await res.json()) as { games?: LiveGame[] } | LiveGame[]
-  return Array.isArray(data) ? data : (data.games ?? [])
+  const data = (await res.json()) as { games?: Record<string, unknown>[] } | Record<string, unknown>[]
+  const games = Array.isArray(data) ? data : (data.games ?? [])
+  return games.map(normalizeLiveGame)
 }
 
 export async function fetchUpcomingGames(): Promise<UpcomingGame[]> {
@@ -40,6 +69,7 @@ export async function fetchUpcomingGames(): Promise<UpcomingGame[]> {
     signal: AbortSignal.timeout(8_000),
   })
   if (!res.ok) throw new Error(`/upcoming-games ${res.status}`)
-  const data = (await res.json()) as { games?: UpcomingGame[] } | UpcomingGame[]
-  return Array.isArray(data) ? data : (data.games ?? [])
+  const data = (await res.json()) as { games?: Record<string, unknown>[] } | Record<string, unknown>[]
+  const games = Array.isArray(data) ? data : (data.games ?? [])
+  return games.map(normalizeUpcomingGame)
 }

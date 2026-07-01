@@ -1,5 +1,6 @@
 import { useGameStore } from '@/store/gameStore'
 import type { MatchPhase } from '@/lib/protocol'
+import { ReclaimCard } from './ReclaimCard'
 
 const PHASE_COPY: Record<MatchPhase, string> = {
   FILLING: 'Filling table',
@@ -34,16 +35,19 @@ export function RoundStatus() {
       : PHASE_COPY[match.phase]
 
   return (
-    <div className={`round panel round--${match.phase.toLowerCase()}`}>
-      <div className="round-head">
-        <span className="eyebrow">{PHASE_COPY[match.phase]}</span>
-        <span className="round-clock mono">{match.pot}</span>
+    <div>
+      <div className={`round panel round--${match.phase.toLowerCase()}`}>
+        <div className="round-head">
+          <span className="eyebrow">{PHASE_COPY[match.phase]}</span>
+          <span className="round-clock mono">{match.pot}</span>
+        </div>
+        <div className="round-label">{label}</div>
+        <div className="round-prices mono">
+          <span>pot {match.pot}</span>
+          <span>current bet {match.currentBet}</span>
+        </div>
       </div>
-      <div className="round-label">{label}</div>
-      <div className="round-prices mono">
-        <span>pot {match.pot}</span>
-        <span>current bet {match.currentBet}</span>
-      </div>
+      {match.phase === 'FILLING' && <ReclaimCard onchainMatchId={terms?.onchainMatchId} />}
     </div>
   )
 }

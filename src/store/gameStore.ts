@@ -13,7 +13,7 @@ import type {
   UpcomingGame,
   VoidReason,
 } from '@/lib/protocol'
-import { DRAND } from '@/lib/protocol'
+import { DRAND, PAST_FILLING_PHASES } from '@/lib/protocol'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import { createAdapters, type Adapters } from '@/lib/adapters'
 import { newOnchainMatchId } from '@/lib/adapters/live'
@@ -76,7 +76,8 @@ interface GameState {
   playResolving: boolean // true while deciding join-vs-create
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
-  lastTxSig: string | null // most recent on-chain tx signature (for explorer link)
+  lobbySeated: number | null // seats already taken in the room being joined (from the lobby listing)
+  lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
 
   // actions
   fetchBalance: () => Promise<void>
@@ -109,6 +110,55 @@ let joinRoom: RoomListing | null = null
 /** The template + derived ids we resolved to CREATE via Play Now. */
 let createCtx: { tmpl: ConfigTemplate; priceTokenHex: string; onchainMatchId: string } | null = null
 
+/**
+ * Turn a raw deposit error into a user-facing message. `simulateSignAndSend` throws
+ * `Error(<AnchorErrorCode>)` for program errors, or an Error with the raw message
+ * otherwise — surface something actionable instead of "see console".
+ */
+function depositErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  // Anchor / SPL / system-program cases we can phrase better than the raw code.
+  if (/already in use|SeatAlreadyExists|AlreadySeated/i.test(msg)) {
+    return 'You already have a seat at this table.'
+  }
+  if (/MatchFull|SeatTaken|TableFull/i.test(msg)) return 'This table just filled up — pick another.'
+  if (/DepositsClosed|MatchStarted|NotFilling/i.test(msg)) return 'This table already started — deposits are closed.'
+  if (/insufficient|0x1\b|InsufficientFunds/i.test(msg)) {
+    return 'Insufficient balance — you need enough USDC (buy-in + entry fee) plus SOL for fees.'
+  }
+  if (/block height exceeded|blockhash|expired|timed out/i.test(msg)) {
+    return 'The network dropped the transaction (RPC congestion). Try again.'
+  }
+  return `Deposit failed: ${msg}`
+}
+
+/**
+ * The action-feed's `/upcoming-games` (used by the Dashboard row list) only carries the
+ * off-chain matchId/buyIn/seats — it omits `onchainMatchId`/`tierId`, which only the
+ * gateway's lobby snapshot has. joinTable needs onchainMatchId to derive the deposit PDA,
+ * so resolve the full RoomListing over the socket before showing the join Lobby.
+ */
+function resolveRoomListing(gw: Gateway, matchId: string, timeoutMs = 5000): Promise<RoomListing | null> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (room: RoomListing | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(room)
+    }
+    const unsubscribe = gw.subscribe((msg) => {
+      if (msg.type === 'lobbyList') {
+        const hit = msg.rooms.find((r) => r.matchId === matchId)
+        if (hit) finish(hit)
+      }
+    })
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    gw.send({ type: 'subscribeLobby' })
+  })
+}
+
 export const useGameStore = create<GameState>((set, get) => ({
   view: 'discovery',
   activeGames: [],
@@ -140,7 +190,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   playResolving: false,
   playMode: null,
   playError: null,
-  lastTxSig: null,
+  lobbySeated: null,
+  lastTx: null,
 
   fetchBalance: async () => {
     if (!adapters) adapters = createAdapters()
@@ -172,7 +223,7 @@ export const useGameStore = create<GameState>((set, get) => ({
    */
   ingestLivePrice: (price, ts) => {
     const m = get().match
-    if (m && m.phase !== 'FILLING') return
+    if (m && PAST_FILLING_PHASES.includes(m.phase)) return
     set((s) => ({ priceHistory: [...s.priceHistory, { price, ts }].slice(-MAX_HISTORY) }))
   },
 
@@ -206,7 +257,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       return
     }
 
-    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false })
+    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
     if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
     const gw = createGateway(adapters)
     gateway = gw
@@ -220,10 +271,35 @@ export const useGameStore = create<GameState>((set, get) => ({
       return
     }
 
-    // Subscribe to match — server will push tableTerms so the Lobby card can show cost
+    // Subscribe to match — live seat/board updates once we're seated.
     gw.send({ type: 'subscribe', matchId })
-    joinRoom = { matchId, roomCode: '', feedId: '', tierId: '', seated: 0, minPlayers: 0, maxPlayers: 0, fillDeadline: 0 }
-    set({ playMode: 'join', playResolving: false })
+
+    // Resolve the room's onchainMatchId/tierId over the lobby socket (the REST
+    // discovery feed doesn't carry them), then build terms from its config template.
+    const room = await resolveRoomListing(gw, matchId)
+    if (!room) {
+      set({ playResolving: false, playError: 'That table just filled up or closed — pick another.' })
+      return
+    }
+    joinRoom = room
+    try {
+      const tmpl = await pickTemplate(room.feedId, room.tierId)
+      const base = templateToTerms(tmpl)
+      set({
+        terms: {
+          ...base,
+          buyIn: room.buyIn ?? base.buyIn,
+          maxPlayers: room.maxPlayers || base.maxPlayers,
+          minPlayers: room.minPlayers || base.minPlayers,
+          onchainMatchId: room.onchainMatchId,
+        },
+        lobbySeated: room.seated,
+        playMode: 'join',
+        playResolving: false,
+      })
+    } catch {
+      set({ playResolving: false, playError: 'Could not load table config.' })
+    }
   },
 
   /** Create a new game — connect wallet + gateway, load config, then show create Lobby. */
@@ -241,7 +317,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       return
     }
 
-    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false })
+    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
     if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
     const gw = createGateway(adapters)
     gateway = gw
@@ -312,6 +388,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       playMode: null,
       playResolving: false,
       playError: null,
+      lobbySeated: null,
     })
   },
 
@@ -329,21 +406,42 @@ export const useGameStore = create<GameState>((set, get) => ({
       return
     }
 
-    set({ seated: true }) // optimistic; revert on failure
     // Ensure the adapter can read onchainMatchId off terms for PDA derivation.
     if (!terms.onchainMatchId) set({ terms: { ...terms, onchainMatchId } })
+
+    // Guard: a wallet can hold only one seat per match. Re-depositing reverts on-chain
+    // ("account already in use"), so if the seat already exists just take it — the deposit
+    // already happened on a prior attempt.
+    try {
+      const existing = await adapters.chain.getMySeat(onchainMatchId)
+      if (existing && existing.deposit > 0) {
+        console.log('[joinTable] wallet already seated (seat', existing.seatIndex, ') — entering table')
+        set({ seated: true })
+        void refreshBalance(set)
+        return
+      }
+    } catch (err) {
+      // A read failure here isn't fatal — fall through to the deposit attempt.
+      console.warn('[joinTable] seat pre-check failed:', err)
+    }
+
+    set({ seated: true }) // optimistic; revert on failure
     try {
       const txSig = await adapters.chain.deposit(matchId, seatIndex, terms.buyIn + terms.entryFee)
+      set({ lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' } })
       // Best-effort registry report (capital safety never depends on it, §7).
-      void reportDeposit(matchId, {
+      reportDeposit(matchId, {
         depositTxSig: txSig,
         wallet: adapters.wallet.address() ?? '',
         seatIndex,
-      })
+      }).then((r) => {
+        if (r.ok) console.log('[reportDeposit] deposit registered — seat:', r.seat ?? seatIndex)
+        else console.warn('[reportDeposit] failed:', r.reason)
+      }).catch((e) => console.warn('[reportDeposit] error:', e))
       void refreshBalance(set)
     } catch (err) {
       console.error('deposit failed:', err)
-      set({ seated: false, playError: 'Deposit failed — see console.' })
+      set({ seated: false, playError: depositErrorMessage(err) })
     }
   },
 
@@ -374,9 +472,9 @@ export const useGameStore = create<GameState>((set, get) => ({
         decimals: p.decimals,
       })
       // Record the on-chain ids so subsequent ix (seal/claim) derive the right PDAs.
-      set((s) => ({ terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms, lastTxSig: txSig }))
+      set((s) => ({ terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms, lastTx: { sig: txSig, label: 'Table created on-chain' } }))
       // Best-effort registry report so others can discover the room.
-      void reportCreate({
+      reportCreate({
         createTxSig: txSig,
         matchPda,
         onchainMatchId,
@@ -384,7 +482,10 @@ export const useGameStore = create<GameState>((set, get) => ({
         wallet: adapters.wallet.address() ?? '',
         seatIndex: 0,
         maxPlayers: p.maxPlayers,
-      })
+      }).then((r) => {
+        if (r.ok) console.log('[reportCreate] room registered — roomCode:', r.roomCode, 'fillDeadline:', r.fillDeadline)
+        else console.warn('[reportCreate] failed:', r.reason)
+      }).catch((e) => console.warn('[reportCreate] error:', e))
       // Subscribe to our new match for gameplay pushes.
       gateway?.send({ type: 'subscribe', matchId: matchPda })
       void refreshBalance(set)
@@ -572,12 +673,28 @@ function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameS
   // No auto-deposit — real custody always requires the explicit lobby deposit (§7).
 }
 
+// The public devnet RPC (api.devnet.solana.com) rate-limits aggressively; refreshBalance
+// gets called from several places in quick succession (wallet connect, gateway connect,
+// post-deposit). Coalesce overlapping calls and skip redundant ones within a short window
+// so we don't pile on duplicate getTokenAccountBalance requests.
+let balanceInFlight: Promise<void> | null = null
+let lastBalanceFetchAt = 0
+const BALANCE_MIN_INTERVAL_MS = 2500
+
 async function refreshBalance(set: SetState) {
   if (!adapters) return
-  try {
-    const balance = await adapters.chain.chipBalance()
-    set({ chipBalance: balance })
-  } catch {
-    /* live chain not wired yet — leave balance null */
-  }
+  if (balanceInFlight) return balanceInFlight
+  if (Date.now() - lastBalanceFetchAt < BALANCE_MIN_INTERVAL_MS) return
+  balanceInFlight = (async () => {
+    try {
+      const balance = await adapters!.chain.chipBalance()
+      set({ chipBalance: balance })
+    } catch {
+      /* live chain not wired yet — leave balance null */
+    } finally {
+      lastBalanceFetchAt = Date.now()
+      balanceInFlight = null
+    }
+  })()
+  return balanceInFlight
 }

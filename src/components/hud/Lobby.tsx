@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
+import { PAST_FILLING_PHASES } from '@/lib/protocol'
 
 /**
  * The lobby (§4) — the bridge between "Play Now" and a seated player.
@@ -16,15 +18,16 @@ export function Lobby() {
   const terms = useGameStore((s) => s.terms)
   const match = useGameStore((s) => s.match)
   const seated = useGameStore((s) => s.seated)
+  const lobbySeated = useGameStore((s) => s.lobbySeated)
   const playMode = useGameStore((s) => s.playMode)
   const playResolving = useGameStore((s) => s.playResolving)
   const playError = useGameStore((s) => s.playError)
-  const lastTxSig = useGameStore((s) => s.lastTxSig)
   const join = useGameStore((s) => s.joinTable)
   const create = useGameStore((s) => s.createTable)
 
   const { connected, connecting } = useWallet()
   const { setVisible } = useWalletModal()
+  const [submitting, setSubmitting] = useState(false)
 
   // Resolving: connecting wallet + gateway — brief spinner
   if (playResolving) {
@@ -60,20 +63,27 @@ export function Lobby() {
   // Nothing to commit to yet, or already seated → hide.
   if (!terms || seated || !playMode) return null
   // If we have a live match that's past filling, the lobby is done.
-  if (match && match.phase !== 'FILLING') return null
+  if (match && PAST_FILLING_PHASES.includes(match.phase)) return null
 
-  const filled = match?.seats.length ?? 0
+  // The gateway's subscribe response for a still-FILLING room returns seats: [], so prefer
+  // the seat count from the resolved lobby listing (which reflects the creator + any joiners).
+  const filled = Math.max(match?.seats.length ?? 0, lobbySeated ?? 0)
   const total = terms.buyIn + terms.entryFee
   const isCreate = playMode === 'create'
   const walletReady = connected
 
-  const handleCommit = () => {
+  const handleCommit = async () => {
     if (!walletReady) {
       setVisible(true)
       return
     }
-    if (isCreate) void create()
-    else void join()
+    setSubmitting(true)
+    try {
+      if (isCreate) await create()
+      else await join()
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   // Display amounts in whole tokens (USDC has 6 decimals; price decimals differ).
@@ -121,12 +131,28 @@ export function Lobby() {
           </span>
         </div>
 
+        {/* A failed deposit leaves playMode set (so the Lobby stays open to retry) —
+            surface it here, not just in the pre-Lobby error card above. */}
+        {playError && (
+          <div className="dash-play-error eyebrow">
+            {playError}{' '}
+            <button
+              className="lobby-error-dismiss"
+              onClick={() => useGameStore.setState({ playError: null })}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {walletReady ? (
           <>
-            <button className="seal-btn lobby-join" onClick={handleCommit}>
-              {isCreate
-                ? `Create table · deposit ${fmt(total)} ${terms.chipsToken}`
-                : `Take your seat · deposit ${fmt(total)} ${terms.chipsToken}`}
+            <button className="seal-btn lobby-join" onClick={handleCommit} disabled={submitting}>
+              {submitting
+                ? 'Confirming on-chain…'
+                : isCreate
+                  ? `Create table · deposit ${fmt(total)} ${terms.chipsToken}`
+                  : `Take your seat · deposit ${fmt(total)} ${terms.chipsToken}`}
             </button>
             <p className="lobby-note eyebrow">
               {isCreate

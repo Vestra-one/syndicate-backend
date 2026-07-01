@@ -1724,6 +1724,59 @@
   font-size: 11px;
 }
 
+/* ---- Cancel & reclaim funds (stuck room) ---- */
+.dash-reclaim-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0 4px;
+}
+.reclaim-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px 16px;
+}
+.dash-reclaim-list .reclaim-card {
+  margin-top: 0;
+}
+.reclaim-card--waiting {
+  padding: 10px 16px;
+}
+.reclaim-card--done {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+.reclaim-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.reclaim-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.reclaim-sub {
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.reclaim-icon {
+  font-size: 20px;
+  color: var(--gold-bright);
+}
+.reclaim-error {
+  color: var(--warn, #d8a657);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.reclaim-btn {
+  width: 100%;
+}
+
 /* ---- Resolution ceremony ---- */
 /* The card sits in the lower area so the price board stays visible above it —
  * the result is read against the final chart, not on top of it. */

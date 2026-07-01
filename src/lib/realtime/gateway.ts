@@ -25,7 +25,12 @@ export interface Gateway {
 
 /** Open a real WebSocket gateway. Requires VITE_GATEWAY_WS_URL. */
 export function createGateway(adapters: Adapters): Gateway {
-  const url = import.meta.env.VITE_GATEWAY_WS_URL as string | undefined
+  const devUser = import.meta.env.VITE_DEVNET_USER as string | undefined
+  // In local dev with Basic Auth, use the Vite WS proxy so the auth header is injected server-side.
+  // The browser WebSocket API has no way to send Authorization headers directly.
+  const url = devUser
+    ? `${window.location.origin.replace(/^http/, 'ws')}/gateway-proxy`
+    : import.meta.env.VITE_GATEWAY_WS_URL as string | undefined
   if (!url) {
     throw new Error('VITE_GATEWAY_WS_URL is not set — configure the gateway URL in .env')
   }

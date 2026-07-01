@@ -43,6 +43,31 @@ export interface CreateAndDepositInput {
   decimals: number
 }
 
+/** On-chain match status, read directly from the `MatchAccount` (no backend needed). */
+export interface OnchainMatchStatus {
+  status: 'FILLING' | 'SEALING' | 'LIVE' | 'SETTLED' | 'VOID'
+  fillDeadlineTs: number // unix seconds
+  buyIn: Chips
+  entryFee: Chips
+}
+
+/** The connected wallet's own seat for a match, read directly from the `SeatAccount`. */
+export interface OnchainSeatInfo {
+  seatIndex: SeatIndex
+  deposit: Chips
+  entryFeePaid: Chips
+  claimed: boolean
+}
+
+/** A match found (by scanning seat accounts) that the connected wallet can cancel/reclaim now. */
+export interface ReclaimableMatch extends OnchainMatchStatus {
+  onchainMatchId: string
+  matchPda: string
+  seatIndex: SeatIndex
+  deposit: Chips
+  entryFeePaid: Chips
+}
+
 /** On-chain custody. The client builds; the wallet signs. Returns tx signatures. */
 export interface ChainClient {
   /** Spendable chip balance in token base units (for the wallet badge). */
@@ -55,6 +80,21 @@ export interface ChainClient {
   claim(matchId: string): Promise<string>
   /** reclaim deposit + entry fee after VOID. */
   refund(matchId: string): Promise<string>
+
+  /** Read a match's on-chain status + timing directly. Works with no active gateway/match state. */
+  getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null>
+  /** Read the connected wallet's own seat for a match, if any. */
+  getMySeat(onchainMatchId: string): Promise<OnchainSeatInfo | null>
+  /** Permissionless `void_before_start` — anyone can call once past the fill deadline; just pays the fee. */
+  voidBeforeStart(onchainMatchId: string): Promise<string>
+  /**
+   * Player-signed pull refund after VOID. Derives the seat index from the on-chain seat account
+   * (not from client match state), so it works standalone — e.g. from a "my matches" list.
+   * Idempotent: an already-claimed seat throws an error whose message is `AlreadyClaimed`.
+   */
+  refundSelf(onchainMatchId: string): Promise<string>
+  /** Scan the connected wallet's seats for matches stuck FILLING past deadline, or already VOID. */
+  listReclaimableMatches(): Promise<ReclaimableMatch[]>
 }
 
 export interface Adapters {
