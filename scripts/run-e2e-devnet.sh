@@ -23,13 +23,13 @@ hdr()  { echo -e "\n${CYAN}--- $* ---${NC}"; }
 # ─── configuration ───────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SYNDICATE_PROGRAM_ID="${SYNDICATE_PROGRAM_ID:-GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF}"
+SYNDICATE_PROGRAM_ID="${SYNDICATE_PROGRAM_ID:-6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d}"
 CHIPS_TOKEN_MINT="${CHIPS_TOKEN_MINT:-3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X}"
 MATCHMAKING_URL="${MATCHMAKING_URL:-https://matchmaking.devnet.satoshitable.fun}"
 GATEWAY_URL="${GATEWAY_URL:-wss://gateway.devnet.satoshitable.fun}"
 SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://api.devnet.solana.com}"
 BUY_IN="${BUY_IN:-1000000}"   # 1 USDC (6 decimals)
-AWAIT_SEAL="${AWAIT_SEAL:-}"  # set to 1 to wait for the ~10-min seal window + settlement
+AWAIT_SETTLEMENT="${AWAIT_SETTLEMENT:-1}"  # set to 0 to stop before backend settlement polling
 
 PLAYER1_KEYPAIR="${PLAYER1_KEYPAIR:-$HOME/.config/solana/id.json}"
 PLAYER2_KEYPAIR="${PLAYER2_KEYPAIR:-/tmp/player2.json}"
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     --auth)        BASIC_AUTH="$2"; shift 2;;
     --mint)        CHIPS_TOKEN_MINT="$2"; shift 2;;
     --rpc)         SOLANA_RPC_URL="$2"; shift 2;;
-    --await-seal)  AWAIT_SEAL=1; shift;;
+    --no-await-settlement) AWAIT_SETTLEMENT=0; shift;;
     *) echo "Unknown flag: $1"; exit 1;;
   esac
 done
@@ -92,7 +92,7 @@ info "Buy-in:          $BUY_IN (raw units)"
 info "Player 1:        $PLAYER1_KEYPAIR"
 info "Player 2:        $PLAYER2_KEYPAIR"
 info "RPC:             $SOLANA_RPC_URL"
-info "Await seal:      ${AWAIT_SEAL:-no} (--await-seal to wait for the ~10-min seal + settlement)"
+info "Await settlement: $AWAIT_SETTLEMENT (--no-await-settlement to stop before polling resolution)"
 
 # ─── health checks (curl) ───────────────────────────────────────────────────
 hdr "Health checks"
@@ -142,7 +142,7 @@ info "All on-chain tx building, submission, and API calls run via scripts/e2e-de
 
 RESULT_FILE=$(mktemp /tmp/e2e-result-XXXXXX)
 
-export SYNDICATE_PROGRAM_ID CHIPS_TOKEN_MINT MATCHMAKING_URL GATEWAY_URL SOLANA_RPC_URL BUY_IN AWAIT_SEAL
+export SYNDICATE_PROGRAM_ID CHIPS_TOKEN_MINT MATCHMAKING_URL GATEWAY_URL SOLANA_RPC_URL BUY_IN AWAIT_SETTLEMENT
 export PLAYER1_KEYPAIR PLAYER2_KEYPAIR BASIC_AUTH
 
 set +e
@@ -173,16 +173,15 @@ if [[ $TS_EXIT -eq 0 ]]; then
   echo "  Phases covered:"
   echo "    ✓ Phase 1 — On-chain: create_and_deposit + deposit (finalized)"
   echo "    ✓ Phase 2 — Matchmaking: POST /rooms, POST /matches/:id/deposits, lobby"
-  echo "    ✓ Phase 3 — Match start: POST /rooms/:roomCode/start → orchestrator → begin_live"
+  echo "    ✓ Phase 3 — Match start: POST /rooms/:roomCode/start → lock → user seal txs → begin_live"
   echo "    ✓ Phase 4 — WebSocket: auth + subscribe + matchState LIVE"
   echo "    ✓ Phase 5 — Betting: signed call action sent, default policy registered"
   echo "    ✓ Phase 6 — Reconnection: disconnect, re-auth, re-subscribe, receive state"
-  if [[ -n "$AWAIT_SEAL" ]]; then
-    echo "    ✓ Phase 7 — Sealing: sealPrediction sent for both players (AWAIT_SEAL=1)"
+  if [[ "$AWAIT_SETTLEMENT" != "0" ]]; then
+    echo "    ✓ Phase 7 — Settlement: backend resolution became visible"
   else
-    echo "    ~ Phase 7 — Sealing: requires ~10 min (run with --await-seal)"
-    echo "      Seal window: fill_deadline + 580s from match creation"
-    echo "      Re-run:  AWAIT_SEAL=1 BASIC_AUTH=\"$BASIC_AUTH\" bash scripts/run-e2e-devnet.sh"
+    echo "    ~ Phase 7 — Settlement: skipped (AWAIT_SETTLEMENT=0)"
+    echo "      Re-run:  AWAIT_SETTLEMENT=1 BASIC_AUTH=\"$BASIC_AUTH\" bash scripts/run-e2e-devnet.sh"
   fi
 else
   echo ""

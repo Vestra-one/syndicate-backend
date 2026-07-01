@@ -6,8 +6,9 @@ use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::Row;
 
 use crate::postgres::{
-    PersistedMatchRow, PersistedMatchSeat, INSERT_MATCH_SEAT_SQL, INSERT_MATCH_SQL,
-    UPDATE_MATCH_ON_BEGIN_LIVE_SQL, UPSERT_MATCH_CONFIG_BY_HASH_SQL,
+    PersistedMatchRow, PersistedMatchSeat, ATTACH_CONFIG_HASH_BY_FEED_SQL, INSERT_MATCH_CONFIG_SQL,
+    INSERT_MATCH_SEAT_SQL, INSERT_MATCH_SQL, SELECT_CONFIG_ID_BY_HASH_SQL,
+    UPDATE_MATCH_ON_BEGIN_LIVE_SQL,
 };
 
 #[derive(Debug)]
@@ -82,27 +83,13 @@ impl MatchRegistryStore {
         let config_hash = decode_config_hash(&params.config_hash_hex)?;
         let pyth_feed_id = oracle_token_to_feed_id(&params.oracle_token_hex)?;
         let client = self.pool.get().await.map_err(map_pool)?;
-        let config_id: String = client
-            .query_one(
-                UPSERT_MATCH_CONFIG_BY_HASH_SQL,
-                &[
-                    &1i32,
-                    &params.price_feed_symbol,
-                    &pyth_feed_id,
-                    &params.oracle_exponent,
-                    &params.max_oracle_confidence,
-                    &params.buy_in_chips,
-                    &params.entry_fee_chips,
-                    &params.rake_bps,
-                    &params.rake_cap_chips,
-                    &params.max_players,
-                    &"matchmaking",
-                    &config_hash,
-                ],
-            )
-            .await
-            .map_err(map_pg)?
-            .get(0);
+        let config_id = ensure_config_id(
+            &client,
+            &config_hash,
+            &params,
+            &pyth_feed_id,
+        )
+        .await?;
         let row = client
             .query_one(
                 INSERT_MATCH_SQL,
@@ -226,11 +213,89 @@ fn row_to_match_seat(row: &Row) -> Result<PersistedMatchSeat, RegistryError> {
     })
 }
 
+async fn ensure_config_id(
+    client: &deadpool_postgres::Object,
+    config_hash: &[u8],
+    params: &InsertMatchParams,
+    pyth_feed_id: &[u8],
+) -> Result<String, RegistryError> {
+    const CONFIG_VERSION: i32 = 1;
+    if let Some(row) = client
+        .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash])
+        .await
+        .map_err(map_pg)?
+    {
+        return Ok(row.get(0));
+    }
+
+    let insert_params: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[
+        &CONFIG_VERSION,
+        &params.price_feed_symbol,
+        &pyth_feed_id,
+        &params.oracle_exponent,
+        &params.max_oracle_confidence,
+        &params.buy_in_chips,
+        &params.entry_fee_chips,
+        &params.rake_bps,
+        &params.rake_cap_chips,
+        &params.max_players,
+        &"matchmaking",
+        &config_hash,
+    ];
+
+    match client
+        .query_one(INSERT_MATCH_CONFIG_SQL, insert_params)
+        .await
+    {
+        Ok(row) => return Ok(row.get(0)),
+        Err(err) if is_unique_violation(&err) => {
+            if let Some(row) = client
+                .query_opt(
+                    ATTACH_CONFIG_HASH_BY_FEED_SQL,
+                    &[&config_hash, &params.price_feed_symbol, &CONFIG_VERSION],
+                )
+                .await
+                .map_err(map_pg)?
+            {
+                return Ok(row.get(0));
+            }
+            if let Some(row) = client
+                .query_opt(SELECT_CONFIG_ID_BY_HASH_SQL, &[&config_hash])
+                .await
+                .map_err(map_pg)?
+            {
+                return Ok(row.get(0));
+            }
+            return Err(map_pg(err));
+        }
+        Err(err) => return Err(map_pg(err)),
+    }
+}
+
+fn is_unique_violation(err: &tokio_postgres::Error) -> bool {
+    err.code()
+        .map(|code| code == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
+        .unwrap_or(false)
+}
+
 fn map_pool(err: deadpool_postgres::PoolError) -> RegistryError {
     RegistryError::Pool(err.to_string())
 }
 
 fn map_pg(err: tokio_postgres::Error) -> RegistryError {
+    if let Some(db) = err.as_db_error() {
+        let mut msg = db.message().to_string();
+        if let Some(constraint) = db.constraint() {
+            msg.push_str(&format!(" (constraint: {constraint})"));
+        }
+        if let Some(detail) = db.detail() {
+            msg.push_str(&format!(" — {detail}"));
+        }
+        if let Some(hint) = db.hint() {
+            msg.push_str(&format!(" [hint: {hint}]"));
+        }
+        return RegistryError::Postgres(msg);
+    }
     RegistryError::Postgres(err.to_string())
 }
 

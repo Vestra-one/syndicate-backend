@@ -3,8 +3,13 @@
 ALTER TABLE match_configs
     ADD COLUMN IF NOT EXISTS config_hash bytea;
 
-ALTER TABLE match_configs
-    ADD CONSTRAINT match_configs_config_hash_unique UNIQUE (config_hash);
+DO $$
+BEGIN
+    ALTER TABLE match_configs
+        ADD CONSTRAINT match_configs_config_hash_unique UNIQUE (config_hash);
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 COMMENT ON COLUMN match_configs.config_hash IS
     'Rules-only config hash (32 bytes); matches on-chain CreateParams.config_hash.';

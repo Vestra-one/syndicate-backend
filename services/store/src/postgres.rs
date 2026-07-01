@@ -623,21 +623,47 @@ ON CONFLICT (match_key) DO UPDATE SET match_key = EXCLUDED.match_key
 RETURNING id::text, match_key, onchain_match_id, status::text, room_status
 "#;
 
+/// Insert a match_configs row (caller should use [`ensure_config_id`] for idempotent upsert).
+pub const INSERT_MATCH_CONFIG_SQL: &str = r#"
+INSERT INTO match_configs (
+    config_version,
+    price_feed_symbol,
+    pyth_feed_id,
+    oracle_exponent,
+    max_oracle_confidence,
+    buy_in_chips,
+    entry_fee_chips,
+    rake_bps,
+    rake_cap_chips,
+    max_players,
+    created_by,
+    config_hash
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id::text
+"#;
+
+/// Lookup config row by rules-only hash.
+pub const SELECT_CONFIG_ID_BY_HASH_SQL: &str = r#"
+SELECT id::text
+FROM match_configs
+WHERE config_hash = $1
+LIMIT 1
+"#;
+
+/// Attach config_hash to a legacy row keyed by (config_version, price_feed_symbol).
+pub const ATTACH_CONFIG_HASH_BY_FEED_SQL: &str = r#"
+UPDATE match_configs
+SET config_hash = $1
+WHERE price_feed_symbol = $2
+  AND config_version = $3
+  AND config_hash IS NULL
+RETURNING id::text
+"#;
+
 /// Upsert a match_configs row keyed by rules-only config_hash (32 bytes).
 ///
-/// Parameters:
-/// 1. config_version integer
-/// 2. price_feed_symbol text
-/// 3. pyth_feed_id bytea (32 bytes — signed-price token padded to 32)
-/// 4. oracle_exponent smallint
-/// 5. max_oracle_confidence bigint
-/// 6. buy_in_chips bigint
-/// 7. entry_fee_chips bigint
-/// 8. rake_bps integer
-/// 9. rake_cap_chips bigint
-/// 10. max_players smallint
-/// 11. created_by text
-/// 12. config_hash bytea (32 bytes)
+/// Prefer [`ensure_config_id`] in registry.rs — handles legacy rows without config_hash.
 pub const UPSERT_MATCH_CONFIG_BY_HASH_SQL: &str = r#"
 INSERT INTO match_configs (
     config_version,

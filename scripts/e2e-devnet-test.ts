@@ -12,11 +12,11 @@
  * Optional env:
  *   MATCHMAKING_URL     https://matchmaking.devnet.satoshitable.fun
  *   GATEWAY_URL         wss://gateway.devnet.satoshitable.fun
- *   SYNDICATE_PROGRAM_ID GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF
+ *   SYNDICATE_PROGRAM_ID 6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d
  *   CHIPS_TOKEN_MINT    4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
  *   SOLANA_RPC_URL      https://api.devnet.solana.com
  *   BUY_IN              1000000  (raw token units; 1 USDC @ 6 decimals)
- *   AWAIT_SEAL          1        (set to wait for the seal window; ~10 min extra)
+ *   AWAIT_SETTLEMENT    1        (set to 0 to stop before settlement polling)
  */
 
 import {
@@ -38,16 +38,24 @@ import { homedir } from 'node:os';
 const RPC_URL   = process.env.SOLANA_RPC_URL ?? 'https://api.devnet.solana.com';
 const MATCHMAKING_URL = process.env.MATCHMAKING_URL ?? 'https://matchmaking.devnet.satoshitable.fun';
 const GATEWAY_URL     = process.env.GATEWAY_URL     ?? 'wss://gateway.devnet.satoshitable.fun';
-const PROGRAM_ID      = new PublicKey(process.env.SYNDICATE_PROGRAM_ID ?? 'GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF');
+const PROGRAM_ID      = new PublicKey(process.env.SYNDICATE_PROGRAM_ID ?? '6mmD3xZhgJ33RzHgXWeFSdLG8Ygpy2camFWtDmdmKM7d');
 const CHIPS_MINT      = new PublicKey(process.env.CHIPS_TOKEN_MINT      ?? '3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X');
 const BASIC_AUTH      = process.env.BASIC_AUTH;
 const PLAYER1_PATH    = process.env.PLAYER1_KEYPAIR ?? `${homedir()}/.config/solana/id.json`;
 const PLAYER2_PATH    = process.env.PLAYER2_KEYPAIR ?? '/tmp/player2.json';
 const BUY_IN          = BigInt(process.env.BUY_IN ?? '1000000');
-const AWAIT_SEAL      = process.env.AWAIT_SEAL === '1';
+const AWAIT_SETTLEMENT = process.env.AWAIT_SETTLEMENT !== '0';
+const SETTLEMENT_TIMEOUT_MS = Number(process.env.SETTLEMENT_TIMEOUT_MS ?? '900000');
 
-const CONFIG_HASH = '852148f8f4b6f703f6e3b7357fac28860f4169b5110660f14a507d41c17d939b';
+let CONFIG_HASH = process.env.CONFIG_HASH ?? '';
 const FEED_TOKEN_HEX  = 'a7BaE7da3E4950700BE9f107EB186e89a474d180';
+let TOTAL_BETTING_DURATION_SEC = BigInt(process.env.TOTAL_BETTING_DURATION_SEC ?? '580');
+let SEAL_WINDOW_SEC = BigInt(process.env.SEAL_WINDOW_SEC ?? '20');
+let BEGIN_LIVE_WINDOW_SEC = BigInt(process.env.BEGIN_LIVE_WINDOW_SEC ?? '30');
+
+const DRAND_GENESIS_TIME = 1_692_803_367n;
+const DRAND_PERIOD_SEC = 3n;
+const MAX_TIMELOCK_SKEW_SEC = 20n;
 
 // ─── logging ────────────────────────────────────────────────────────────────
 
@@ -80,6 +88,43 @@ async function apiPost(url: string, body: unknown): Promise<unknown> {
   });
   const text = await r.text();
   try { return JSON.parse(text); } catch { return text; }
+}
+
+async function loadDeployedTemplate(): Promise<void> {
+  if (CONFIG_HASH && TOTAL_BETTING_DURATION_SEC && SEAL_WINDOW_SEC && BEGIN_LIVE_WINDOW_SEC) return;
+  const data = await apiGet('https://config.devnet.satoshitable.fun/config/templates') as any;
+  const template = (data?.templates ?? []).find((t: any) => t.tierId === 'tier-standard' && t.feed === 'BTC/USD');
+  if (!template?.configHash || !template?.config) {
+    throw new Error('deployed config template tier-standard:BTC/USD not found');
+  }
+  CONFIG_HASH = template.configHash;
+  TOTAL_BETTING_DURATION_SEC = BigInt(template.totalBettingDurationSec ?? template.config.totalBettingDurationSec ?? 580);
+  SEAL_WINDOW_SEC = BigInt(template.config.sealWindowSec ?? 20);
+  BEGIN_LIVE_WINDOW_SEC = BigInt(template.config.beginLiveWindowSec ?? 30);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function preflightBackendVerifier(wallet: string): Promise<void> {
+  const fake = await apiPost(`${MATCHMAKING_URL}/rooms`, {
+    createTxSig: '1'.repeat(88),
+    matchPda: PublicKey.default.toBase58(),
+    onchainMatchId: '1',
+    configHash: CONFIG_HASH,
+    wallet,
+    seatIndex: 0,
+    maxPlayers: 5,
+  }) as any;
+  const reason = String(fake?.reason ?? fake?.error ?? fake);
+  if (fake?.ok) {
+    fail('backend verifier preflight unexpectedly accepted a fake create tx', fake);
+  }
+  if (/chain verify failed \(401\)|unauthorized/i.test(reason)) {
+    fail('backend verifier preflight failed: matchmaking cannot authenticate to settlement-chain', fake);
+  }
+  ok(`Backend verifier reachable (fake tx rejected as expected: ${reason.slice(0, 120)})`);
 }
 
 // ─── Borsh-lite encoding ─────────────────────────────────────────────────────
@@ -121,6 +166,9 @@ function deriveSeatIndexPda(matchPda: PublicKey, seatIndex: number): PublicKey {
 // ─── CreateParams encoding ───────────────────────────────────────────────────
 
 function encodeCreateParams(onchainMatchId: bigint, fillWindowSec = 120n): Buffer {
+  if (!/^[0-9a-fA-F]{64}$/.test(CONFIG_HASH)) {
+    throw new Error(`CONFIG_HASH must be a 32-byte hex string, got ${CONFIG_HASH || '(empty)'}`);
+  }
   const buyIn = BUY_IN;
   const entryFee = 0n;
   const rakeBps = 300;
@@ -128,9 +176,6 @@ function encodeCreateParams(onchainMatchId: bigint, fillWindowSec = 120n): Buffe
   const nonsealPenaltyBps = 2500;
   const minPlayers = 2;
   const maxPlayers = 5;
-  const totalBettingDurationSec = 580n;
-  const sealWindow = 20n;
-  const beginLiveWindow = 5n;
   const maxOracleConfidence = (1n << 64n) - 1n;
   const oracleExponent = -18;
   return Buffer.concat([
@@ -139,7 +184,7 @@ function encodeCreateParams(onchainMatchId: bigint, fillWindowSec = 120n): Buffe
     u8(minPlayers), u8(maxPlayers),
     Buffer.from(CONFIG_HASH, 'hex'),
     Buffer.from(FEED_TOKEN_HEX, 'hex'),
-    u64(totalBettingDurationSec), u64(sealWindow), u64(beginLiveWindow),
+    u64(TOTAL_BETTING_DURATION_SEC), u64(SEAL_WINDOW_SEC), u64(BEGIN_LIVE_WINDOW_SEC),
     u64(fillWindowSec), u64(maxOracleConfidence), i32(oracleExponent),
   ]);
 }
@@ -191,6 +236,26 @@ function buildDeposit(
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([disc, u16(seatIdx)]),
+  };
+}
+
+function buildRegisterPredictionCommitment(
+  player: PublicKey,
+  matchPda: PublicKey,
+  seat: PublicKey,
+  commitment: Buffer,
+  timelockTarget: bigint,
+) {
+  if (commitment.length !== 32) throw new Error('commitment must be 32 bytes');
+  const disc = anchorDiscriminator('global:register_prediction_commitment');
+  return {
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: player,   isSigner: true,  isWritable: false },
+      { pubkey: matchPda, isSigner: false, isWritable: true  },
+      { pubkey: seat,     isSigner: false, isWritable: true  },
+    ],
+    data: Buffer.concat([disc, commitment, u64(timelockTarget)]),
   };
 }
 
@@ -364,6 +429,36 @@ async function openGameSession(keypair: Keypair, label: string): Promise<GameSes
   });
 }
 
+async function submitRegisterCommitmentWithRetry(
+  conn: Connection,
+  player: Keypair,
+  matchPda: PublicKey,
+  seat: PublicKey,
+  commitment: Buffer,
+  timelockTarget: bigint,
+  label: string,
+): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const tx = new Transaction();
+    tx.add(buildRegisterPredictionCommitment(player.publicKey, matchPda, seat, commitment, timelockTarget) as any);
+    tx.feePayer = player.publicKey;
+    tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+    try {
+      const sig = await sendAndConfirmTransaction(conn, tx, [player], { commitment: 'finalized', preflightCommitment: 'confirmed' });
+      ok(`${label} register_prediction_commitment confirmed: ${sig}`);
+      return sig;
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/BadStatus|custom program error|Blockhash|not been confirmed|timeout/i.test(msg)) break;
+      log(`  ${label}: register commitment attempt ${attempt} not accepted yet (${msg.slice(0, 120)}...)`);
+      await sleep(2_000);
+    }
+  }
+  fail(`${label} register_prediction_commitment failed`, lastErr);
+}
+
 // ─── main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -373,7 +468,7 @@ async function main() {
   log(`Program:      ${PROGRAM_ID.toBase58()}`);
   log(`Chips mint:   ${CHIPS_MINT.toBase58()}`);
   log(`Buy-in:       ${BUY_IN} (raw units)`);
-  log(`Await seal:   ${AWAIT_SEAL ? 'yes (AWAIT_SEAL=1)' : 'no (prints instructions only)'}`);
+  log(`Await settlement: ${AWAIT_SETTLEMENT ? `yes (${SETTLEMENT_TIMEOUT_MS}ms timeout)` : 'no (AWAIT_SETTLEMENT=0)'}`);
   if (!BASIC_AUTH) log('WARN: BASIC_AUTH not set — nginx-protected endpoints will get 401');
 
   // ── 1. Load keypairs ──────────────────────────────────────────────────────
@@ -399,10 +494,13 @@ async function main() {
   // ── 3. Config catalog ────────────────────────────────────────────────────
   log('\n--- Config ---');
   try {
+    await loadDeployedTemplate();
     const catalog = await apiGet('https://config.devnet.satoshitable.fun/config/catalog') as any;
     log(`  Tiers: ${(catalog?.tiers ?? []).map((t: any) => t.tierId).join(', ')}`);
-  } catch { log('  (config catalog unavailable — using pre-computed hash)'); }
+  } catch (e) { fail('config unavailable or missing deployed template', e); }
   log(`  Config hash: ${CONFIG_HASH}`);
+  log(`  Timing: totalBetting=${TOTAL_BETTING_DURATION_SEC}s seal=${SEAL_WINDOW_SEC}s beginLiveWindow=${BEGIN_LIVE_WINDOW_SEC}s`);
+  await preflightBackendVerifier(player1.publicKey.toBase58());
 
   // ── 4. Solana balances ───────────────────────────────────────────────────
   log('\n--- Balances ---');
@@ -523,11 +621,37 @@ async function main() {
   ok('Both players subscribed to room events');
 
   // ── 12. Host triggers match start ────────────────────────────────────────
-  log('\n--- Step 8: POST /rooms/:roomCode/start (host triggers begin_live) ---');
-  log('  This calls: matchmaking → orchestrator → lock-match → begin_live on-chain → match-engine start');
-  const startResp = await apiPost(`${MATCHMAKING_URL}/rooms/${roomCode}/start`, {
+  log('\n--- Step 8: POST /rooms/:roomCode/start + seal during backend Sealing window ---');
+  log('  This calls: matchmaking → orchestrator → lock-match, then the request waits for seal_deadline before begin_live.');
+  log('  Acting as users, both wallets submit register_prediction_commitment while that backend request is in flight.');
+
+  const blinding1 = randomBytes(32);
+  const blinding2 = randomBytes(32);
+  const prediction1 = 50_000n * 1_000_000_000_000_000_000n;
+  const prediction2 = 51_000n * 1_000_000_000_000_000_000n;
+  const commitment1 = computeCommitment(prediction1, blinding1);
+  const commitment2 = computeCommitment(prediction2, blinding2);
+
+  // Public matchmaking does not return lock's exact sealDeadlineTs until start completes, so the
+  // user-flow harness estimates from the host-start request time. If this fails, the backend needs
+  // a public Sealing/terms update carrying the exact timelock target.
+  const startRequestUnix = BigInt(Math.floor(Date.now() / 1000));
+  const projectedSealDeadline = startRequestUnix + SEAL_WINDOW_SEC;
+  const timelockTarget = pickTimelockTargetFromProjectedSeal(projectedSealDeadline);
+  log(`  projected seal_deadline_ts=${projectedSealDeadline}; timelockTarget=${timelockTarget} publishTs=${drandPublishTs(timelockTarget)}`);
+
+  const startPromise = apiPost(`${MATCHMAKING_URL}/rooms/${roomCode}/start`, {
     host: player1.publicKey.toBase58(),
-  }) as any;
+  }) as Promise<any>;
+
+  await sleep(2_000);
+  const [sealTx1, sealTx2] = await Promise.all([
+    submitRegisterCommitmentWithRetry(conn, player1, pdas.matchPda, seat1, commitment1, timelockTarget, 'Player 1'),
+    submitRegisterCommitmentWithRetry(conn, player2, pdas.matchPda, seat2, commitment2, timelockTarget, 'Player 2'),
+  ]);
+  log(`  Seal txs: ${sealTx1}, ${sealTx2}`);
+
+  const startResp = await startPromise as any;
   log(`  Response: ${JSON.stringify(startResp)}`);
   if (!startResp?.ok) fail('host start rejected', startResp);
   ok('Match start triggered');
@@ -562,8 +686,21 @@ async function main() {
     warn(`No matchState from engine: ${(e as Error).message} — engine state unavailable`);
   }
 
+  // The on-chain seal is already recorded. Now upload the ciphertext/blinding through the same
+  // gateway surface a browser uses, so the backend has the material settlement-worker reconstructs.
+  log('\n--- Step 11: Gateway sealPrediction upload ---');
+  await sendSealPayloads(
+    [
+      { session: gs1, player: player1, seat: 0, commitment: commitment1, blinding: blinding1 },
+      { session: gs2, player: player2, seat: 1, commitment: commitment2, blinding: blinding2 },
+    ],
+    matchId,
+    onchainMatchId,
+    timelockTarget,
+  );
+
   // ── 15. Betting actions ──────────────────────────────────────────────────
-  log('\n--- Step 11: Betting actions ---');
+  log('\n--- Step 12: Betting actions ---');
   const toActSeat = (liveState?.state as any)?.toActSeat as number | undefined;
   log(`  Current actor: seat ${toActSeat ?? 'unknown'}`);
 
@@ -646,24 +783,13 @@ async function main() {
     warn(`Lobby WS test: ${(e as Error).message}`);
   }
 
-  // ── 18. Seal window info ─────────────────────────────────────────────────
-  log('\n--- Step 14: Sealing window ---');
-  log('  The sealing window opens after totalBettingDurationSec=580s from live_start.');
-  log(`  Match went live at ~${new Date(matchStartedTs!).toISOString()}`);
-  const sealOpenEstimate = matchStartedTs! + 580_000;
-  const sealCloseEstimate = sealOpenEstimate + 20_000;
-  log(`  Estimated seal window: ${new Date(sealOpenEstimate).toISOString()} → ${new Date(sealCloseEstimate).toISOString()}`);
-  log(`  That is ~${Math.round((sealOpenEstimate - Date.now()) / 60_000)} minutes from now.`);
-
-  if (!AWAIT_SEAL) {
-    log('  Skipping (set AWAIT_SEAL=1 to wait and run the sealing + settlement flow)');
-    log('  Sealing flow (run manually or with AWAIT_SEAL=1):');
-    log('    1. On-chain: call register_prediction_commitment with a commitment hash + timelock ciphertext');
-    log('    2. Via WS:   { type: "sealPrediction", matchId, ciphertext, seatIndex, targetRound, commitmentHex, blindingHex, signature }');
-    log('    3. Settlement worker reads sealed prices and calls settle() on-chain after the seal window closes');
+  // ── 18. Backend-visible settlement ───────────────────────────────────────
+  log('\n--- Step 14: Backend-visible settlement / resolution ---');
+  if (AWAIT_SETTLEMENT) {
+    const resolution = await waitForBackendResolution(matchId, SETTLEMENT_TIMEOUT_MS);
+    ok(`Backend resolution visible: status=${resolution.status}`);
   } else {
-    // Wait for seal window, then seal both players
-    await runSealPhase(gs2, player1, player2, matchId, onchainMatchId, sealOpenEstimate);
+    warn('Skipping settlement wait because AWAIT_SETTLEMENT=0');
   }
 
   gs2.close();
@@ -681,68 +807,116 @@ async function main() {
   printNextSteps(roomCode, matchId, player1.publicKey.toBase58());
 }
 
-// ─── Sealing phase (enabled by AWAIT_SEAL=1) ─────────────────────────────────
+// ─── Sealing upload ──────────────────────────────────────────────────────────
 
-async function runSealPhase(
-  gs2: GameSession,
-  player1: Keypair, player2: Keypair,
-  matchId: string, onchainMatchId: bigint,
-  sealOpenMs: number,
+async function sendSealPayloads(
+  seals: Array<{
+    session: GameSession;
+    player: Keypair;
+    seat: number;
+    commitment: Buffer;
+    blinding: Buffer;
+  }>,
+  matchId: string,
+  onchainMatchId: bigint,
+  timelockTarget: bigint,
 ) {
-  const waitMs = sealOpenMs - Date.now();
-  if (waitMs > 0) {
-    log(`  Waiting ${Math.round(waitMs / 1000)}s for seal window to open...`);
-    await new Promise(r => setTimeout(r, waitMs));
-  }
-
-  log('  Seal window open — sealing both players via WebSocket');
-
-  // Generate a random price commitment and blinding
-  const blinding1 = randomBytes(32);
-  const blinding2 = randomBytes(32);
-  const prediction1 = 50_000n * 1_000_000_000_000_000_000n; // $50k in 1e18 units
-  const prediction2 = 51_000n * 1_000_000_000_000_000_000n;
-
-  const commitment1 = computeCommitment(prediction1, blinding1);
-  const commitment2 = computeCommitment(prediction2, blinding2);
-
-  // Dummy timelock round (real deployment uses drand; devnet may stub this)
-  const targetRound = Math.floor(sealOpenMs / 1000) + 10;
-
-  for (const [player, seat, commitment, blinding, gs] of [
-    [player1, 0, commitment1, blinding1, gs2 as any],
-    [player2, 1, commitment2, blinding2, gs2],
-  ] as const) {
-    const sealMsg = buildPredictionMsg(matchId, onchainMatchId, seat as number, (player as Keypair).publicKey.toBytes(), BigInt(targetRound), commitment as Buffer);
-    const sig = signMsg(player as Keypair, sealMsg);
-
-    const ciphertext = randomBytes(64).toString('base64'); // stub: real deployment uses drand encryption
-
-    gs.send({
+  for (const s of seals) {
+    const sealMsg = buildPredictionMsg(
+      matchId,
+      onchainMatchId,
+      s.seat,
+      s.player.publicKey.toBytes(),
+      timelockTarget,
+      s.commitment,
+    );
+    const sig = signMsg(s.player, sealMsg);
+    // This is a test ciphertext carrier. The on-chain commitment binds the prediction+blinding;
+    // the worker/backend must persist exactly this payload if it expects to settle from gateway.
+    const ciphertext = randomBytes(64).toString('base64');
+    s.session.send({
       type: 'sealPrediction',
       matchId,
       ciphertext,
-      seatIndex: seat,
-      targetRound,
-      commitmentHex: (commitment as Buffer).toString('hex'),
-      blindingHex: (blinding as Buffer).toString('hex'),
+      seatIndex: s.seat,
+      targetRound: Number(timelockTarget),
+      commitmentHex: s.commitment.toString('hex'),
+      blindingHex: s.blinding.toString('hex'),
       signature: sig,
     });
-    log(`  Seat ${seat}: sealPrediction sent (commitment=${(commitment as Buffer).toString('hex').slice(0, 16)}...)`);
+    log(`  Seat ${s.seat}: sealPrediction uploaded via gateway (targetRound=${timelockTarget})`);
   }
+  ok('Gateway sealPrediction payloads sent');
+  warn('No public ack exists for seal persistence; settlement outcome is the acceptance proof.');
+}
 
-  ok('Sealing payloads sent via WebSocket');
-  log('  Settlement worker will read sealed prices, run settle(), and call settle instruction on-chain');
-  log('  Monitor settlement-chain logs for the settle tx hash');
+async function waitForBackendResolution(matchId: string, timeoutMs: number): Promise<{ status: string; raw: unknown }> {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      const r = await apiGet(`https://api.devnet.satoshitable.fun/matches/${encodeURIComponent(matchId)}/history`) as any;
+      last = r;
+      const status = r?.match?.status;
+      if (status === 'settled' || status === 'voided') return { status, raw: r };
+      log(`  history status=${status ?? 'not-terminal'}; waiting...`);
+    } catch (e) {
+      last = e instanceof Error ? e.message : String(e);
+      log(`  history not available yet; waiting...`);
+    }
+    await sleep(15_000);
+  }
+  fail(`backend did not expose settled/voided history for match ${matchId} within ${timeoutMs}ms`, last);
 }
 
 function computeCommitment(price: bigint, blinding: Buffer): Buffer {
-  // mirrors shared/src/intent.rs simple_sha256(price_bytes + blinding)
+  // mirrors shared/src/intent.rs prediction_commitment_hash: simple_sha256(i128_le(price) || blinding)
   const buf = Buffer.alloc(48);
-  buf.writeBigUInt64LE(price & 0xFFFFFFFFFFFFFFFFn, 0);
-  buf.writeBigUInt64LE((price >> 64n) & 0xFFFFFFFFFFFFFFFFn, 8);
+  buf.writeBigUInt64LE(price & 0xffffffffffffffffn, 0);
+  buf.writeBigUInt64LE((price >> 64n) & 0xffffffffffffffffn, 8);
   blinding.copy(buf, 16);
-  return createHash('sha256').update(buf).digest();
+  return simpleSha256(buf);
+}
+
+function simpleSha256(data: Buffer): Buffer {
+  const state = [
+    0x6a09e667f3bcc908n,
+    0xbb67ae8584caa73bn,
+    0x3c6ef372fe94f82bn,
+    0xa54ff53a5f1d36f1n,
+  ];
+  const mask = (1n << 64n) - 1n;
+  for (let offset = 0; offset < data.length; offset += 8) {
+    let word = 0n;
+    for (let i = 0; i < 8 && offset + i < data.length; i += 1) {
+      word |= BigInt(data[offset + i]!) << BigInt(i * 8);
+    }
+    for (let s = 0; s < state.length; s += 1) {
+      state[s] = ((state[s]! ^ word) * 0x5851f42d4c957f2dn) & mask;
+    }
+  }
+  const out = Buffer.alloc(32);
+  for (let i = 0; i < state.length; i += 1) {
+    let v = state[i]!;
+    for (let j = 0; j < 8; j += 1) {
+      out[i * 8 + j] = Number((v >> BigInt(j * 8)) & 0xffn);
+    }
+  }
+  return out;
+}
+
+function drandPublishTs(round: bigint): bigint {
+  return DRAND_GENESIS_TIME + round * DRAND_PERIOD_SEC;
+}
+
+function pickTimelockTargetFromProjectedSeal(sealDeadlineTs: bigint): bigint {
+  const latestMatchEnd = sealDeadlineTs + TOTAL_BETTING_DURATION_SEC + BEGIN_LIVE_WINDOW_SEC;
+  let round = (latestMatchEnd - DRAND_GENESIS_TIME) / DRAND_PERIOD_SEC + 1n;
+  while (drandPublishTs(round) <= latestMatchEnd) round += 1n;
+  if (drandPublishTs(round) > latestMatchEnd + MAX_TIMELOCK_SKEW_SEC) {
+    throw new Error(`no valid drand round for projected latestMatchEnd=${latestMatchEnd}`);
+  }
+  return round;
 }
 
 // ─── Next-steps printer ───────────────────────────────────────────────────────
@@ -753,8 +927,8 @@ function printNextSteps(roomCode: string, matchId: string, hostWallet: string) {
   log(`  1. Start match:    curl -u dev:... -X POST https://matchmaking.devnet.satoshitable.fun/rooms/${roomCode}/start -d '{"host":"${hostWallet}"}'`);
   log('  2. WS subscribe:   { type: "subscribe", matchId }  → receive matchState LIVE');
   log('  3. Betting:        { type: "act", matchId, action: { type: "call" }, signature, seatIndex, nonce }');
-  log('  4. Seal (~10min):  AWAIT_SEAL=1 BASIC_AUTH=... node scripts/e2e-devnet-test.ts');
-  log('  5. Settlement:     settlement-chain worker runs settle() after seal window closes');
+  log('  4. Settlement:     backend worker should publish settled/voided history');
+  log('  5. Claim/refund:   wallet signs claim/refund once terminal state is visible');
   log('────────────────────────────────────────────────────────────');
 }
 
