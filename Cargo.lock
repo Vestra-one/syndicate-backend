@@ -6950,6 +6950,7 @@ dependencies = [
  "spl-token 7.0.0",
  "syndicate-chain",
  "syndicate-shared",
+ "syndicate-timelock",
  "tokio",
  "tokio-tungstenite 0.24.0",
 ]

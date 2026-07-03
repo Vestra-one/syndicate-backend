@@ -53,6 +53,7 @@ use solana_sdk::transaction::Transaction;
 
 use syndicate_chain::params::CreateParams;
 use syndicate_chain::{ix, pda};
+use syndicate_timelock::{DrandTlockScheme, TimelockScheme};
 
 // ------------------------------------------------------------------------------------
 // Context + player model
@@ -67,6 +68,12 @@ struct Ctx {
     admin_token: String,
     buy_in: u64,
     street_sec: u64,
+    /// "live" (real drand tlock — production) or "mock" (24-byte MockScheme). Must match
+    /// the deployed worker's timelock mode.
+    seal_mode: String,
+    /// drand quicknet chain hash + group public key (hex) — used for real tlock seals.
+    drand_chain_hash: String,
+    drand_pubkey: String,
 }
 
 struct Player {
@@ -113,9 +120,16 @@ fn shell_home(path: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    let api = env("GAME_SERVER_URL", "http://127.0.0.1:18080");
+    let http = reqwest::Client::new();
+    // Seal mode must match the deployed worker: "live" (real drand tlock — the production
+    // default) or "mock". For live we fetch the drand chain hash (from the server config)
+    // and the group public key (from the drand /info endpoint) to build real tlock seals.
+    let seal_mode = env("E2E_SEAL_MODE", "live");
+    let (drand_chain_hash, drand_pubkey) = load_drand(&http, &api, &seal_mode).await;
     let ctx = Ctx {
-        api: env("GAME_SERVER_URL", "http://127.0.0.1:18080"),
-        http: reqwest::Client::new(),
+        api,
+        http,
         rpc: RpcClient::new_with_commitment(
             env("SOLANA_RPC_URL", "https://api.devnet.solana.com"),
             CommitmentConfig::confirmed(),
@@ -127,6 +141,9 @@ async fn main() {
         admin_token: env("ADMIN_TOKEN", "e2e-admin-token-lolol"),
         buy_in: env("BUY_IN", "1000000").parse().unwrap(),
         street_sec: env("STREET_SEC", "30").parse().unwrap(),
+        seal_mode,
+        drand_chain_hash,
+        drand_pubkey,
     };
 
     let mut p1 = ctx.player("PLAYER1_KEYPAIR", &shell_home("~/.config/solana/id.json"), "P1").await;
@@ -136,6 +153,7 @@ async fn main() {
 
     println!("== e2e suite (server-as-source-of-truth) ==");
     println!("   api={}  program={}  mint={}", ctx.api, ctx.program_id, ctx.mint);
+    println!("   seal_mode={} (worker must match)", ctx.seal_mode);
     println!("   P1={}  P2={}  P3={}  ATK={}", p1.pubkey(), p2.pubkey(), p3.pubkey(), attacker.pubkey());
 
     let selected = env("E2E_SCENARIOS", "all");
@@ -809,8 +827,7 @@ async fn wait_confirmed(ctx: &Ctx, match_id: &str, wallet: &Pubkey) {
 /// Build the 24-byte MockScheme ciphertext, register the on-chain commitment, and report the
 /// seal to the API (signed intent). `seat_index` comes from the server's confirmed set.
 async fn seal(ctx: &Ctx, player: &Player, room: &Room, seat_index: u16, target: u64, prediction_wad: i128) {
-    let mut ciphertext = target.to_le_bytes().to_vec();
-    ciphertext.extend_from_slice(&prediction_wad.to_le_bytes());
+    let ciphertext = build_seal_ciphertext(ctx, target, prediction_wad);
     let commitment = syndicate_shared::intent::ciphertext_commitment_hash(&ciphertext);
 
     let seal_ix = ix::register_prediction_commitment(
@@ -832,6 +849,41 @@ async fn seal(ctx: &Ctx, player: &Player, room: &Room, seat_index: u16, target: 
     });
     let (st, resp) = try_post(ctx, &format!("/v1/matches/{}/seal", room.match_id), &player.session, body).await;
     assert!(st.is_success(), "seal report failed: {st} {resp}");
+}
+
+/// Build the sealed ciphertext the sealer registers + reports. In **live** mode this is a
+/// real drand `tlock` encryption of the prediction wad toward `target` (decryptable only
+/// once that round's BLS signature publishes — the production path). In **mock** mode it's
+/// the 24-byte MockScheme layout `target(8 LE) ‖ prediction_wad(16 LE)`.
+fn build_seal_ciphertext(ctx: &Ctx, target: u64, prediction_wad: i128) -> Vec<u8> {
+    if ctx.seal_mode == "live" {
+        let chain = hex::decode(&ctx.drand_chain_hash).expect("drand chain hash hex");
+        let pk = hex::decode(&ctx.drand_pubkey).expect("drand public key hex");
+        DrandTlockScheme::new(chain, pk).encrypt(prediction_wad, target)
+    } else {
+        let mut ct = target.to_le_bytes().to_vec();
+        ct.extend_from_slice(&prediction_wad.to_le_bytes());
+        ct
+    }
+}
+
+/// Fetch the drand chain hash (from the server config — source of truth) and, for live
+/// seals, the group public key from the drand `/info` endpoint. The worker builds its
+/// `DrandTlockScheme` from the same values, so encrypt/decrypt agree.
+async fn load_drand(http: &reqwest::Client, api: &str, seal_mode: &str) -> (String, String) {
+    let cfg: Value = http
+        .get(format!("{api}/v1/config"))
+        .send().await.expect("config").json().await.expect("config json");
+    let chain_hash = cfg["drand"]["chain_hash"].as_str().unwrap_or_default().to_string();
+    let drand_api = cfg["drand"]["api"].as_str().unwrap_or("https://api.drand.sh").to_string();
+    if seal_mode != "live" {
+        return (chain_hash, String::new());
+    }
+    let info: Value = http
+        .get(format!("{drand_api}/{chain_hash}/info"))
+        .send().await.expect("drand /info").json().await.expect("drand /info json");
+    let pubkey = info["public_key"].as_str().expect("drand public_key").to_string();
+    (chain_hash, pubkey)
 }
 
 /// Send a few legitimate signed actions over the WS. Each player reads the live state from

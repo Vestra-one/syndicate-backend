@@ -30,3 +30,6 @@ spl-token = "7"
 
 syndicate-chain = { path = "../chain", features = ["rpc"] }
 syndicate-shared = { path = "../shared" }
+# `tlock` pulls the real drand IBE cipher so the driver can produce genuine time-locked
+# seals for the live-drand (production) settlement path — not just the MockScheme stand-in.
+syndicate-timelock = { path = "../timelock", features = ["tlock"] }

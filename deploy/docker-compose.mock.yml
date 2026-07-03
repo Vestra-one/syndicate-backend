@@ -1,0 +1,13 @@
+# OPT-IN mock-timelock overlay (fast, offline, deterministic settlement).
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml \
+#     -f deploy/docker-compose.mock.yml --env-file deploy/.env up -d
+#
+# With this, the chain-worker decrypts a deterministic MockScheme ciphertext instead of a
+# real drand tlock, so settlement doesn't wait on a live beacon round. Pair it with the
+# e2e's E2E_SEAL_MODE=mock. NEVER use on a production/real-money deployment — predictions
+# are then not genuinely time-locked. Default (without this overlay) is live drand.
+services:
+  chain-worker:
+    environment:
+      TIMELOCK_OPEN_MODE: mock

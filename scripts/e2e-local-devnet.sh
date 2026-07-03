@@ -14,9 +14,14 @@
 # funder wallet at ~/.config/solana/id.json holding devnet SOL and being the mint
 # authority (or holder) of the chips token.
 #
+# Timelock: LIVE drand by default (production path) — the driver produces real tlock seals
+# and settlement decrypts them with the target round's published BLS signature. Set
+# MOCK_TIMELOCK=1 for a fast, offline, deterministic run (mock worker + MockScheme seals).
+#
 # Usage:
-#   SOLANA_RPC_URL=<devnet-rpc> scripts/e2e-local-devnet.sh
-#   SOLANA_RPC_URL=<rpc> RUN_LOAD=1 scripts/e2e-local-devnet.sh   # also run load sanity
+#   SOLANA_RPC_URL=<devnet-rpc> scripts/e2e-local-devnet.sh                 # live drand (production)
+#   MOCK_TIMELOCK=1 SOLANA_RPC_URL=<rpc> scripts/e2e-local-devnet.sh        # fast offline mock
+#   SOLANA_RPC_URL=<rpc> RUN_LOAD=1 scripts/e2e-local-devnet.sh             # also run load sanity
 #   SOLANA_RPC_URL=<rpc> E2E_SCENARIOS=public,theft scripts/e2e-local-devnet.sh
 #
 # The RPC defaults to SOLANA_RPC_URL_PRIMARY from deploy/.env if unset. Solana's public
@@ -48,6 +53,16 @@ CHAIN_WORKER_URL="${CHAIN_WORKER_URL:-http://127.0.0.1:18084}"
 BUY_IN="${BUY_IN:-1000000}"          # 1 chip @ 6 decimals
 FUND_SOL="${FUND_SOL:-0.2}"          # per player, for tx fees + rent
 FUND_CHIPS_UI="${FUND_CHIPS_UI:-30}" # per player, UI amount (30 => 30_000_000 base)
+
+# Timelock mode: live drand (production) by default; MOCK_TIMELOCK=1 → fast offline mock.
+MOCK_TIMELOCK="${MOCK_TIMELOCK:-0}"
+COMPOSE_FILES=(-f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml)
+if [ "$MOCK_TIMELOCK" = "1" ]; then
+  COMPOSE_FILES+=(-f deploy/docker-compose.mock.yml)
+  SEAL_MODE="mock"
+else
+  SEAL_MODE="live"
+fi
 KEYDIR="$ROOT/deploy/e2e-keys"
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -122,7 +137,8 @@ fi
 
 # ---- 4. stack up + healthy ----------------------------------------------------------
 say "docker stack"
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env up -d --build >/dev/null
+say "timelock mode: $([ "$MOCK_TIMELOCK" = 1 ] && echo 'MOCK (offline)' || echo 'LIVE drand (production)')"
+docker compose "${COMPOSE_FILES[@]}" --env-file deploy/.env up -d --build >/dev/null
 say "waiting for health (game-server price feed + chain-worker RPC/signer)"
 for _ in $(seq 1 60); do
   gs="$(curl -s --max-time 4 "$GAME_SERVER_URL/healthz" 2>/dev/null || echo '{}')"
@@ -143,6 +159,8 @@ export PLAYER1_KEYPAIR="$KEYDIR/player1.json" PLAYER2_KEYPAIR="$KEYDIR/player2.j
 export PLAYER3_KEYPAIR="$KEYDIR/player3.json" ATTACKER_KEYPAIR="$KEYDIR/attacker.json"
 # Admin token for the API admin endpoints (first entry of ADMIN_TOKENS).
 export ADMIN_TOKEN="${ADMIN_TOKEN:-$(printf '%s' "${ADMIN_TOKENS:-}" | cut -d, -f1 | tr -d ' ')}"
+# Seal mode must match the worker's timelock mode (live drand vs mock).
+export E2E_SEAL_MODE="$SEAL_MODE"
 export E2E_SCENARIOS="${E2E_SCENARIOS:-all}"
 cargo run -q -p syndicate-e2e --bin e2e-devnet --release
 

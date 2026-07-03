@@ -15,8 +15,7 @@ services:
     environment:
       APP_ENV: devnet
       LOG_LEVEL: debug
-      # Deterministic timelock for reproducible e2e: the driver seals a 24-byte
-      # MockScheme ciphertext (target_round ‖ price_wad) instead of a real drand tlock,
-      # so settlement decrypts without waiting on a live beacon round. All on-chain
-      # custody / settlement / conservation logic still runs for real on devnet.
-      # TIMELOCK_OPEN_MODE: mock
+      # Timelock runs LIVE drand by default (production-like) — settlement decrypts real
+      # tlock seals with the target round's published BLS signature. For a fast, offline
+      # deterministic run, add the mock overlay: `-f deploy/docker-compose.mock.yml`
+      # (and run the e2e with E2E_SEAL_MODE=mock).
