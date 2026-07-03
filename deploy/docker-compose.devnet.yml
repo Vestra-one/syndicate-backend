@@ -1,16 +1,17 @@
-# Devnet overrides: loopback debug port binds + relaxed CORS.
+# Devnet overrides: verbose logging + relaxed CORS.
+#
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env up -d
+#
+# Loopback port publishes (127.0.0.1:18080 / :18084 / :18088) now live in the BASE
+# compose — they are the standard contract for the host reverse proxy, not a devnet-only
+# debug affordance. Do not re-declare them here or the host-port binds collide.
 services:
   game-server:
-    ports:
-      - "127.0.0.1:18080:8080"
     environment:
       APP_ENV: devnet
       LOG_LEVEL: debug
 
   chain-worker:
-    ports:
-      - "127.0.0.1:18084:8084"
     environment:
       APP_ENV: devnet
       LOG_LEVEL: debug
@@ -19,7 +20,3 @@ services:
       # so settlement decrypts without waiting on a live beacon round. All on-chain
       # custody / settlement / conservation logic still runs for real on devnet.
       # TIMELOCK_OPEN_MODE: mock
-
-  signed-price-server:
-    ports:
-      - "127.0.0.1:18088:8080"

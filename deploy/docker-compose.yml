@@ -93,6 +93,12 @@ services:
     volumes:
       - ./secrets/postgres-password:/run/secrets/postgres-password:ro
       - ./secrets/session-signing-key:/run/secrets/session-signing-key:ro
+    # Loopback-only publish. This is the contract for a HOST reverse proxy
+    # (systemd nginx + certbot on the VPS): it proxies to 127.0.0.1:18080.
+    # The bundled `nginx` service (profile `edge`) reaches this over the Docker
+    # network as `game-server:8080` instead, so both patterns coexist.
+    ports:
+      - "127.0.0.1:18080:8080"
     expose:
       - "8080"
     healthcheck:
@@ -141,6 +147,9 @@ services:
     volumes:
       - ./secrets/postgres-password:/run/secrets/postgres-password:ro
       - ./secrets/operator-keypair.json:/run/secrets/operator-keypair.json:ro
+    # Loopback-only ops/health port (never proxied publicly — no host vhost for it).
+    ports:
+      - "127.0.0.1:18084:8084"
     expose:
       - "8084"
     healthcheck:
@@ -162,6 +171,9 @@ services:
       ECDSA_PRIVATE_KEY_FILE: /run/secrets/price-signer.key
     volumes:
       - ./secrets/price-signer.key:/run/secrets/price-signer.key:ro
+    # Loopback-only publish for the HOST reverse proxy (127.0.0.1:18088).
+    ports:
+      - "127.0.0.1:18088:8080"
     expose:
       - "8080"
     deploy:
@@ -169,8 +181,14 @@ services:
         limits:
           memory: 512m
 
+  # Bundled edge proxy. OPT-IN only (profile `edge`) — enable it ONLY on a dedicated
+  # VPS where nothing else owns 80/443. If a HOST nginx is already running (the common
+  # case, see docs/deployment/DEPLOYMENT.md §8 "Edge / TLS"), do NOT start this — the two
+  # would fight over 80/443. Default `docker compose up` leaves this off; the app is
+  # reachable on the loopback publishes above for the host proxy to consume.
   nginx:
     image: nginx:1.27-bookworm
+    profiles: ["edge"]
     restart: unless-stopped
     depends_on:
       game-server:

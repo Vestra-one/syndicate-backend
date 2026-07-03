@@ -1,5 +1,11 @@
 # Syndicate deployment guides
 
+> **Deploying v2? Use [DEPLOYMENT.md](./DEPLOYMENT.md)** — it is the single authoritative v2
+> runbook and supersedes guides 01–04 below. For the edge/TLS step specifically, see
+> [08_HOST_NGINX_TLS.md](./08_HOST_NGINX_TLS.md) (host nginx + certbot; the v2 stack has one
+> API + the price feed, not the four v1 subdomains). The 01–04 guides below are **v1** (Caddy,
+> `gateway|api|config` subdomains) and are kept for historical reference only.
+
 Copy/paste operator runbooks. Run **in order**:
 
 | Step | Guide | What it does |

@@ -22,13 +22,17 @@ This is the single authoritative deployment document for the v2 backend. It supe
 
 | Service | Image source | Port (internal) | Health | Secrets |
 |---|---|---|---|---|
-| game-server | `deploy/Dockerfile.rust` (`BIN=syndicate-game-server`) | 8080 | `/healthz` | postgres-password, session-signing-key |
-| chain-worker | `deploy/Dockerfile.rust` (`BIN=syndicate-chain-worker`) | 8084 | `/healthz` | postgres-password, operator-keypair.json |
-| signed-price-server | `services/signed-price-server/Dockerfile` | 8080 | `/health` | price-signer.key |
-| postgres | postgres:16 | 5432 | `pg_isready` | postgres-password |
-| nginx | nginx:1.27 | 80/443 (published) | — | TLS certs (certbot volume) |
+| game-server | `deploy/Dockerfile.rust` (`BIN=syndicate-game-server`) | 8080 → `127.0.0.1:18080` | `/healthz` | postgres-password, session-signing-key |
+| chain-worker | `deploy/Dockerfile.rust` (`BIN=syndicate-chain-worker`) | 8084 → `127.0.0.1:18084` | `/healthz` | postgres-password, operator-keypair.json |
+| signed-price-server | `services/signed-price-server/Dockerfile` | 8080 → `127.0.0.1:18088` | `/health` | price-signer.key |
+| postgres | postgres:16 | 5432 (not published) | `pg_isready` | postgres-password |
+| nginx (opt-in, profile `edge`) | nginx:1.27 | 80/443 | — | TLS certs (certbot volume) |
 
-Only nginx publishes host ports (plus loopback debug binds in the devnet overlay).
+**No service publishes a public port by default.** The three app services publish to
+**loopback only** (`127.0.0.1:180xx`) so a **host reverse proxy** (systemd nginx + certbot,
+already present on most VPSes) can terminate TLS and proxy to them — see §8. The bundled
+`nginx` container is **opt-in** (`--profile edge`) for a *dedicated* VPS where nothing else
+owns 80/443; enabling it alongside a host nginx makes the two fight over those ports.
 
 ## 2. Prerequisites
 
@@ -89,20 +93,63 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml 
   --env-file deploy/.env up -d --build
 ```
 
-## 8. TLS
+This starts postgres, db-migrate, signed-price-server, chain-worker, and game-server —
+all publishing to **loopback only**. It does **not** start the `nginx` container. Verify
+on the VPS before wiring the edge:
+
+```bash
+curl -sf http://127.0.0.1:18080/healthz && echo GAME_OK
+curl -sf http://127.0.0.1:18088/health  && echo PRICE_OK
+```
+
+## 8. Edge / TLS
+
+Pick **one** of the two patterns. The default (8a) is the right choice on any VPS that
+already runs a host nginx for other services — trying to also run the bundled Docker nginx
+there is the classic failure (two proxies fighting over 80/443, `nginx -t` errors, port
+binds refused). See [08_HOST_NGINX_TLS.md](./08_HOST_NGINX_TLS.md) for the full runbook.
+
+### 8a. Host nginx + certbot (default — coexists with other services)
+
+Containers already listen on `127.0.0.1:18080` (game-server) and `127.0.0.1:18088`
+(price). The **host's** systemd nginx terminates TLS and proxies to them. The repo ships
+the vhost at [`deploy/nginx/syndicate-v2-host.conf`](../../deploy/nginx/syndicate-v2-host.conf):
+
+```bash
+# edit the two `server_name` lines for your domain, then:
+sudo cp deploy/nginx/syndicate-v2-host.conf /etc/nginx/sites-available/syndicate-v2
+sudo ln -s /etc/nginx/sites-available/syndicate-v2 /etc/nginx/sites-enabled/syndicate-v2
+sudo nginx -t && sudo systemctl reload nginx
+
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d api.$DOMAIN -d price.$DOMAIN \
+  --non-interactive --agree-tos -m $TLS_EMAIL
+```
+
+certbot injects the `listen 443 ssl` + cert directives and the HTTP→HTTPS redirect into
+the vhost, and installs its own renewal timer (`certbot renew --dry-run` to verify).
+Keep the bundled `nginx` container **off** — do not pass `--profile edge`.
+
+### 8b. Bundled Docker nginx (dedicated VPS, nothing else on 80/443)
+
+Only when the host has no other web server. Bring the edge container up with its profile:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml \
+  --env-file deploy/.env --profile edge up -d
+```
 
 First bring-up serves plain :80 (ACME + redirect). Issue certs, then reload:
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec nginx sh -c 'mkdir -p /var/www/certbot'
 docker run --rm -v syndicate_certbot-webroot:/var/www/certbot \
   -v syndicate_letsencrypt:/etc/letsencrypt certbot/certbot certonly \
   --webroot -w /var/www/certbot -d api.$DOMAIN -d price.$DOMAIN \
   --email $TLS_EMAIL --agree-tos --no-eff-email
-docker compose -f deploy/docker-compose.yml restart nginx
+docker compose -f deploy/docker-compose.yml --profile edge restart nginx
 ```
 
-Renewal: monthly cron running the same `certonly` + `nginx -s reload`.
+Renewal: monthly cron running the same `certonly` + `docker compose ... --profile edge exec nginx nginx -s reload`.
 
 ## 9. Validate
 
