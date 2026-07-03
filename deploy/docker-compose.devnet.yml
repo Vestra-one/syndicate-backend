@@ -18,7 +18,7 @@ services:
       # MockScheme ciphertext (target_round ‖ price_wad) instead of a real drand tlock,
       # so settlement decrypts without waiting on a live beacon round. All on-chain
       # custody / settlement / conservation logic still runs for real on devnet.
-      TIMELOCK_OPEN_MODE: mock
+      # TIMELOCK_OPEN_MODE: mock
 
   signed-price-server:
     ports:
