@@ -1,8 +1,8 @@
 # 08 — Host nginx + TLS (v2)
 
 > The v2 edge runbook. Run as the deploy user on the VPS **after** [DEPLOYMENT.md](./DEPLOYMENT.md) §7
-> passes (app containers healthy on loopback). This is the v2 replacement for the v1
-> `04_DOMAIN_AND_TLS.md` — v2 collapses the old four subdomains into **one API + the price feed**.
+> passes (app containers healthy on loopback). It replaces the removed v1 domain/TLS guide —
+> v2 collapses the old four subdomains into **one API + the price feed**.
 
 ## Why host nginx (not the bundled container)
 

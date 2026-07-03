@@ -1,7 +1,8 @@
 # Syndicate v2 — Deployment Guide
 
-This is the single authoritative deployment document for the v2 backend. It supersedes
-`01_CONTRACT_DEPLOYMENT.md` … `04_DOMAIN_AND_TLS.md`.
+This is the single authoritative deployment document for the v2 backend. It replaces the
+removed v1 guides (`01_…`–`04_…`). For the edge/TLS step, see
+[08_HOST_NGINX_TLS.md](./08_HOST_NGINX_TLS.md).
 
 ## 1. Topology
 

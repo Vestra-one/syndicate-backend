@@ -2,7 +2,7 @@
 
 Everything the UI needs to build the three screens — **Play** (public lobby + private
 rooms), **Live games** (spectate), **Historical games** — plus wallets, sealing, betting,
-reconnect, and claims. This document supersedes the old `INTEGRATION_GUIDE.md`.
+reconnect, and claims. This is the single authoritative frontend guide for v2.
 
 ## 1. Environments & endpoints
 
