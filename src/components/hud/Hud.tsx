@@ -10,6 +10,8 @@ import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
 import { TxCeremony } from './TxCeremony'
 import { WaitingRoom, useWaiting } from './WaitingRoom'
+import { PriceBoardTabs } from './PriceBoardTabs'
+import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
 import './hud.css'
 
@@ -65,6 +67,8 @@ export function Hud() {
         <WalletMenu />
       </header>
 
+      <PriceBoardTabs />
+
       {!waiting && (
         <div className="hud-mid">
           <ActionFeed />
@@ -84,6 +88,7 @@ export function Hud() {
       <Lobby />
       <TxCeremony />
       <Resolution />
+      <PriceChartOverlay />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
@@ -24,6 +24,9 @@ export function Lobby() {
   const playError = useGameStore((s) => s.playError)
   const join = useGameStore((s) => s.joinTable)
   const create = useGameStore((s) => s.createTable)
+  const createLimits = useGameStore((s) => s.createLimits)
+  const setCreateBuyIn = useGameStore((s) => s.setCreateBuyIn)
+  const setCreateFillWindow = useGameStore((s) => s.setCreateFillWindow)
 
   const { connected, connecting } = useWallet()
   const { setVisible } = useWalletModal()
@@ -114,8 +117,25 @@ export function Lobby() {
           </div>
         </div>
 
+        {/* Host-editable table settings — buy-in and fill window (§4) */}
+        {isCreate && createLimits && (
+          <div className="lobby-create-opts">
+            <BuyInField
+              token={terms.chipsToken}
+              valueBase={terms.buyIn}
+              limits={createLimits}
+              onChange={setCreateBuyIn}
+            />
+            <FillWindowField
+              valueSec={terms.fillWindowSec ?? createLimits.fillWindowMinSec}
+              limits={createLimits}
+              onChange={setCreateFillWindow}
+            />
+          </div>
+        )}
+
         <div className="lobby-grid">
-          <Term label="buy-in" value={`${fmt(terms.buyIn)} ${terms.chipsToken}`} />
+          {!isCreate && <Term label="buy-in" value={`${fmt(terms.buyIn)} ${terms.chipsToken}`} />}
           <Term label="entry fee" value={`${fmt(terms.entryFee)} ${terms.chipsToken}`} />
           <Term label="blinds" value={`${fmt(terms.smallBlind)} / ${fmt(terms.bigBlind)}`} />
           <Term label="rake" value={`${terms.rakeBps / 100}% · cap ${fmt(terms.rakeCap)}`} />
@@ -188,5 +208,123 @@ function Term({ label, value }: { label: string; value: string }) {
       <span className="eyebrow">{label}</span>
       <span className="lobby-term-value mono">{value}</span>
     </div>
+  )
+}
+
+type Limits = { buyInMin: number; buyInMax: number; fillWindowMinSec: number; fillWindowMaxSec: number }
+
+/** Editable buy-in amount (whole tokens) with the template's allowed range. */
+function BuyInField({
+  token,
+  valueBase,
+  limits,
+  onChange,
+}: {
+  token: string
+  valueBase: number
+  limits: Limits
+  onChange: (baseUnits: number) => void
+}) {
+  // Local text state so the user can clear/type freely; commit (clamp) on blur.
+  const [text, setText] = useState(() => String(valueBase / 1e6))
+  // Keep the field in sync when the store clamps the value under us.
+  useEffect(() => { setText(String(valueBase / 1e6)) }, [valueBase])
+
+  const commit = () => {
+    const n = parseFloat(text)
+    if (Number.isFinite(n)) onChange(Math.round(n * 1e6))
+    else setText(String(valueBase / 1e6))
+  }
+  const money = (base: number) => (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+
+  return (
+    <label className="lobby-field">
+      <span className="eyebrow">buy-in ({token})</span>
+      <div className="lobby-field-input">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={limits.buyInMin / 1e6}
+          max={limits.buyInMax / 1e6}
+          step={0.1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        />
+        <span className="lobby-field-unit">{token}</span>
+      </div>
+      <span className="lobby-field-hint eyebrow">
+        {money(limits.buyInMin)} – {money(limits.buyInMax)} {token}
+      </span>
+    </label>
+  )
+}
+
+const FILL_PRESETS_SEC = [20, 60, 300, 900, 3600]
+
+function fmtDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  if (sec < 3600) return sec % 60 === 0 ? `${sec / 60}m` : `${Math.floor(sec / 60)}m ${sec % 60}s`
+  return sec % 3600 === 0 ? `${sec / 3600}h` : `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m`
+}
+
+/** Editable fill window (seconds) with quick presets + the template's allowed range. */
+function FillWindowField({
+  valueSec,
+  limits,
+  onChange,
+}: {
+  valueSec: number
+  limits: Limits
+  onChange: (sec: number) => void
+}) {
+  const [text, setText] = useState(() => String(valueSec))
+  useEffect(() => { setText(String(valueSec)) }, [valueSec])
+
+  const commit = () => {
+    const n = parseInt(text, 10)
+    if (Number.isFinite(n)) onChange(n)
+    else setText(String(valueSec))
+  }
+  const presets = FILL_PRESETS_SEC.filter(
+    (s) => s >= limits.fillWindowMinSec && s <= limits.fillWindowMaxSec,
+  )
+
+  return (
+    <label className="lobby-field">
+      <span className="eyebrow">fill window</span>
+      <div className="lobby-field-input">
+        <input
+          type="number"
+          inputMode="numeric"
+          min={limits.fillWindowMinSec}
+          max={limits.fillWindowMaxSec}
+          step={1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        />
+        <span className="lobby-field-unit">sec</span>
+      </div>
+      {presets.length > 0 && (
+        <div className="lobby-field-presets">
+          {presets.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`chip ${s === valueSec ? 'chip--active' : ''}`}
+              onClick={() => onChange(s)}
+            >
+              {fmtDuration(s)}
+            </button>
+          ))}
+        </div>
+      )}
+      <span className="lobby-field-hint eyebrow">
+        min {fmtDuration(limits.fillWindowMinSec)} · max {fmtDuration(limits.fillWindowMaxSec)}
+      </span>
+    </label>
   )
 }

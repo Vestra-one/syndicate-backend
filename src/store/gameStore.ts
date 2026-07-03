@@ -15,18 +15,18 @@ import type {
 } from '@/lib/protocol'
 import { DRAND, PAST_FILLING_PHASES } from '@/lib/protocol'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
+import type { PriceRange } from '@/lib/priceRanges'
 import { createAdapters, type Adapters } from '@/lib/adapters'
-import { newOnchainMatchId } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames } from '@/lib/discovery'
 import {
-  pickTemplate,
-  templateToCreateParams,
-  templateToTerms,
-  type ConfigTemplate,
-} from '@/lib/config'
-import { priceTokenFor } from '@/lib/price'
-import { reportCreate, reportDeposit } from '@/lib/matchmaking'
+  api,
+  ensureSession,
+  ApiError,
+  type ApiConfig,
+  type CreateIntentResponse,
+  type MatchDetail,
+} from '@/lib/api'
 
 /** Resolved Play Now action: join an existing open table, or create a new one. */
 export type PlayMode = 'join' | 'create'
@@ -52,7 +52,8 @@ export type TxCommit = {
   error?: string
 }
 
-const MAX_HISTORY = 240 // ~2 min at 500ms snapshots — enough for the board chart
+// ~1h at 500ms snapshots — covers the price cabinet's widest trailing-window tab ('1H')
+const MAX_HISTORY = 7200
 const MAX_FEED = 40 // recent public events kept for the action feed
 
 /** One-way latch for the prediction (§6, seal-once). */
@@ -80,6 +81,8 @@ interface GameState {
   yourTurn: { toCall: number; minRaiseTo: number; deadline: number } | null
   /** Epoch-ms the fill window closes (room voids if under min). Drives the waiting-room countdown. */
   fillDeadline: number | null
+  /** Creator-selectable ranges for a new table — buy-in in token base units, fill window in seconds. */
+  createLimits: CreateLimits | null
   /** Epoch-ms the current round began — anchors the price-board chart's x-axis to the round. */
   roundStartedAt: number | null
 
@@ -89,6 +92,10 @@ interface GameState {
   defaultAction: DefaultAction
 
   priceHistory: PricePoint[]
+  /** Selected timeframe tab on the price cabinet's chart — cabinet-display state only. */
+  priceBoardRange: PriceRange
+  /** Full-screen BTC/USD analysis chart, launched from the cabinet's brass chart button. */
+  priceChartOpen: boolean
   feed: PublicEvent[]
 
   settlement: SettlementView | null
@@ -110,6 +117,9 @@ interface GameState {
   fetchBalance: () => Promise<void>
   loadDiscovery: () => Promise<void>
   ingestLivePrice: (price: number, ts: number) => void
+  setPriceBoardRange: (range: PriceRange) => void
+  openPriceChart: () => void
+  closePriceChart: () => void
   setDashboardSort: (key: DashboardSortKey) => void
   enterTable: (matchId: string) => Promise<void>
   leaveToDiscovery: () => void
@@ -118,6 +128,10 @@ interface GameState {
   disconnect: () => void
   joinGame: (matchId: string) => Promise<void>
   createGame: () => Promise<void>
+  /** Set the buy-in (token base units) for the table being created — clamped to createLimits. */
+  setCreateBuyIn: (baseUnits: number) => void
+  /** Set the fill window (seconds) for the table being created — clamped to createLimits. */
+  setCreateFillWindow: (sec: number) => void
   dismissInvite: () => void
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
@@ -131,14 +145,122 @@ interface GameState {
   playAgain: () => Promise<void>
 }
 
+/** Creator-selectable ranges for a new table. */
+export interface CreateLimits {
+  buyInMin: number
+  buyInMax: number
+  fillWindowMinSec: number
+  fillWindowMaxSec: number
+}
+
+/** Hard floors on host-chosen create params (independent of the config's own range). */
+const MIN_BUYIN_BASE = 100_000 // 0.1 USDC (6 decimals)
+const MIN_FILL_WINDOW_SEC = 20
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+
+/** Derive the effective creator ranges from `GET /v1/config` bounds, applying the hard floors. */
+function configToCreateLimits(config: ApiConfig): CreateLimits {
+  const b = config.bounds
+  const buyInMin = Math.max(MIN_BUYIN_BASE, b.buy_in.min || MIN_BUYIN_BASE)
+  const buyInMax = Math.max(buyInMin, b.buy_in.max || 1_000_000_000)
+  const fillWindowMinSec = Math.max(MIN_FILL_WINDOW_SEC, b.fill_window_sec.min || MIN_FILL_WINDOW_SEC)
+  const fillWindowMaxSec = Math.max(fillWindowMinSec, b.fill_window_sec.max || 86_400)
+  return { buyInMin, buyInMax, fillWindowMinSec, fillWindowMaxSec }
+}
+
+const ORACLE_UNAVAILABLE_MSG = 'Settlement paused — the price oracle is unavailable. Your funds are safe and fully refundable.'
+
+/** Default street schedule (count + per-street durations/observation) within config bounds. */
+function defaultStreets(config: ApiConfig): { count: number; durations_sec: number[]; observation_sec: number[] } {
+  const count = clamp(3, config.bounds.streets.min, config.bounds.streets.max)
+  const dur = clamp(180, config.bounds.street_duration_sec.min, config.bounds.street_duration_sec.max)
+  const obs = clamp(20, config.bounds.observation_sec.min, config.bounds.observation_sec.max)
+  return {
+    count,
+    durations_sec: Array.from({ length: count }, () => dur),
+    observation_sec: Array.from({ length: count }, () => obs),
+  }
+}
+
+/** Build the create-Lobby `TableTerms` from config defaults/bounds for a chosen feed. */
+function configToTerms(config: ApiConfig, feed: string): TableTerms {
+  const d = config.defaults
+  const buyIn = clamp(1_000_000, config.bounds.buy_in.min, config.bounds.buy_in.max)
+  const streets = defaultStreets(config)
+  return {
+    tableId: feed,
+    priceFeedId: feed,
+    supportedFeeds: config.feeds.map((f) => f.feed),
+    chipsToken: 'USDC',
+    decimals: 2,
+    oracleAdapter: 'signed-price',
+    settlementMode: 'exact-timestamp',
+    oracleUnavailableMessage: ORACLE_UNAVAILABLE_MSG,
+    buyIn,
+    entryFee: d.entry_fee,
+    rakeBps: d.rake_bps,
+    rakeCap: buyIn,
+    smallBlind: Math.max(1, Math.floor(buyIn / 200)),
+    bigBlind: Math.max(2, Math.floor(buyIn / 100)),
+    minPlayers: config.bounds.players.min,
+    maxPlayers: config.bounds.players.max,
+    roundCount: streets.count,
+    roundDurationsSec: streets.durations_sec,
+    actionTimerSec: Math.round(d.action_timeout_ms / 1000),
+    timeBankSec: d.time_bank_sec,
+    settlementWindowSec: d.begin_live_window_sec,
+    geofenceBlocklist: [],
+    allowDuplicateWalletPerMatch: false,
+    fillWindowSec: clamp(3600, config.bounds.fill_window_sec.min, config.bounds.fill_window_sec.max),
+    practiceMode: false,
+    timelockTargetRound: 0,
+  }
+}
+
+/** Build `TableTerms` from a `GET /v1/matches/{id}` detail (join Lobby + table view). */
+function matchDetailToTerms(detail: MatchDetail): TableTerms {
+  const p = detail.params
+  return {
+    tableId: detail.feed,
+    priceFeedId: detail.feed,
+    supportedFeeds: [detail.feed],
+    chipsToken: 'USDC',
+    decimals: 2,
+    oracleAdapter: 'signed-price',
+    settlementMode: 'exact-timestamp',
+    oracleUnavailableMessage: ORACLE_UNAVAILABLE_MSG,
+    buyIn: p.buy_in,
+    entryFee: p.entry_fee,
+    rakeBps: p.rake_bps,
+    rakeCap: p.rake_cap,
+    smallBlind: p.small_blind,
+    bigBlind: p.big_blind,
+    minPlayers: p.min_players,
+    maxPlayers: p.max_players,
+    roundCount: p.round_count,
+    roundDurationsSec: p.round_durations_sec,
+    actionTimerSec: Math.round(p.action_timeout_ms / 1000),
+    timeBankSec: 0,
+    settlementWindowSec: 0,
+    geofenceBlocklist: [],
+    allowDuplicateWalletPerMatch: false,
+    fillWindowSec: undefined,
+    practiceMode: false,
+    timelockTargetRound: detail.timing.timelock_target ?? 0,
+    onchainMatchId: String(detail.onchain_match_id),
+  }
+}
+
 let adapters: Adapters | null = null
 let gateway: Gateway | null = null
 let unsub: (() => void) | null = null
 
-/** The room we resolved to JOIN via Play Now (so joinTable knows the on-chain ids). */
-let joinRoom: RoomListing | null = null
-/** The template + derived ids we resolved to CREATE via Play Now. */
-let createCtx: { tmpl: ConfigTemplate; priceTokenHex: string; onchainMatchId: string } | null = null
+/** REST context for the CREATE flow: server config (for building the intent), the chosen
+ *  feed, and the reserved intent once `/v1/rooms/intents` has returned it. */
+let createCtx: { config: ApiConfig; feed: string; intent: CreateIntentResponse | null } | null = null
+/** The match UUID we resolved to JOIN — target of the deposit POST + candidate polling. */
+let joinMatchId: string | null = null
 
 /**
  * Turn a raw deposit error into a user-facing message. `simulateSignAndSend` throws
@@ -168,52 +290,20 @@ function depositErrorMessage(err: unknown, kind: PlayMode = 'join'): string {
 }
 
 /**
- * The action-feed's `/upcoming-games` (used by the Dashboard row list) only carries the
- * off-chain matchId/buyIn/seats — it omits `onchainMatchId`/`tierId`, which only the
- * gateway's lobby snapshot has. joinTable needs onchainMatchId to derive the deposit PDA,
- * so resolve the full RoomListing over the socket before showing the join Lobby.
+ * Establish (or reuse) a v2 REST Bearer session for the connected wallet (§2). The
+ * wallet signs a server nonce once; `ensureSession` caches the 24h token so subsequent
+ * create/join calls skip the handshake. Returns false if auth fails (geofence/signature).
  */
-/**
- * Reuse an already-authenticated gateway when one is live — avoids re-running the
- * wallet-signed nonce challenge (§3) on every createGame/joinGame call. Only tears
- * down and reconnects (which re-signs) when there's no live session to reuse.
- */
-async function ensureAuthedGateway(adapters: Adapters, set: SetState, get: () => GameState): Promise<boolean> {
-  if (gateway?.isOpen() && get().status === 'live') return true
-  if (gateway) { unsub?.(); gateway.disconnect(); gateway = null; unsub = null }
-  const gw = createGateway(adapters)
-  gateway = gw
-  unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
+async function ensureRestSession(adapters: Adapters, wallet: string, set: SetState): Promise<boolean> {
   try {
-    await gw.connect() // resolves once authenticated (wallet signs the nonce)
+    await ensureSession(wallet, (msg) => adapters.wallet.signMessageBase64(msg))
     set({ status: 'live' })
     void refreshBalance(set)
     return true
-  } catch {
-    set({ status: 'offline' })
+  } catch (err) {
+    console.warn('[session] auth failed:', err)
     return false
   }
-}
-
-function resolveRoomListing(gw: Gateway, matchId: string, timeoutMs = 5000): Promise<RoomListing | null> {
-  return new Promise((resolve) => {
-    let done = false
-    const finish = (room: RoomListing | null) => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      unsubscribe()
-      resolve(room)
-    }
-    const unsubscribe = gw.subscribe((msg) => {
-      if (msg.type === 'lobbyList') {
-        const hit = msg.rooms.find((r) => r.matchId === matchId)
-        if (hit) finish(hit)
-      }
-    })
-    const timer = setTimeout(() => finish(null), timeoutMs)
-    gw.send({ type: 'subscribeLobby' })
-  })
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -231,6 +321,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   match: null,
   yourTurn: null,
   fillDeadline: null,
+  createLimits: null,
   roundStartedAt: null,
 
   sealStatus: 'unsealed',
@@ -238,6 +329,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   defaultAction: 'check_fold',
 
   priceHistory: [],
+  priceBoardRange: '1m',
+  priceChartOpen: false,
   feed: [],
 
   settlement: null,
@@ -289,6 +382,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((s) => ({ priceHistory: [...s.priceHistory, { price, ts }].slice(-MAX_HISTORY) }))
   },
 
+  setPriceBoardRange: (range) => set({ priceBoardRange: range }),
+  openPriceChart: () => set({ priceChartOpen: true }),
+  closePriceChart: () => set({ priceChartOpen: false }),
+
   setDashboardSort: (key) => set({ dashboardSort: key }),
 
   /** Pick a table from the dashboard → connect to it and show the table view. */
@@ -305,13 +402,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   /**
-   * Back out of the current create/join Lobby (pre-seat) to the dashboard. Unlike
-   * `leaveToDiscovery`, this deliberately leaves the gateway connected — severing it
-   * would force a fresh (wallet-signed) auth handshake on the next create/join, which
-   * is the "double sign" this button exists to avoid users working around via refresh.
+   * Back out of the current create/join Lobby (pre-seat) to the dashboard. The cached REST
+   * session (24h Bearer) persists, so the next create/join skips the wallet-signed nonce
+   * handshake — avoiding the "double sign" this button exists to work around via refresh.
    */
   backToDashboard: () => {
-    joinRoom = null
+    joinMatchId = null
     createCtx = null
     set({
       view: 'discovery',
@@ -322,15 +418,17 @@ export const useGameStore = create<GameState>((set, get) => ({
       match: null,
       lobbySeated: null,
       fillDeadline: null,
+      createLimits: null,
       roundStartedAt: null,
     })
     void get().loadDiscovery()
   },
 
-  /** Join an upcoming (FILLING) game by matchId — connect wallet + gateway, then show deposit Lobby. */
+  /** Join a FILLING game by its match UUID — connect wallet, open a REST session, load the
+   *  match detail (§5), then show the deposit Lobby. */
   joinGame: async (matchId: string) => {
     if (!adapters) adapters = createAdapters()
-    joinRoom = null
+    joinMatchId = null
     createCtx = null
     set({ playError: null, pendingInvite: null })
 
@@ -343,47 +441,40 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
-    if (!(await ensureAuthedGateway(adapters, set, get))) {
-      set({ playResolving: false, playError: 'Could not reach the table server.' })
+    const wallet = adapters.wallet.address()
+    if (!wallet || !(await ensureRestSession(adapters, wallet, set))) {
+      set({ playResolving: false, playError: 'Could not reach the table server (sign-in failed).' })
       return
     }
 
-    // Subscribe to match — live seat/board updates once we're seated.
-    gateway!.send({ type: 'subscribe', matchId })
-
-    // Resolve the room's onchainMatchId/tierId over the lobby socket (the REST
-    // discovery feed doesn't carry them), then build terms from its config template.
-    const room = await resolveRoomListing(gateway!, matchId)
-    if (!room) {
-      set({ playResolving: false, playError: 'That table just filled up or closed — pick another.' })
-      return
-    }
-    joinRoom = room
     try {
-      const tmpl = await pickTemplate(room.feedId, room.tierId)
-      const base = templateToTerms(tmpl)
+      const detail = await api.getMatch(matchId)
+      if (detail.phase.toUpperCase() !== 'FILLING') {
+        set({ playResolving: false, playError: 'That table already started — pick another.' })
+        return
+      }
+      joinMatchId = detail.match_id
+      const seated = detail.seats.length
       set({
-        terms: {
-          ...base,
-          buyIn: room.buyIn ?? base.buyIn,
-          maxPlayers: room.maxPlayers || base.maxPlayers,
-          minPlayers: room.minPlayers || base.minPlayers,
-          onchainMatchId: room.onchainMatchId,
-        },
-        lobbySeated: room.seated,
+        terms: matchDetailToTerms(detail),
+        lobbySeated: seated,
         playMode: 'join',
         playResolving: false,
-        fillDeadline: room.fillDeadline ? toEpochMs(room.fillDeadline) : null,
+        fillDeadline: detail.timing.fill_deadline != null ? toEpochMs(detail.timing.fill_deadline) : null,
       })
-    } catch {
-      set({ playResolving: false, playError: 'Could not load table config.' })
+    } catch (err) {
+      const msg = err instanceof ApiError && err.status === 404
+        ? 'That table just closed or expired — pick another.'
+        : 'Could not load the table.'
+      set({ playResolving: false, playError: msg })
     }
   },
 
-  /** Create a new game — connect wallet + gateway, load config, then show create Lobby. */
+  /** Create a new game — connect wallet, open a REST session, load `GET /v1/config`, then
+   *  show the create Lobby (the intent is reserved later, in createTable). */
   createGame: async () => {
     if (!adapters) adapters = createAdapters()
-    joinRoom = null
+    joinMatchId = null
     createCtx = null
     set({ playError: null })
 
@@ -396,21 +487,45 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
-    if (!(await ensureAuthedGateway(adapters, set, get))) {
-      set({ playResolving: false, playError: 'Could not reach the table server.' })
+    const wallet = adapters.wallet.address()
+    if (!wallet || !(await ensureRestSession(adapters, wallet, set))) {
+      set({ playResolving: false, playError: 'Could not reach the table server (sign-in failed).' })
       return
     }
 
     try {
-      const tmpl = await pickTemplate('BTC/USD')
-      const priceTokenHex = await priceTokenFor(tmpl.config.priceFeedId)
-      const onchainMatchId = newOnchainMatchId()
-      createCtx = { tmpl, priceTokenHex, onchainMatchId }
-      set({ terms: { ...templateToTerms(tmpl), onchainMatchId }, playMode: 'create', playResolving: false })
+      const config = await api.getConfig()
+      const feed = config.feeds[0]?.feed ?? 'BTC/USD'
+      createCtx = { config, feed, intent: null }
+      const limits = configToCreateLimits(config)
+      const base = configToTerms(config, feed)
+      set({
+        terms: {
+          ...base,
+          // Seed the host's editable choices with in-range defaults.
+          buyIn: clamp(base.buyIn, limits.buyInMin, limits.buyInMax),
+          fillWindowSec: clamp(base.fillWindowSec ?? limits.fillWindowMinSec, limits.fillWindowMinSec, limits.fillWindowMaxSec),
+        },
+        createLimits: limits,
+        playMode: 'create',
+        playResolving: false,
+      })
     } catch {
       set({ playResolving: false, playMode: null, playError: 'Could not load table config.' })
     }
   },
+
+  setCreateBuyIn: (baseUnits) => set((s) => {
+    if (!s.terms || !s.createLimits) return {}
+    const buyIn = clamp(Math.round(baseUnits), s.createLimits.buyInMin, s.createLimits.buyInMax)
+    return { terms: { ...s.terms, buyIn } }
+  }),
+
+  setCreateFillWindow: (sec) => set((s) => {
+    if (!s.terms || !s.createLimits) return {}
+    const fillWindowSec = clamp(Math.round(sec), s.createLimits.fillWindowMinSec, s.createLimits.fillWindowMaxSec)
+    return { terms: { ...s.terms, fillWindowSec } }
+  }),
 
   connect: async () => {
     if (gateway) return
@@ -443,7 +558,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     gateway = null
     unsub = null
     adapters = null
-    joinRoom = null
+    joinMatchId = null
     createCtx = null
     set({
       status: 'offline',
@@ -460,6 +575,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       playError: null,
       lobbySeated: null,
       fillDeadline: null,
+      createLimits: null,
     })
   },
 
@@ -468,25 +584,22 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { match, terms, seated } = get()
     if (!adapters || !terms || seated) return
 
-    // matchId/onchainMatchId/seat come from the resolved room, else the live match.
-    const matchId = joinRoom?.matchId ?? match?.matchId
-    const onchainMatchId = joinRoom?.onchainMatchId ?? terms.onchainMatchId
-    const seatIndex = joinRoom?.seated ?? match?.yourSeat ?? 0
+    // v2 has no client-chosen seat index — a deposit makes you a *candidate* and the backend
+    // assigns the engine seat FCFS at lock (§5). matchId is the server UUID; onchainMatchId
+    // (u64) drives PDA derivation.
+    const matchId = joinMatchId ?? match?.matchId
+    const onchainMatchId = terms.onchainMatchId
     if (!matchId || !onchainMatchId) {
       set({ playError: 'Table is still loading — try again in a moment.' })
       return
     }
 
-    // Ensure the adapter can read onchainMatchId off terms for PDA derivation.
-    if (!terms.onchainMatchId) set({ terms: { ...terms, onchainMatchId } })
-
     // Guard: a wallet can hold only one seat per match. Re-depositing reverts on-chain
-    // ("account already in use"), so if the seat already exists just take it — the deposit
-    // already happened on a prior attempt.
+    // ("account already in use"), so if a deposit already exists just take it.
     try {
       const existing = await adapters.chain.getMySeat(onchainMatchId)
       if (existing && existing.deposit > 0) {
-        console.log('[joinTable] wallet already seated (seat', existing.seatIndex, ') — entering table')
+        console.log('[joinTable] wallet already deposited (engineSeat', existing.engineSeat, 'confirmed', existing.confirmed, ') — entering table')
         set({ seated: true })
         void refreshBalance(set)
         return
@@ -506,22 +619,23 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
     set({ seated: true, txProgress: commit }) // optimistic; revert on failure
     try {
-      const txSig = await adapters.chain.deposit(matchId, seatIndex, terms.buyIn + terms.entryFee, (stage) =>
+      // Public room: default (zeroed) join commitment. Private-room joins bind the room
+      // code via the /v1/rooms/code/{code} → join_commitment flow (follow-up).
+      const txSig = await adapters.chain.deposit(matchId, undefined, terms.buyIn + terms.entryFee, (stage) =>
         set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})),
       )
       set((s) => ({
         lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
       }))
-      // Best-effort registry report (capital safety never depends on it, §7).
-      reportDeposit(matchId, {
-        depositTxSig: txSig,
-        wallet: adapters.wallet.address() ?? '',
-        seatIndex,
-      }).then((r) => {
-        if (r.ok) console.log('[reportDeposit] deposit registered — seat:', r.seat ?? seatIndex)
-        else console.warn('[reportDeposit] failed:', r.reason)
-      }).catch((e) => console.warn('[reportDeposit] error:', e))
+      // Report the deposit txhash so the backend RPC-verifies it into a candidate (§5).
+      // Capital safety never depends on this — an unheard-of deposit is still refundable.
+      api.submitDeposit(matchId, txSig)
+        .then((r) => {
+          console.log('[joinTable] deposit reported — status:', r.status)
+          void pollCandidate(matchId, adapters!.wallet.address() ?? '', set)
+        })
+        .catch((e) => console.warn('[joinTable] submitDeposit failed:', e))
       void refreshBalance(set)
     } catch (err) {
       console.error('deposit failed:', err)
@@ -537,63 +651,85 @@ export const useGameStore = create<GameState>((set, get) => ({
   /** Host create: open a new table on-chain and seat yourself (§7). */
   createTable: async () => {
     const { seated, terms } = get()
-    if (!adapters || !createCtx || seated) return
-    const { tmpl, priceTokenHex, onchainMatchId } = createCtx
-    const p = templateToCreateParams(tmpl)
+    if (!adapters || !createCtx || !terms || seated) return
+    const { config, feed } = createCtx
+
+    // The host may have edited buy-in / fill window in the create Lobby (§4) — clamp to bounds.
+    const limits = get().createLimits
+    const buyIn = limits ? clamp(terms.buyIn, limits.buyInMin, limits.buyInMax) : terms.buyIn
+    const fillWindowSec = limits
+      ? clamp(terms.fillWindowSec ?? limits.fillWindowMinSec, limits.fillWindowMinSec, limits.fillWindowMaxSec)
+      : (terms.fillWindowSec ?? 3600)
+    const streets = defaultStreets(config)
+
     const commit: TxCommit = {
       kind: 'create',
       stage: 'preparing',
-      amount: p.buyIn + p.entryFee,
-      chipsToken: terms?.chipsToken ?? 'USDC',
-      feed: terms?.priceFeedId,
-      seats: terms ? `1/${terms.maxPlayers}` : undefined,
+      amount: buyIn + terms.entryFee,
+      chipsToken: terms.chipsToken,
+      feed: terms.priceFeedId,
+      seats: `1/${terms.maxPlayers}`,
     }
     set({ seated: true, txProgress: commit }) // optimistic
     try {
+      // 1. Reserve an intent — the server allocates onchain_match_id + byte-exact create_params.
+      const intent = await api.createIntent({
+        feed,
+        buy_in: buyIn,
+        fill_window_sec: fillWindowSec,
+        min_players: terms.minPlayers,
+        max_players: terms.maxPlayers,
+        streets: { count: streets.count, durations_sec: streets.durations_sec, observation_sec: streets.observation_sec },
+        visibility: 'public',
+      })
+      createCtx = { config, feed, intent }
+      const cp = intent.create_params
+
+      // 2. Sign + send create_and_deposit built from the SERVER's create_params (config_hash,
+      //    price_token, room_commitment, oracle params all come from the backend).
       const { txSig, matchPda } = await adapters.chain.createAndDeposit({
-        onchainMatchId,
-        configHash: p.configHash,
-        priceTokenHex,
-        seatIndex: 0,
-        buyIn: p.buyIn,
-        entryFee: p.entryFee,
-        rakeBps: p.rakeBps,
-        rakeCap: p.rakeCap,
-        nonsealPenaltyBps: p.nonsealPenaltyBps,
-        minPlayers: p.minPlayers,
-        maxPlayers: p.maxPlayers,
-        totalBettingDurationSec: p.totalBettingDurationSec,
-        sealWindowSec: p.sealWindowSec,
-        beginLiveWindowSec: p.beginLiveWindowSec,
-        fillWindowSec: p.fillWindowSec,
-        decimals: p.decimals,
+        onchainMatchId: String(cp.match_id),
+        configHash: cp.config_hash,
+        priceTokenHex: cp.price_token,
+        buyIn: cp.buy_in,
+        entryFee: cp.entry_fee,
+        rakeBps: cp.rake_bps,
+        rakeCap: cp.rake_cap,
+        minPlayers: cp.min_players,
+        maxPlayers: cp.max_players,
+        isPrivate: cp.is_private,
+        roomCommitmentHex: cp.room_commitment,
+        totalBettingDurationSec: cp.total_betting_duration_sec,
+        sealWindowSec: cp.seal_window_sec,
+        beginLiveWindowSec: cp.begin_live_window_sec,
+        fillWindowSec: cp.fill_window_sec,
+        maxOracleConfidence: cp.max_oracle_confidence,
+        oracleExponent: cp.oracle_exponent,
       }, (stage) => set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})))
+
+      // 3. Report the finalized txhash — the server RPC-verifies it and registers the room.
+      let matchUuid: string | null = null
+      try {
+        const room = await api.submitRoom(intent.intent_id, txSig)
+        matchUuid = room.match_id
+        joinMatchId = room.match_id
+        console.log('[createTable] room registered — match_id:', room.match_id, 'seat_status:', room.seat_status)
+      } catch (e) {
+        console.warn('[createTable] submitRoom failed (room still refundable on-chain):', e)
+      }
+
       // Record the on-chain ids so subsequent ix (seal/claim) derive the right PDAs.
       set((s) => ({
-        terms: s.terms ? { ...s.terms, onchainMatchId, matchPda } : s.terms,
+        terms: s.terms ? { ...s.terms, onchainMatchId: String(cp.match_id), matchPda } : s.terms,
         lastTx: { sig: txSig, label: 'Table created on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
-        fillDeadline: Date.now() + p.fillWindowSec * 1000,
+        fillDeadline: Date.now() + cp.fill_window_sec * 1000,
       }))
-      // Best-effort registry report so others can discover the room.
-      reportCreate({
-        createTxSig: txSig,
-        matchPda,
-        onchainMatchId,
-        configHash: p.configHash,
-        wallet: adapters.wallet.address() ?? '',
-        seatIndex: 0,
-        maxPlayers: p.maxPlayers,
-      }).then((r) => {
-        if (r.ok) console.log('[reportCreate] room registered — roomCode:', r.roomCode, 'fillDeadline:', r.fillDeadline)
-        else console.warn('[reportCreate] failed:', r.reason)
-      }).catch((e) => console.warn('[reportCreate] error:', e))
-      // Subscribe to our new match for gameplay pushes.
-      gateway?.send({ type: 'subscribe', matchId: matchPda })
+      void matchUuid // reserved for the phase-4 WS subscribe / detail poll
       void refreshBalance(set)
     } catch (err) {
       console.error('create failed:', err)
-      const msg = depositErrorMessage(err, 'create')
+      const msg = err instanceof ApiError ? err.message : depositErrorMessage(err, 'create')
       set((s) => ({
         seated: false,
         playError: msg,
@@ -700,6 +836,38 @@ export const useGameStore = create<GameState>((set, get) => ({
 /** On-chain deadlines are unix seconds; the UI counts down in epoch-ms. Pass through values already in ms. */
 function toEpochMs(deadline: number): number {
   return deadline > 1e12 ? deadline : deadline * 1000
+}
+
+/**
+ * Poll a deposit's candidate → confirmed lifecycle after reporting the txhash (§5). A
+ * terminal `not_confirmed`/`rejected` means the table filled first — the buy-in is fully
+ * refundable — so surface it. `confirmed` is the happy path (engine seat assigned at lock).
+ */
+async function pollCandidate(matchId: string, wallet: string, set: SetState, tries = 20): Promise<void> {
+  if (!wallet) return
+  for (let i = 0; i < tries; i++) {
+    await new Promise((r) => setTimeout(r, 3000))
+    let s
+    try {
+      s = await api.getCandidate(matchId, wallet)
+    } catch {
+      continue // transient — keep polling
+    }
+    const st = s.status.toLowerCase()
+    if (st === 'confirmed') {
+      console.log('[candidate] confirmed — engine seat', s.seat_index)
+      return
+    }
+    if (st === 'not_confirmed' || st === 'rejected') {
+      set({
+        playError: st === 'rejected'
+          ? `Deposit rejected: ${s.reason ?? 'verification failed'}. Your buy-in is refundable.`
+          : 'The table filled before your deposit finalized — your buy-in is refundable.',
+      })
+      return
+    }
+    // pending_verify | candidate → keep polling
+  }
 }
 
 type SetState = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void

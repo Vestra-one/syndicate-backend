@@ -4,7 +4,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createPriceBoard } from './priceBoard'
 import { createPotPile } from './pot'
-import { bindTableView, unbindTableView } from './tableView'
+import {
+  bindTableView,
+  unbindTableView,
+  bindPriceBoardTabs,
+  unbindPriceBoardTabs,
+  bindPriceChartButton,
+  unbindPriceChartButton,
+} from './tableView'
 import roomBgUrl from '@/assets/room-bg.png'
 
 // Decode the room backdrop once at module load. Doing it here (rather than per
@@ -850,6 +857,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
   priceBoard.group.rotation.x = -0.06
   scene.add(priceBoard.group)
+  bindPriceBoardTabs(priceBoard.getTabAnchors())
+  bindPriceChartButton(priceBoard.getChartButtonAnchor())
 
   // ---- pot (3D coin heap, centre-front of the felt) ----
   // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
@@ -1004,6 +1013,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     running = false
     cancelAnimationFrame(raf)
     unbindTableView()
+    unbindPriceBoardTabs()
+    unbindPriceChartButton()
     potPile.dispose()
     priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)

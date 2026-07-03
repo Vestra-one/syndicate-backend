@@ -1,75 +1,56 @@
 import type { LiveGame, UpcomingGame } from './protocol'
-
-// In local dev with VITE_DEVNET_USER set, route through the Vite proxy
-// (/api-proxy/...) so auth is injected server-side and CORS preflight is avoided.
-// In production VITE_DEVNET_USER is unset so we hit the real API directly.
-const API_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
-  ? '/api-proxy'
-  : (import.meta.env.VITE_API_URL as string | undefined)
+import { api, type LiveMatch, type LobbyRoom } from './api'
 
 /** "Hot" popularity score — the default dashboard sort (§8). */
 export function ratedScore(g: LiveGame): number {
   return g.spectators * 2 + g.actionsPerMin + g.potSize / 1000
 }
 
+/** REST timestamps are ms epoch (§1), but on-chain-derived values can leak seconds; normalize. */
+function toEpochMs(ts: number | null | undefined): number | undefined {
+  if (ts == null) return undefined
+  return ts > 1e12 ? ts : ts * 1000
+}
+
 /**
- * Fetch active games from the action-feed service (GET /active-games).
- *
- * Returns the REAL result, including an empty list when no matches are live.
- * Throws on network/HTTP failure so the store surfaces a truthful error state —
- * no synthetic fallback tables (fake tables that route nowhere are worse than an
- * honest empty/error state).
+ * `GET /v1/matches/live` → the dashboard's "Live games" row. v2's spectate list is lean
+ * (no spectator/actions-per-min/pot telemetry), so those fields default to 0 — the full
+ * numbers arrive over the WS match channel once a table is opened.
  */
-// The action-feed service reports the price feed as `feedId` (e.g. "BTC/USD"),
-// matching the convention used by the gateway's RoomListing/RoomsUpdate — not `feed`.
-function normalizeLiveGame(raw: Record<string, unknown>): LiveGame {
+function liveMatchToGame(m: LiveMatch): LiveGame {
   return {
-    matchId: String(raw.matchId ?? ''),
-    feed: String(raw.feedId ?? raw.feed ?? ''),
-    buyIn: Number(raw.buyIn ?? 0),
-    potSize: Number(raw.potSize ?? 0),
-    spectators: Number(raw.spectators ?? 0),
-    actionsPerMin: Number(raw.actionsPerMin ?? 0),
-    startedAt: Number(raw.startedAt ?? 0),
+    matchId: m.match_id,
+    feed: m.feed,
+    buyIn: m.buy_in,
+    potSize: 0,
+    spectators: 0,
+    actionsPerMin: 0,
+    startedAt: toEpochMs(m.live_start) ?? 0,
   }
 }
 
-function normalizeUpcomingGame(raw: Record<string, unknown>): UpcomingGame {
+/** `GET /v1/lobby` → the dashboard's "Upcoming/Filling" row (public rooms only). */
+function lobbyRoomToGame(r: LobbyRoom): UpcomingGame {
   return {
-    matchId: String(raw.matchId ?? ''),
-    onchainMatchId: raw.onchainMatchId as string | undefined,
-    feed: String(raw.feedId ?? raw.feed ?? ''),
-    buyIn: Number(raw.buyIn ?? 0),
-    entryFee: raw.entryFee as number | undefined,
-    seated: Number(raw.seated ?? 0),
-    maxPlayers: Number(raw.maxPlayers ?? 0),
-    minPlayers: raw.minPlayers as number | undefined,
-    fillDeadline: raw.fillDeadline as number | undefined,
+    matchId: r.match_id,
+    onchainMatchId: String(r.onchain_match_id),
+    feed: r.feed,
+    buyIn: r.buy_in,
+    seated: r.confirmed,
+    maxPlayers: r.max_players ?? 0,
+    minPlayers: r.min_players ?? undefined,
+    fillDeadline: toEpochMs(r.fill_deadline),
   }
 }
 
+/** Live/spectatable matches (Sealing + Live). Returns the real result (possibly empty). */
 export async function fetchActiveGames(): Promise<LiveGame[]> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set — configure the API URL in .env')
-
-  const res = await fetch(`${API_URL}/active-games`, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(8_000),
-  })
-  if (!res.ok) throw new Error(`/active-games ${res.status}`)
-  const data = (await res.json()) as { games?: Record<string, unknown>[] } | Record<string, unknown>[]
-  const games = Array.isArray(data) ? data : (data.games ?? [])
-  return games.map(normalizeLiveGame)
+  const { matches } = await api.getLive()
+  return matches.map(liveMatchToGame)
 }
 
+/** Filling public rooms open to join. Returns the real result (possibly empty). */
 export async function fetchUpcomingGames(): Promise<UpcomingGame[]> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set — configure the API URL in .env')
-
-  const res = await fetch(`${API_URL}/upcoming-games`, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(8_000),
-  })
-  if (!res.ok) throw new Error(`/upcoming-games ${res.status}`)
-  const data = (await res.json()) as { games?: Record<string, unknown>[] } | Record<string, unknown>[]
-  const games = Array.isArray(data) ? data : (data.games ?? [])
-  return games.map(normalizeUpcomingGame)
+  const { rooms } = await api.getLobby()
+  return rooms.map(lobbyRoomToGame)
 }

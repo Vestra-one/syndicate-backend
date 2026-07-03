@@ -4,7 +4,7 @@
  * The store and UI depend ONLY on these interfaces.  There is a single live
  * implementation (./live) wired to real wallets, drand, and Solana.
  */
-import type { Chips, FixedPrice, SeatIndex } from '@/lib/protocol'
+import type { Chips, FixedPrice } from '@/lib/protocol'
 import { createLiveAdapters } from './live'
 
 /** ed25519 signer — the player's identity and intent authority. */
@@ -23,47 +23,64 @@ export interface Tlock {
   seal(price: FixedPrice, targetRound: number, chainHash: string, api: string): Promise<string>
 }
 
-/** Numeric on-chain CreateParams + the price token a host commits at create time. */
+/**
+ * v2 `CreateParams` (167-byte Borsh, field order per the IDL) + the price token a host
+ * commits at create time. In the full v2 flow the backend computes these fields (match_id,
+ * config_hash, room_commitment) via `POST /v1/rooms/intents` and hands them back byte-exact;
+ * this shape lets the chain adapter reproduce/pass them through to `create_and_deposit`.
+ */
 export interface CreateAndDepositInput {
   onchainMatchId: string
   configHash: string // 64-char hex (32 bytes)
   priceTokenHex: string // 0x… (20 bytes)
-  seatIndex: SeatIndex
   buyIn: Chips
   entryFee: Chips
   rakeBps: number
   rakeCap: Chips
-  nonsealPenaltyBps: number
   minPlayers: number
   maxPlayers: number
+  /** Private room? Public rooms use `isPrivate:false` + a zeroed room commitment. */
+  isPrivate: boolean
+  /** `sha256(roomcode_uppercased ‖ creator_pubkey)` hex (32 bytes); 64 zeros for public. */
+  roomCommitmentHex: string
   totalBettingDurationSec: number
   sealWindowSec: number
   beginLiveWindowSec: number
   fillWindowSec: number
-  decimals: number
+  /** Signed-price confidence gate; 0 for the company signed-price path (not Pyth-gated). */
+  maxOracleConfidence?: number
+  /** Fixed exponent the settlement price is quoted at (−18 = WAD). */
+  oracleExponent?: number
 }
 
 /** On-chain match status, read directly from the `MatchAccount` (no backend needed). */
 export interface OnchainMatchStatus {
   status: 'FILLING' | 'SEALING' | 'LIVE' | 'SETTLED' | 'VOID'
-  fillDeadlineTs: number // unix seconds
+  fillDeadlineTs: number // unix seconds (on-chain Clock, NOT the REST ms convention)
   buyIn: Chips
   entryFee: Chips
 }
 
-/** The connected wallet's own seat for a match, read directly from the `SeatAccount`. */
+/**
+ * The connected wallet's own seat for a match, read directly from the v2 `SeatAccount`.
+ * v2 has no seat-index PDA: a deposit makes you a *candidate*; the backend assigns
+ * `engineSeat` (and flips `confirmed`) FCFS at lock. `engineSeat` is 0 until confirmed.
+ */
 export interface OnchainSeatInfo {
-  seatIndex: SeatIndex
   deposit: Chips
   entryFeePaid: Chips
+  payout: Chips
   claimed: boolean
+  /** Backend-confirmed at lock (candidate → seat). Unconfirmed candidates are refundable. */
+  confirmed: boolean
+  /** Engine seat index assigned at lock (0 until confirmed). */
+  engineSeat: number
 }
 
 /** A match found (by scanning seat accounts) that the connected wallet can cancel/reclaim now. */
 export interface ReclaimableMatch extends OnchainMatchStatus {
   onchainMatchId: string
   matchPda: string
-  seatIndex: SeatIndex
   deposit: Chips
   entryFeePaid: Chips
 }
@@ -83,8 +100,12 @@ export interface ChainClient {
   chipBalance(): Promise<Chips>
   /** Host: open a match AND seat the creator in one tx. Resolves on finality → { txSig, matchPda }. */
   createAndDeposit(input: CreateAndDepositInput, onProgress?: TxProgressFn): Promise<{ txSig: string; matchPda: string }>
-  /** buy-in + entry fee; resolves on finality (seat is then granted). */
-  deposit(matchId: string, seatIndex: SeatIndex, amount: Chips, onProgress?: TxProgressFn): Promise<string>
+  /**
+   * buy-in + entry fee → become a seat *candidate* (§5). `joinCommitmentHex` is
+   * `sha256(roomcode ‖ joiner)` for private rooms, or 64 zeros for public (default).
+   * Resolves on finality; confirmation to a seat happens backend-side at lock.
+   */
+  deposit(matchId: string, joinCommitmentHex?: string, amount?: Chips, onProgress?: TxProgressFn): Promise<string>
   /** pull payout after SETTLED (idempotent). */
   claim(matchId: string): Promise<string>
   /** reclaim deposit + entry fee after VOID. */
@@ -97,9 +118,10 @@ export interface ChainClient {
   /** Permissionless `void_before_start` — anyone can call once past the fill deadline; just pays the fee. */
   voidBeforeStart(onchainMatchId: string): Promise<string>
   /**
-   * Player-signed pull refund after VOID. Derives the seat index from the on-chain seat account
-   * (not from client match state), so it works standalone — e.g. from a "my matches" list.
-   * Idempotent: an already-claimed seat throws an error whose message is `AlreadyClaimed`.
+   * Player-signed pull refund after VOID (or for an unconfirmed candidate once the match
+   * leaves Filling). The v2 seat PDA is derived from `(match, player)` alone, so this works
+   * standalone — e.g. from a "my matches" list. Idempotent: an already-claimed/closed seat
+   * throws an error whose message is `AlreadyClaimed` / account-closed.
    */
   refundSelf(onchainMatchId: string): Promise<string>
   /**

@@ -27,7 +27,6 @@ import { AnchorProvider, Program, BN } from '@coral-xyz/anchor'
 // Import the provider-level Wallet interface (not the NodeWallet class exported at the top level)
 import type { Wallet as AnchorWallet } from '@coral-xyz/anchor/dist/cjs/provider'
 import type { MessageSignerWalletAdapter } from '@solana/wallet-adapter-base'
-import bs58 from 'bs58'
 import { walletBridge } from '@/lib/walletBridge'
 import type {
   Adapters,
@@ -75,12 +74,6 @@ function u64LeBytes(id: string): Buffer {
   return out
 }
 
-function u16LeBytes(n: number): Buffer {
-  const b = Buffer.alloc(2)
-  b.writeUInt16LE(n, 0)
-  return b
-}
-
 function matchPda(onchainMatchId: string): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('match'), u64LeBytes(onchainMatchId)],
@@ -95,16 +88,10 @@ function vaultPda(matchAccountPubkey: PublicKey): PublicKey {
   )[0]
 }
 
+/** v2 seat PDA — keyed by (match, player) only. There is no seat-index PDA in v2. */
 function seatPda(matchAccountPubkey: PublicKey, playerPubkey: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('seat'), matchAccountPubkey.toBuffer(), playerPubkey.toBuffer()],
-    PROGRAM_ID,
-  )[0]
-}
-
-function seatIndexPda(matchAccountPubkey: PublicKey, seatIndex: number): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from('seat-index'), matchAccountPubkey.toBuffer(), u16LeBytes(seatIndex)],
     PROGRAM_ID,
   )[0]
 }
@@ -135,28 +122,50 @@ export function newOnchainMatchId(): string {
 
 // ---------------------------------------------------------------------------
 // On-chain reads: MatchAccount / SeatAccount (self-serve — no backend needed).
-// Byte offsets mirror services/settlement-chain/src/matchAccount.ts, which is
-// kept in lockstep with state.rs; MatchAccount = 435 bytes, SeatAccount = 168.
+//
+// v2 decodes via Anchor's IDL-driven coder (discriminators are baked into the IDL),
+// so we never hand-maintain byte offsets against state.rs. `_ts` fields are on-chain
+// unix SECONDS (Solana Clock), NOT the REST ms convention.
 // ---------------------------------------------------------------------------
 
-const MATCH_STATUS_NAMES = ['FILLING', 'SEALING', 'LIVE', 'SETTLED', 'VOID'] as const
-const SEAT_ACCOUNT_DISCRIMINATOR = Uint8Array.from([251, 85, 162, 147, 128, 212, 122, 178])
+/** Anchor returns u64/i64 as BN; coerce to a JS number (all our values are < 2^53). */
+function n(v: unknown): number {
+  if (typeof v === 'number') return v
+  if (v && typeof (v as { toNumber?: () => number }).toNumber === 'function') {
+    return (v as { toNumber: () => number }).toNumber()
+  }
+  return Number(v ?? 0)
+}
 
-function decodeMatchStatus(data: Buffer): OnchainMatchStatus {
+/** Anchor decodes Rust enums as `{ <variantLowerCamel>: {} }`; map to our status union. */
+const MATCH_STATUS: Record<string, OnchainMatchStatus['status']> = {
+  filling: 'FILLING',
+  sealing: 'SEALING',
+  live: 'LIVE',
+  settled: 'SETTLED',
+  void: 'VOID',
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapMatchStatus(acct: any): OnchainMatchStatus {
+  const key = Object.keys(acct.status ?? {})[0] ?? 'filling'
   return {
-    status: MATCH_STATUS_NAMES[data.readUInt8(120)] ?? 'FILLING',
-    fillDeadlineTs: Number(data.readBigUInt64LE(173)),
-    buyIn: Number(data.readBigUInt64LE(112)),
-    entryFee: Number(data.readBigUInt64LE(289)),
+    status: MATCH_STATUS[key] ?? 'FILLING',
+    fillDeadlineTs: n(acct.fillDeadlineTs),
+    buyIn: n(acct.buyIn),
+    entryFee: n(acct.entryFee),
   }
 }
 
-function decodeSeatInfo(data: Buffer): OnchainSeatInfo {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapSeat(acct: any): OnchainSeatInfo {
   return {
-    seatIndex: data.readUInt16LE(72),
-    deposit: Number(data.readBigUInt64LE(74)),
-    entryFeePaid: Number(data.readBigUInt64LE(82)),
-    claimed: data.readUInt8(98) !== 0,
+    deposit: n(acct.deposit),
+    entryFeePaid: n(acct.entryFeePaid),
+    payout: n(acct.payout),
+    claimed: !!acct.claimed,
+    confirmed: !!acct.confirmed,
+    engineSeat: n(acct.engineSeat),
   }
 }
 
@@ -379,35 +388,37 @@ function createLiveChain(): ChainClient {
       const matchAcct = matchPda(input.onchainMatchId)
       const vault = vaultPda(matchAcct)
       const seat = seatPda(matchAcct, authority)
-      const seatIdx = seatIndexPda(matchAcct, input.seatIndex)
       const protState = protocolStatePda()
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, authority, authority)
 
+      // v2 CreateParams — field order per the IDL (167-byte Borsh). No nonseal penalty;
+      // v2 adds is_private + room_commitment (zeroed for public rooms).
       const params = {
         matchId: new BN(input.onchainMatchId),
         buyIn: new BN(input.buyIn),
         entryFee: new BN(input.entryFee),
         rakeBps: input.rakeBps,
         rakeCap: new BN(input.rakeCap),
-        nonsealPenaltyBps: input.nonsealPenaltyBps,
         minPlayers: input.minPlayers,
         maxPlayers: input.maxPlayers,
+        isPrivate: input.isPrivate,
+        roomCommitment: hexToBytes(input.roomCommitmentHex, 32),
         configHash: hexToBytes(input.configHash, 32),
         priceToken: hexToBytes(input.priceTokenHex, 20),
         totalBettingDurationSec: new BN(input.totalBettingDurationSec),
         sealWindowSec: new BN(input.sealWindowSec),
         beginLiveWindowSec: new BN(input.beginLiveWindowSec),
         fillWindowSec: new BN(input.fillWindowSec), // program derives fill_deadline_ts = create_ts + fillWindowSec
-        maxOracleConfidence: new BN(0), // signed-price path; not Pyth-confidence gated
-        oracleExponent: -18, // signed_price::SIGNED_PRICE_EXPONENT — WAD-18 fixed-point, not feed decimals
+        maxOracleConfidence: new BN(input.maxOracleConfidence ?? 0), // signed-price path; not Pyth-confidence gated
+        oracleExponent: input.oracleExponent ?? -18, // signed_price::SIGNED_PRICE_EXPONENT — WAD-18 fixed-point
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
-       
+
       const ix = await program.methods
-        .createAndDeposit(params, input.seatIndex)
+        .createAndDeposit(params)
         .accounts({
           authority,
           protocolState: protState,
@@ -415,7 +426,6 @@ function createLiveChain(): ChainClient {
           matchAccount: matchAcct,
           vault,
           seat,
-          seatIndexAccount: seatIdx,
           playerToken,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -439,16 +449,15 @@ function createLiveChain(): ChainClient {
       console.log('  entryFee:          ', params.entryFee.toString())
       console.log('  rakeBps:           ', params.rakeBps)
       console.log('  rakeCap:           ', params.rakeCap.toString())
-      console.log('  nonsealPenaltyBps: ', params.nonsealPenaltyBps)
       console.log('  minPlayers:        ', params.minPlayers)
       console.log('  maxPlayers:        ', params.maxPlayers)
+      console.log('  isPrivate:         ', params.isPrivate)
       console.log('  totalBettingDur:   ', params.totalBettingDurationSec.toString())
       console.log('  sealWindowSec:     ', params.sealWindowSec.toString())
       console.log('  beginLiveWindow:   ', params.beginLiveWindowSec.toString())
       console.log('  fillWindowSec:     ', params.fillWindowSec.toString())
       console.log('  maxOracleConf:     ', params.maxOracleConfidence.toString())
       console.log('  oracleExponent:    ', params.oracleExponent)
-      console.log('  seatIndex:         ', input.seatIndex)
       console.log('────────────────────────────────────────────────────────────')
 
       // Simulate first via our own RPC to get the actual program logs before MetaMask sees it.
@@ -484,12 +493,13 @@ function createLiveChain(): ChainClient {
     },
 
     /**
-     * deposit(matchId, seatIndex, amount)
+     * deposit(matchId, joinCommitmentHex?) — become a seat *candidate* (§5).
      *
-     * matchId here is used to look up onchainMatchId from the store terms.
-     * The Anchor instruction requires the on-chain u64 match id for PDA derivation.
+     * matchId is used to look up onchainMatchId from the store terms (the Anchor
+     * instruction needs the on-chain u64 for PDA derivation). `joinCommitmentHex` binds a
+     * private-room join (`sha256(roomcode ‖ joiner)`); public rooms pass 32 zero bytes.
      */
-    async deposit(_matchId: string, seatIndex: number, _amount?: number, onProgress?: TxProgressFn): Promise<string> {
+    async deposit(_matchId: string, joinCommitmentHex?: string, _amount?: number, onProgress?: TxProgressFn): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
@@ -513,22 +523,22 @@ function createLiveChain(): ChainClient {
       const matchAcct = matchPda(onchainMatchId)
       const vault = vaultPda(matchAcct)
       const seat = seatPda(matchAcct, player)
-      const seatIdx = seatIndexPda(matchAcct, seatIndex)
       const protState = protocolStatePda()
+
+      const joinCommitment = hexToBytes(joinCommitmentHex ?? '00'.repeat(32), 32)
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
-       
+
       const ix = await program.methods
-        .deposit(new BN(seatIndex))
+        .deposit(joinCommitment)
         .accounts({
           player,
           protocolState: protState,
           matchAccount: matchAcct,
           seat,
-          seatIndexAccount: seatIdx,
           playerToken,
           vault,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -561,22 +571,19 @@ function createLiveChain(): ChainClient {
       const player = adapter.publicKey
       const matchAcct = matchPda(onchainMatchId)
       const vault = vaultPda(matchAcct)
-      const yourSeat = useGameStore.getState().match?.yourSeat ?? 0
       const seat = seatPda(matchAcct, player)
-      const seatIdx = seatIndexPda(matchAcct, yourSeat)
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
-       
+
       const ix = await program.methods
         .claim()
         .accounts({
           player,
           matchAccount: matchAcct,
           seat,
-          seatIndexAccount: seatIdx,
           vault,
           playerToken,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -611,22 +618,19 @@ function createLiveChain(): ChainClient {
       const player = adapter.publicKey
       const matchAcct = matchPda(onchainMatchId)
       const vault = vaultPda(matchAcct)
-      const yourSeat = useGameStore.getState().match?.yourSeat ?? 0
       const seat = seatPda(matchAcct, player)
-      const seatIdx = seatIndexPda(matchAcct, yourSeat)
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
-       
+
       const ix = await program.methods
         .refund()
         .accounts({
           player,
           matchAccount: matchAcct,
           seat,
-          seatIndexAccount: seatIdx,
           vault,
           playerToken,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -648,18 +652,20 @@ function createLiveChain(): ChainClient {
     // -------------------------------------------------------------------
 
     async getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null> {
-      const conn = getConnection()
-      const info = await conn.getAccountInfo(matchPda(onchainMatchId))
-      return info?.data ? decodeMatchStatus(info.data as Buffer) : null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const acct = await program.account.matchAccount.fetchNullable(matchPda(onchainMatchId))
+      return acct ? mapMatchStatus(acct) : null
     },
 
     async getMySeat(onchainMatchId: string): Promise<OnchainSeatInfo | null> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) return null
-      const conn = getConnection()
       const seat = seatPda(matchPda(onchainMatchId), adapter.publicKey)
-      const info = await conn.getAccountInfo(seat)
-      return info?.data ? decodeSeatInfo(info.data as Buffer) : null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const acct = await program.account.seatAccount.fetchNullable(seat)
+      return acct ? mapSeat(acct) : null
     },
 
     /** Permissionless: anyone can send this once `now >= fill_deadline_ts`; only pays the fee. */
@@ -682,8 +688,8 @@ function createLiveChain(): ChainClient {
     },
 
     /**
-     * Player-signed refund that derives seatIndex from the on-chain seat account itself, so it
-     * works standalone (e.g. a "my matches" list) without any active gateway/match state.
+     * Player-signed refund. The v2 seat PDA is keyed by (match, player) alone, so this works
+     * standalone (e.g. a "my matches" list) without any active gateway/match state.
      */
     async refundSelf(onchainMatchId: string): Promise<string> {
       const adapter = walletBridge.adapter
@@ -699,8 +705,6 @@ function createLiveChain(): ChainClient {
 
       const seatInfo = await conn.getAccountInfo(seat)
       if (!seatInfo?.data) throw new Error('NoSeat')
-      const { seatIndex } = decodeSeatInfo(seatInfo.data as Buffer)
-      const seatIdx = seatIndexPda(matchAcct, seatIndex)
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
@@ -712,7 +716,6 @@ function createLiveChain(): ChainClient {
           player,
           matchAccount: matchAcct,
           seat,
-          seatIndexAccount: seatIdx,
           vault,
           playerToken,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -745,8 +748,6 @@ function createLiveChain(): ChainClient {
 
       const seatInfo = await conn.getAccountInfo(seat)
       if (!seatInfo?.data) throw new Error('NoSeat')
-      const { seatIndex } = decodeSeatInfo(seatInfo.data as Buffer)
-      const seatIdx = seatIndexPda(matchAcct, seatIndex)
 
       const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
@@ -762,7 +763,6 @@ function createLiveChain(): ChainClient {
           player,
           matchAccount: matchAcct,
           seat,
-          seatIndexAccount: seatIdx,
           vault,
           playerToken,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -780,34 +780,36 @@ function createLiveChain(): ChainClient {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) return []
 
-      const conn = getConnection()
       const player = adapter.publicKey
-      const seatAccounts = await conn.getProgramAccounts(PROGRAM_ID, {
-        filters: [
-          { memcmp: { offset: 0, bytes: bs58.encode(SEAT_ACCOUNT_DISCRIMINATOR) } },
-          { memcmp: { offset: 40, bytes: player.toBase58() } }, // SeatAccount.player
-        ],
-      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      // `.all()` adds the SeatAccount discriminator filter; offset 40 = SeatAccount.player
+      // (8 disc + 32 match_key). Anchor decodes each account via the IDL.
+      const seatAccounts: Array<{ publicKey: PublicKey; account: unknown }> =
+        await program.account.seatAccount.all([
+          { memcmp: { offset: 40, bytes: player.toBase58() } },
+        ])
       if (seatAccounts.length === 0) return []
 
-      const matchKeys = seatAccounts.map((a) => new PublicKey((a.account.data as Buffer).subarray(8, 40)))
-      const matchInfos = await conn.getMultipleAccountsInfo(matchKeys)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const matchKeys = seatAccounts.map((a) => (a.account as any).matchKey as PublicKey)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const matchAccts: any[] = await program.account.matchAccount.fetchMultiple(matchKeys)
 
       const nowSec = Date.now() / 1000
       const out: ReclaimableMatch[] = []
       for (let i = 0; i < seatAccounts.length; i++) {
-        const seat = decodeSeatInfo(seatAccounts[i].account.data as Buffer)
+        const seat = mapSeat(seatAccounts[i].account)
         if (seat.claimed) continue // nothing left to reclaim
-        const matchData = matchInfos[i]?.data as Buffer | undefined
-        if (!matchData) continue
-        const status = decodeMatchStatus(matchData)
+        const matchAcct = matchAccts[i]
+        if (!matchAcct) continue
+        const status = mapMatchStatus(matchAcct)
         const reclaimable = status.status === 'VOID' || (status.status === 'FILLING' && nowSec >= status.fillDeadlineTs)
         if (!reclaimable) continue
         out.push({
           ...status,
-          onchainMatchId: matchData.readBigUInt64LE(104).toString(),
+          onchainMatchId: n(matchAcct.matchId).toString(),
           matchPda: matchKeys[i].toBase58(),
-          seatIndex: seat.seatIndex,
           deposit: seat.deposit,
           entryFeePaid: seat.entryFeePaid,
         })

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { seatAlias, seatTag } from '@/lib/seats'
 import { formatChips } from '@/lib/format'
 import { useNow } from '@/lib/useNow'
-import { projectPot, projectSeatAngle, seatAngles, type ScreenPoint } from '@/three/table/tableView'
+import { useAnchor } from '@/lib/useAnchor'
+import { projectPot, projectSeatAngle, seatAngles } from '@/three/table/tableView'
 import type { MatchStateView, PublicEvent, SeatView } from '@/lib/protocol'
 import { SeatPod, type StatusTone } from './SeatPod'
 
@@ -46,29 +47,6 @@ export function Seats() {
       {match.pot > 0 && <Pot amount={match.pot} />}
     </div>
   )
-}
-
-/** Pin a DOM node to a projected 3D anchor, updated every animation frame. */
-function useAnchor(project: () => ScreenPoint | null) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    let raf = 0
-    const tick = () => {
-      raf = requestAnimationFrame(tick)
-      const el = ref.current
-      if (!el) return
-      const p = project()
-      if (!p || p.behind) {
-        el.style.opacity = '0'
-        return
-      }
-      el.style.opacity = ''
-      el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`
-    }
-    tick()
-    return () => cancelAnimationFrame(raf)
-  }, [project])
-  return ref
 }
 
 function monogram(alias: string): string {

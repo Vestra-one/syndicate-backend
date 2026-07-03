@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { useNow } from '@/lib/useNow'
+import { useAnchor } from '@/lib/useAnchor'
 import { formatChips, formatCountdown } from '@/lib/format'
 import { buildInviteUrl } from '@/lib/invite'
-import { projectFeltCentre, projectWaitingSeat, type ScreenPoint } from '@/three/table/tableView'
+import { projectFeltCentre, projectWaitingSeat } from '@/three/table/tableView'
 import { PAST_FILLING_PHASES } from '@/lib/protocol'
 import { seatAlias, seatTag, describeEvent } from '@/lib/seats'
 import { SeatPod } from './SeatPod'
@@ -36,29 +37,6 @@ export function useWaiting() {
   const min = terms?.minPlayers ?? 2
   const max = Math.max(terms?.maxPlayers ?? 0, filled, min)
   return { active, filled, min, max, enough: filled >= min, fillDeadline, terms, match }
-}
-
-/** Pin a DOM node to a projected 3D anchor, updated every animation frame (mirrors Seats). */
-function useAnchor(project: () => ScreenPoint | null) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    let raf = 0
-    const tick = () => {
-      raf = requestAnimationFrame(tick)
-      const el = ref.current
-      if (!el) return
-      const p = project()
-      if (!p || p.behind) {
-        el.style.opacity = '0'
-        return
-      }
-      el.style.opacity = ''
-      el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`
-    }
-    tick()
-    return () => cancelAnimationFrame(raf)
-  }, [project])
-  return ref
 }
 
 // ---------------------------------------------------------------------------
@@ -97,83 +75,85 @@ export function WaitingRoom() {
 
 function SeatRing({ max, match }: { max: number; match: ReturnType<typeof useWaiting>['match'] }) {
   const yourSeat = match?.yourSeat ?? 0
-  const taken = new Set((match?.seats ?? []).map((s) => s.seat))
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
+  const byIndex = new Map((match?.seats ?? []).map((s) => [s.seat, s]))
 
   // Every chair gets a fixed slot by seat index (0→leftmost … max-1→rightmost),
   // fanned across the front of the felt clear of the cabinet. Your chair is a lit
-  // medallion; other seated players are brass coins; the rest are locked & open.
+  // pod; other seated players are persona pods; the rest are locked & open.
   const angles = waitingSeatAngles(max)
 
   return (
     <div className="wr-seats">
       {angles.map((angle, seat) => {
-        if (seat === yourSeat) return <YouSeat key="you" angle={angle} />
-        if (taken.has(seat)) return <FilledSeat key={`f${seat}`} angle={angle} seat={seat} yourSeat={yourSeat} />
-        // the lowest-indexed empty chair reads as "up next" to show live filling
-        const nextEmpty = [...Array(max).keys()].find((i) => i !== yourSeat && !taken.has(i))
-        return <OpenSeat key={`o${seat}`} angle={angle} next={seat === nextEmpty} />
+        const side = angle < 0 ? 'left' : 'right'
+        if (seat === yourSeat) {
+          return <SeatSlot key="you" angle={angle} side={side}>
+            <YouPod seatNo={seat + 1} stack={match?.yourStack} token={token} yourSeat={yourSeat} side={side} />
+          </SeatSlot>
+        }
+        const sv = byIndex.get(seat)
+        return (
+          <SeatSlot key={seat} angle={angle} side={side}>
+            {sv ? (
+              <SeatPod
+                size="compact"
+                side={side}
+                name={seatAlias(seat, yourSeat)}
+                seatNo={seat + 1}
+                emblem={personaEmblem(seatAlias(seat, yourSeat))}
+                status={{ text: 'Seated', tone: 'seated' }}
+                stack={`${formatChips(sv.stack)} ${token}`}
+                tag={seatTag(seat, yourSeat)}
+              />
+            ) : (
+              <SeatPod size="compact" side={side} empty name="Open seat" seatNo={seat + 1} />
+            )}
+          </SeatSlot>
+        )
       })}
     </div>
   )
 }
 
-function YouSeat({ angle }: { angle: number }) {
+/** Positions a pod against its projected 3D anchor on the felt. */
+function SeatSlot({ angle, side, children }: { angle: number; side: 'left' | 'right'; children: React.ReactNode }) {
   const ref = useAnchor(useCallback(() => projectWaitingSeat(angle), [angle]))
+  return (
+    <div ref={ref} className={`wr-seat wr-seat--${side}`} style={{ opacity: 0 }}>
+      {children}
+    </div>
+  )
+}
+
+function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack?: number; token: string; yourSeat: number; side: 'left' | 'right' }) {
   const addr = useGameStore((s) => s.walletAddress)
   const short = addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : 'You'
   return (
-    <div ref={ref} className="wr-seat wr-seat--you" style={{ opacity: 0 }}>
-      <div className="wr-seat-medallion">
-        <span className="wr-seat-btc">₿</span>
-      </div>
-      <div className="wr-seat-plate wr-seat-plate--you">
-        <span className="wr-seat-addr mono">{short}</span>
-        <span className="wr-seat-youtag">YOU</span>
-      </div>
-    </div>
+    <SeatPod
+      size="compact"
+      you
+      side={side}
+      name={short}
+      seatNo={seatNo}
+      emblem="₿"
+      status={{ text: 'Your seat', tone: 'turn' }}
+      stack={stack != null ? `${formatChips(stack)} ${token}` : undefined}
+      tag={seatTag(yourSeat, yourSeat)}
+    />
   )
 }
 
 /**
  * Even fan of `n` chairs across the front arc, symmetric about dead-centre.
- * Spans ±SPREAD so the widest chairs still sit on the felt (not the rim under
- * the rails). Ordered left→right for a stable slot mapping.
+ * Spans ±SPREAD so the pods sit on the open felt, clear of the flanking rails.
+ * Ordered left→right for a stable slot mapping.
  */
 function waitingSeatAngles(n: number): number[] {
   if (n <= 0) return []
   if (n === 1) return [0]
-  const SPREAD = 74
+  const SPREAD = 52
   return Array.from({ length: n }, (_, i) => -SPREAD + (2 * SPREAD * i) / (n - 1))
-}
-
-function FilledSeat({ angle, seat, yourSeat }: { angle: number; seat: number; yourSeat?: number }) {
-  const ref = useAnchor(useCallback(() => projectWaitingSeat(angle), [angle]))
-  const alias = seatAlias(seat, yourSeat)
-  return (
-    <div ref={ref} className="wr-seat wr-seat--filled" style={{ opacity: 0 }}>
-      <div className="wr-seat-medallion">
-        <span className="wr-seat-mono">{alias.replace(/^The\s+/, '').charAt(0).toUpperCase()}</span>
-      </div>
-      <div className="wr-seat-plate">{alias}</div>
-    </div>
-  )
-}
-
-function OpenSeat({ angle, next }: { angle: number; next: boolean }) {
-  const ref = useAnchor(useCallback(() => projectWaitingSeat(angle), [angle]))
-  return (
-    <div ref={ref} className={`wr-seat wr-seat--open ${next ? 'wr-seat--next' : ''}`} style={{ opacity: 0 }}>
-      <div className="wr-seat-medallion">
-        <svg className="wr-seat-lock" viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v3H9V7a3 3 0 0 1 3-3zm0 10a1.6 1.6 0 0 1 .8 3v2.2a.8.8 0 0 1-1.6 0V17a1.6 1.6 0 0 1 .8-3z"
-          />
-        </svg>
-      </div>
-      <div className="wr-seat-plate wr-seat-plate--open">Open seat</div>
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------

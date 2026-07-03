@@ -1,5 +1,5 @@
 {
-  "address": "GhbHLYTHuSvCVhYM22wyjdoE6Nx5uQDNuBB2Wof4p2bF",
+  "address": "91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK",
   "metadata": {
     "name": "syndicate_program",
     "version": "0.1.0",
@@ -10,14 +10,22 @@
     {
       "name": "begin_live",
       "docs": [
-        "Advance Sealing → Live (plan_v2 §1/§3/§5). Operator-gated. Requires the seal",
-        "deadline reached. Drops + penalizes non-sealers (penalty → `dead_money`, entry",
-        "fee → `forfeited_fees`); if fewer than `min_players` sealed, VOIDs with the",
-        "penalty pool split among sealers. Otherwise re-indexes sealers into contiguous",
-        "engine seats, derives the dealer button from the committed drand round's",
-        "randomness, and stamps `live_start_ts` + `scheduled_end_ts`.",
+        "Advance Sealing → Live. Operator-gated; requires the seal deadline reached and the",
+        "begin_live window open. Reads the confirmed seats (passed as `remaining_accounts`",
+        "in engine order, read-only), counts sealers for audit, and derives the dealer",
+        "button ON-CHAIN from the recorded seal commitments:",
         "",
-        "All seat accounts (exactly `player_count`) are passed as `remaining_accounts`."
+        "```text",
+        "seed   = keccak256(\"syndicate:button:v2\" ‖ match_key ‖ lock_ts(u64 LE)",
+        "‖ for each confirmed seat in engine order:",
+        "player(32) ‖ commitment_set(1) ‖ prediction_commitment(32)",
+        "‖ timelock_target(u64 LE))",
+        "button = u64::from_le_bytes(seed[0..8]) % confirmed_count",
+        "```",
+        "",
+        "Non-sealers are NOT dropped (v2): every confirmed seat plays; the backend assigns",
+        "the feed spot price at seal-close to seats without a commitment. Zero sealers is",
+        "valid."
       ],
       "discriminator": [
         62,
@@ -78,21 +86,13 @@
           }
         }
       ],
-      "args": [
-        {
-          "name": "args",
-          "type": {
-            "defined": {
-              "name": "BeginLiveArgs"
-            }
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "claim",
       "docs": [
-        "Pull-based, idempotent claim of a settled seat's payout."
+        "Pull-based, idempotent claim of a settled seat's payout (confirmed seats only —",
+        "unconfirmed candidates use `refund`)."
       ],
       "discriminator": [
         62,
@@ -162,38 +162,6 @@
           }
         },
         {
-          "name": "seat_index_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  97,
-                  116,
-                  45,
-                  105,
-                  110,
-                  100,
-                  101,
-                  120
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_account"
-              },
-              {
-                "kind": "account",
-                "path": "seat.seat_index",
-                "account": "SeatAccount"
-              }
-            ]
-          }
-        },
-        {
           "name": "vault",
           "writable": true
         },
@@ -211,10 +179,10 @@
     {
       "name": "create_and_deposit",
       "docs": [
-        "Atomic create + seat the creator in a single instruction (plan_v2 §3 convenience).",
-        "Equivalent to `[create_match, deposit]` in one tx — same shared logic — but a single",
-        "instruction guarantees atomicity regardless of how a client assembles the tx. The",
-        "creator (`authority`) is both the payer and the first depositor."
+        "Atomic create + seat the creator (as the first CANDIDATE) in a single instruction.",
+        "The creator (`authority`) is both the payer and the first depositor; their seat's",
+        "`room_commitment` is the match's `room_commitment` (hash(roomcode ‖ creator) for",
+        "private rooms, zero for public)."
       ],
       "discriminator": [
         149,
@@ -325,37 +293,6 @@
           }
         },
         {
-          "name": "seat_index_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  97,
-                  116,
-                  45,
-                  105,
-                  110,
-                  100,
-                  101,
-                  120
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_account"
-              },
-              {
-                "kind": "arg",
-                "path": "seat_index"
-              }
-            ]
-          }
-        },
-        {
           "name": "player_token",
           "writable": true
         },
@@ -380,21 +317,15 @@
               "name": "CreateParams"
             }
           }
-        },
-        {
-          "name": "seat_index",
-          "type": "u16"
         }
       ]
     },
     {
       "name": "create_match",
       "docs": [
-        "Create a match. **Permissionless** (plan_v2 §3): any signer may create; the",
-        "signer becomes `m.authority` but that grants NO lifecycle power — `lock`/",
-        "`begin_live`/`submit_settlement` remain gated to operator ROLE keys, so the",
-        "operator monopoly on progression is preserved automatically. Clients submit",
-        "`[create_match, deposit]` in one transaction so the creator is seated atomically."
+        "Create a match. **Permissionless**: any signer may create; the signer becomes",
+        "`m.authority` but that grants NO lifecycle power — `lock`/`begin_live`/",
+        "`submit_settlement` remain gated to operator ROLE keys."
       ],
       "discriminator": [
         107,
@@ -506,7 +437,11 @@
     {
       "name": "deposit",
       "docs": [
-        "Deposit buy-in + entry fee → seat eligibility (the anti-spam gate, `05 §4`)."
+        "Deposit buy-in + entry fee → seat CANDIDACY. Confirmation happens at `lock`",
+        "(backend FCFS by deposit finality). For private rooms, `join_commitment` must be",
+        "`sha256(roomcode ‖ player_pubkey)` (recorded for audit; verified off-chain by the",
+        "backend before confirming the seat). Entry fees are NOT accrued to the treasury",
+        "here — unconfirmed candidates get them back in full via `refund`."
       ],
       "discriminator": [
         242,
@@ -593,37 +528,6 @@
           }
         },
         {
-          "name": "seat_index_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  97,
-                  116,
-                  45,
-                  105,
-                  110,
-                  100,
-                  101,
-                  120
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_account"
-              },
-              {
-                "kind": "arg",
-                "path": "seat_index"
-              }
-            ]
-          }
-        },
-        {
           "name": "player_token",
           "writable": true
         },
@@ -642,8 +546,13 @@
       ],
       "args": [
         {
-          "name": "seat_index",
-          "type": "u16"
+          "name": "join_commitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -716,10 +625,12 @@
     {
       "name": "lock",
       "docs": [
-        "Lock the match: enough players present → seats frozen, status → Sealing. Records",
-        "`lock_ts` and derives `seal_deadline_ts`. The dealer button uses backend-native",
-        "randomness submitted at `begin_live` (plan_v2 §3), so no drand round is committed",
-        "here. Operator-gated."
+        "Lock the match: confirm the playing set and freeze it, status → Sealing.",
+        "",
+        "`remaining_accounts` = the confirmed seat PDAs (writable), in the backend's FCFS",
+        "order — position `i` becomes `engine_seat = i`. Everything else stays a candidate",
+        "and becomes refundable immediately (see `refund`). Confirmed entry fees accrue to",
+        "the treasury here. Operator-gated."
       ],
       "discriminator": [
         21,
@@ -785,10 +696,12 @@
     {
       "name": "refund",
       "docs": [
-        "Pull-based, idempotent refund on VOID. The amount depends on `void_kind`",
-        "(plan_v2 §5): pre-LIVE voids fully refund (deposit + entry fee); an UnderMinSealed",
-        "void refunds sealers in full plus their pro-rata share of the non-sealer penalty",
-        "pool, while non-sealers get `deposit - penalty` (entry fee forfeited)."
+        "Pull-based, idempotent refund. v2 single rule: the amount is always the seat's",
+        "full `deposit + entry_fee_paid`.",
+        "",
+        "- Unconfirmed candidate: refundable the moment the match leaves Filling (lock",
+        "landed without them, or any void) — including after Settled.",
+        "- Confirmed seat: refundable only on Void (settled seats use `claim`)."
       ],
       "discriminator": [
         2,
@@ -853,38 +766,6 @@
               {
                 "kind": "account",
                 "path": "player"
-              }
-            ]
-          }
-        },
-        {
-          "name": "seat_index_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  97,
-                  116,
-                  45,
-                  105,
-                  110,
-                  100,
-                  101,
-                  120
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "match_account"
-              },
-              {
-                "kind": "account",
-                "path": "seat.seat_index",
-                "account": "SeatAccount"
               }
             ]
           }
@@ -988,7 +869,7 @@
       "name": "set_match_bounds",
       "docs": [
         "Update the operator-governed match-creation bounds (config_admin). New matches must",
-        "pick a `buy_in` and fill window within these ranges; enforced in `validate_create_params`."
+        "pick buy-in / fill window / total betting duration within these ranges."
       ],
       "discriminator": [
         131,
@@ -1148,13 +1029,14 @@
     {
       "name": "submit_settlement",
       "docs": [
-        "Submit the final settlement (v1: backend-trusted payouts).",
+        "Submit the final settlement (backend-trusted payouts).",
         "",
         "Verifies the signed price at exactly `scheduled_end_ts`, writes per-seat payouts",
-        "supplied by the backend, and enforces conservation. Does NOT replay action logs.",
+        "supplied by the backend for ALL confirmed seats (non-sealers included — the",
+        "backend settled them with the seal-close spot price), and enforces conservation:",
+        "`Σ payouts == confirmed_count × buy_in − rake_collected`.",
         "",
-        "TODO(v1+): restore on-chain action-log replay + `verify_settlement` — see crate header.",
-        "Pass the sealed seats as `remaining_accounts`."
+        "Pass the confirmed seats as `remaining_accounts`."
       ],
       "discriminator": [
         255,
@@ -1230,7 +1112,7 @@
       "name": "void",
       "docs": [
         "Operator emergency void (oracle/timelock fault, incident). Status → Void with",
-        "`Emergency` kind: full refund to all, penalties waived (plan_v2 §5)."
+        "`Emergency` kind: full refund to all."
       ],
       "discriminator": [
         55,
@@ -1296,10 +1178,10 @@
     {
       "name": "void_before_start",
       "docs": [
-        "Permissionless void of an abandoned pre-LIVE match (plan_v2 §3) — no operator",
-        "needed, so funds can never strand. Filling past `fill_deadline_ts`, or Sealing",
-        "past `seal_deadline_ts + SEAL_VOID_GRACE_SEC` (operator failed to begin_live).",
-        "Either way no game ran, so it is a full refund (no penalty)."
+        "Permissionless void of an abandoned pre-LIVE match — no operator needed, so funds",
+        "can never strand. Filling past `fill_deadline_ts`, or Sealing past",
+        "`seal_deadline_ts + SEAL_VOID_GRACE_SEC` (operator failed to begin_live). Full",
+        "refund either way."
       ],
       "discriminator": [
         2,
@@ -1341,13 +1223,10 @@
     {
       "name": "void_live_after_deadline",
       "docs": [
-        "Permissionless void of a stuck LIVE match (plan_v2 §H capital-safety backstop).",
-        "Reads ONLY the `MatchAccount` — it does NOT depend on the `ActionLog`, which under",
-        "the batch-at-settlement model may not exist yet between `begin_live` and",
-        "settlement. Anyone may call once `now >= scheduled_end_ts + SETTLE_VOID_GRACE_SEC`,",
-        "guaranteeing funds can never strand if the operator vanishes after the match goes",
-        "live. Settlement was never recorded, so this is a full refund to all (penalties",
-        "waived): `VoidKind::Emergency`."
+        "Permissionless void of a stuck LIVE match (capital-safety backstop). Reads ONLY",
+        "the `MatchAccount`. Anyone may call once `now >= scheduled_end_ts +",
+        "SETTLE_VOID_GRACE_SEC`, guaranteeing funds can never strand if the operator",
+        "vanishes after the match goes live. Full refund to all."
       ],
       "discriminator": [
         202,
@@ -1389,10 +1268,9 @@
     {
       "name": "withdraw_fees",
       "docs": [
-        "Withdraw fees to the protocol treasury. Settled → all entry fees + rake",
-        "(`total_fees`). UnderMinSealed void → only the forfeited non-sealer entry fees",
-        "(plus the whole penalty pool if zero sealers remained to receive it). Other void",
-        "kinds waive all fees (nothing to withdraw). Idempotent via `fees_withdrawn`."
+        "Withdraw fees to the protocol treasury. Settled → confirmed entry fees + rake",
+        "(`total_fees`). Voids waive all fees (nothing to withdraw). Idempotent via",
+        "`fees_withdrawn`."
       ],
       "discriminator": [
         198,
@@ -1507,19 +1385,6 @@
         122,
         178
       ]
-    },
-    {
-      "name": "SeatIndexAccount",
-      "discriminator": [
-        34,
-        229,
-        251,
-        206,
-        174,
-        117,
-        219,
-        201
-      ]
     }
   ],
   "errors": [
@@ -1540,185 +1405,144 @@
     },
     {
       "code": 6003,
-      "name": "SettlementMismatch",
-      "msg": "Settlement re-verification failed; funds will NOT be released (04 §18)."
-    },
-    {
-      "code": 6004,
       "name": "ConservationViolation",
       "msg": "Conservation check failed: payouts + fees != deposits."
     },
     {
-      "code": 6005,
+      "code": 6004,
       "name": "InvalidSettlementInput",
       "msg": "Oracle/settlement inputs invalid or insufficient."
     },
     {
-      "code": 6006,
+      "code": 6005,
       "name": "InvalidOracleProof",
       "msg": "Signed price proof is missing, unauthenticated, or not from the whitelisted signer."
     },
     {
-      "code": 6007,
+      "code": 6006,
       "name": "AlreadyClaimed",
       "msg": "Seat already claimed."
     },
     {
-      "code": 6008,
+      "code": 6007,
       "name": "Overflow",
       "msg": "Arithmetic overflow."
     },
     {
-      "code": 6009,
+      "code": 6008,
       "name": "Unauthorized",
       "msg": "Unauthorized."
     },
     {
-      "code": 6010,
+      "code": 6009,
       "name": "Paused",
       "msg": "Protocol action is paused."
     },
     {
-      "code": 6011,
+      "code": 6010,
       "name": "InvalidSeat",
-      "msg": "Seat index is invalid or duplicated."
+      "msg": "Seat is invalid or duplicated."
+    },
+    {
+      "code": 6011,
+      "name": "SeatSetMismatch",
+      "msg": "Settlement did not include exactly the confirmed seats."
     },
     {
       "code": 6012,
-      "name": "SeatSetMismatch",
-      "msg": "Settlement did not include exactly the occupied seats."
-    },
-    {
-      "code": 6013,
-      "name": "InvalidActionInput",
-      "msg": "Invalid signed action input."
-    },
-    {
-      "code": 6014,
-      "name": "InvalidActionLog",
-      "msg": "Action log is invalid or not initialized."
-    },
-    {
-      "code": 6015,
-      "name": "InvalidSignature",
-      "msg": "Ed25519 signature verification failed."
-    },
-    {
-      "code": 6016,
-      "name": "NotYourTurn",
-      "msg": "Not this player's turn."
-    },
-    {
-      "code": 6017,
-      "name": "ActionLogNotFinalized",
-      "msg": "Action log is not finalized."
-    },
-    {
-      "code": 6018,
-      "name": "EngineNotComplete",
-      "msg": "Engine replay is not complete."
-    },
-    {
-      "code": 6019,
       "name": "PredictionCommitmentMismatch",
       "msg": "Prediction reveal does not match signed commitment."
     },
     {
-      "code": 6020,
+      "code": 6013,
       "name": "SettlementDeadlinePassed",
       "msg": "Settlement deadline passed; use void/refund path."
     },
     {
-      "code": 6021,
+      "code": 6014,
       "name": "FeesAlreadyWithdrawn",
       "msg": "Match fees were already withdrawn."
     },
     {
-      "code": 6022,
+      "code": 6015,
       "name": "ButtonNotSet",
       "msg": "Dealer button has not been recorded."
     },
     {
-      "code": 6023,
+      "code": 6016,
       "name": "SealWindowClosed",
       "msg": "Seal window has closed; commitment rejected (after seal_deadline_ts)."
     },
     {
-      "code": 6024,
+      "code": 6017,
       "name": "SealDeadlineNotReached",
       "msg": "Seal deadline has not been reached; cannot begin live yet."
     },
     {
-      "code": 6025,
+      "code": 6018,
       "name": "FillDeadlineNotReached",
       "msg": "Fill deadline has not been reached; cannot permissionlessly void yet."
     },
     {
-      "code": 6026,
+      "code": 6019,
       "name": "SettleGraceNotElapsed",
       "msg": "Settlement grace has not elapsed; cannot permissionlessly void the live match yet."
     },
     {
-      "code": 6027,
+      "code": 6020,
       "name": "BeginLiveWindowPassed",
       "msg": "begin_live window elapsed; the operator did not start the match in time (void only)."
     },
     {
-      "code": 6028,
+      "code": 6021,
       "name": "AlreadySealed",
       "msg": "Seat has already recorded a seal commitment."
     },
     {
-      "code": 6029,
+      "code": 6022,
       "name": "InvalidDrandRound",
-      "msg": "drand button round is invalid (must publish after the seal deadline)."
+      "msg": "Timelock target round is invalid (must publish just after the latest match end)."
     },
     {
-      "code": 6030,
-      "name": "InvalidButtonRandomness",
-      "msg": "drand button randomness is missing or does not match the committed round."
-    },
-    {
-      "code": 6031,
+      "code": 6023,
       "name": "OracleToleranceTooWide",
       "msg": "Oracle tolerance window is too wide; must be tight (single-update)."
     },
     {
-      "code": 6032,
+      "code": 6024,
       "name": "InvalidConfig",
       "msg": "Invalid match configuration parameter."
     },
     {
-      "code": 6033,
+      "code": 6025,
       "name": "RefundUnavailable",
-      "msg": "Refund not available for this seat in the current void kind."
+      "msg": "Refund not available for this seat in the current match state."
+    },
+    {
+      "code": 6026,
+      "name": "SeatNotConfirmed",
+      "msg": "Seat was not confirmed into the playing set at lock."
+    },
+    {
+      "code": 6027,
+      "name": "CandidateLimitReached",
+      "msg": "Candidate limit reached for this match."
+    },
+    {
+      "code": 6028,
+      "name": "InvalidRoomCommitment",
+      "msg": "Room commitment is required for private rooms and must be zero for public rooms."
     }
   ],
   "types": [
     {
-      "name": "BeginLiveArgs",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "button_randomness",
-            "docs": [
-              "Backend-native CSPRNG randomness (server-attested, plan_v2 §3) used to derive the",
-              "dealer button over the sealed seats. Recorded for audit; not on-chain verified —",
-              "the button only sets blind/action order, so this is a deliberate low-risk choice."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
       "name": "CreateParams",
+      "docs": [
+        "v2 CreateParams (Borsh, 171 bytes). `config_hash` is the canonical SHA-256 of the FULL",
+        "creator-chosen param set (streets, durations, feed, buy-in, fees…) — free-form within",
+        "operator bounds, no allowlist. `room_commitment` = sha256(roomcode ‖ creator) for",
+        "private rooms, zero for public."
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1743,16 +1567,25 @@
             "type": "u64"
           },
           {
-            "name": "nonseal_penalty_bps",
-            "type": "u32"
-          },
-          {
             "name": "min_players",
             "type": "u8"
           },
           {
             "name": "max_players",
             "type": "u8"
+          },
+          {
+            "name": "is_private",
+            "type": "bool"
+          },
+          {
+            "name": "room_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           },
           {
             "name": "config_hash",
@@ -1790,14 +1623,14 @@
           {
             "name": "begin_live_window_sec",
             "docs": [
-              "Max delay after seal deadline for the operator to call begin_live (0 → default 5s)."
+              "Max delay after seal deadline for the operator to call begin_live (0 → default 30s)."
             ],
             "type": "u64"
           },
           {
             "name": "fill_window_sec",
             "docs": [
-              "Public-queue fill window (seconds). The on-chain `fill_deadline_ts` is derived as",
+              "Fill window (seconds). The on-chain `fill_deadline_ts` is derived as",
               "`create_ts + fill_window_sec`; must lie within the operator-governed bounds."
             ],
             "type": "u64"
@@ -1816,10 +1649,14 @@
     {
       "name": "MatchAccount",
       "docs": [
-        "One match. Holds the fee config, the bound-config hash (replay anchor), on-chain",
-        "timing (`lock_ts`/`seal_deadline_ts`/`live_start_ts`/`scheduled_end_ts`), the drand",
-        "button commitment, the non-sealer penalty pool, and running totals. Custody of funds",
-        "lives in the associated `vault` token account PDA."
+        "One match. Holds the fee config, the bound-config hash (canonical hash of the full",
+        "creator-chosen param set), the private-room commitment, on-chain timing, the",
+        "commitment-derived button seed, and running totals. Custody of funds lives in the",
+        "associated `vault` token account PDA.",
+        "",
+        "v2 seating model: a deposit creates a seat CANDIDATE. The backend confirms the playing",
+        "set at `lock` (FCFS by deposit finality, room-code-verified off-chain); only confirmed",
+        "seats play. Unconfirmed candidates can `refund` the moment the match leaves Filling."
       ],
       "type": {
         "kind": "struct",
@@ -1854,6 +1691,10 @@
           },
           {
             "name": "config_hash",
+            "docs": [
+              "Canonical SHA-256 of the full creator-chosen param set (streets, durations, feed,",
+              "buy-in, fees…). Not interpreted on-chain; binds the off-chain config for audit."
+            ],
             "type": {
               "array": [
                 "u8",
@@ -1870,6 +1711,25 @@
               "array": [
                 "u8",
                 20
+              ]
+            }
+          },
+          {
+            "name": "is_private",
+            "docs": [
+              "True for private rooms (room-code gated off-chain, commitment recorded here)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "room_commitment",
+            "docs": [
+              "`sha256(roomcode ‖ creator_pubkey)` for private rooms; all zero for public."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
               ]
             }
           },
@@ -1926,8 +1786,8 @@
             "name": "begin_live_window_sec",
             "docs": [
               "Bound at create: max delay after `seal_deadline_ts` within which the operator must",
-              "call `begin_live` (default 5s). Keeps `scheduled_end_ts` tightly pinned to the seal",
-              "round so a timelock target can't be decrypted mid-match (plan_v2 §I hardening)."
+              "call `begin_live`. Keeps `scheduled_end_ts` tightly pinned to the seal round so a",
+              "timelock target can't be decrypted mid-match."
             ],
             "type": "u64"
           },
@@ -1971,13 +1831,6 @@
             "type": "u64"
           },
           {
-            "name": "nonseal_penalty_bps",
-            "docs": [
-              "Non-sealer penalty in basis points of `buy_in` (plan_v2 §5). Bound in config_hash."
-            ],
-            "type": "u32"
-          },
-          {
             "name": "min_players",
             "type": "u8"
           },
@@ -1986,45 +1839,38 @@
             "type": "u8"
           },
           {
-            "name": "player_count",
+            "name": "candidate_count",
+            "docs": [
+              "Deposits recorded (confirmed or not). Bounded by `MAX_CANDIDATES`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "confirmed_count",
+            "docs": [
+              "Seats confirmed into the playing set at `lock`. Settlement covers exactly this many."
+            ],
             "type": "u8"
           },
           {
             "name": "sealed_count",
             "docs": [
-              "Seats that recorded a seal commitment by `seal_deadline_ts` (set at begin_live)."
+              "Confirmed seats that recorded a seal commitment by `seal_deadline_ts` (audit; set",
+              "at begin_live). Non-sealers still play — backend assigns the seal-close spot price."
             ],
             "type": "u8"
           },
           {
-            "name": "next_seal_seq",
-            "docs": [
-              "Monotonic seal-order counter assigned on-chain (arrival order) so a player cannot",
-              "claim `seal_seq = 0` to grab tie-remainders. Each commitment takes the current",
-              "value, then increments."
-            ],
-            "type": "u64"
-          },
-          {
             "name": "total_deposited",
+            "docs": [
+              "Gross candidate inflow (buy-ins + entry fees). Audit total, NOT the pot."
+            ],
             "type": "u64"
           },
           {
             "name": "total_fees",
-            "type": "u64"
-          },
-          {
-            "name": "forfeited_fees",
             "docs": [
-              "Non-sealer entry fees forfeited to treasury (withdrawable post-terminal)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dead_money",
-            "docs": [
-              "Non-sealer penalty pool: Live -> injected into the main pot at settlement;",
-              "UnderMinSealed void -> split pro-rata among sealers (plan_v2 §4/§5)."
+              "Confirmed entry fees (set at lock) + pot rake (added at settlement). Treasury-bound."
             ],
             "type": "u64"
           },
@@ -2033,11 +1879,10 @@
             "type": "u64"
           },
           {
-            "name": "button_randomness",
+            "name": "button_seed",
             "docs": [
-              "Operator-supplied CSPRNG randomness recorded at `begin_live` for audit. Backend-",
-              "native (NOT drand): the dealer button only sets blind/action order, so this is a",
-              "deliberately low-stakes, server-attested value rather than a verified beacon."
+              "keccak256 digest over the confirmed seats' seal data (normative preimage in",
+              "`begin_live`); recorded for audit/re-derivation."
             ],
             "type": {
               "array": [
@@ -2049,7 +1894,7 @@
           {
             "name": "button",
             "docs": [
-              "Dealer button seat index (engine index), derived from `button_randomness`."
+              "Dealer button engine-seat index: `u64::from_le(seed[0..8]) % confirmed_count`."
             ],
             "type": "u8"
           },
@@ -2112,6 +1957,14 @@
           },
           {
             "name": "fill_window_max_sec",
+            "type": "u64"
+          },
+          {
+            "name": "total_betting_duration_min_sec",
+            "type": "u64"
+          },
+          {
+            "name": "total_betting_duration_max_sec",
             "type": "u64"
           }
         ]
@@ -2257,8 +2110,9 @@
             "name": "buy_in_min",
             "docs": [
               "Operator-governed match-creation bounds (config_admin). A match's `buy_in` must lie in",
-              "`[buy_in_min, buy_in_max]` and its fill window in `[fill_window_min_sec, fill_window_max_sec]`,",
-              "enforced on-chain at create. Replaces the old discrete buy-in/fill-window tiers."
+              "`[buy_in_min, buy_in_max]`, its fill window in `[fill_window_min_sec, fill_window_max_sec]`,",
+              "and its total betting duration in `[total_betting_duration_min_sec, total_betting_duration_max_sec]`,",
+              "enforced on-chain at create. Params are otherwise free-form (config_hash binds them)."
             ],
             "type": "u64"
           },
@@ -2272,6 +2126,14 @@
           },
           {
             "name": "fill_window_max_sec",
+            "type": "u64"
+          },
+          {
+            "name": "total_betting_duration_min_sec",
+            "type": "u64"
+          },
+          {
+            "name": "total_betting_duration_max_sec",
             "type": "u64"
           },
           {
@@ -2294,7 +2156,7 @@
           {
             "name": "commitment",
             "docs": [
-              "Hash of the time-lock ciphertext (the prediction commitment)."
+              "Hash of the time-lock ciphertext (the prediction commitment): sha256(ciphertext)."
             ],
             "type": {
               "array": [
@@ -2316,10 +2178,11 @@
     {
       "name": "SeatAccount",
       "docs": [
-        "One player's seat in a match. The seal commitment is recorded here DURING Sealing",
-        "(before LIVE), gated by `seal_deadline_ts` — the §207 fix. `payout` is written at",
-        "verified settlement; `refund` pays per `MatchAccount::void_kind`. Pull-based,",
-        "idempotent via `claimed`."
+        "One player's seat in a match. A deposit creates the seat as an unconfirmed CANDIDATE;",
+        "`lock` flips `confirmed` and assigns `engine_seat` for the playing set. The seal",
+        "commitment is recorded during Sealing (confirmed seats only). `payout` is written at",
+        "settlement; `refund` pays `deposit + entry_fee_paid`. Pull-based, idempotent via",
+        "`claimed`; account closes to the player on claim/refund."
       ],
       "type": {
         "kind": "struct",
@@ -2331,10 +2194,6 @@
           {
             "name": "player",
             "type": "pubkey"
-          },
-          {
-            "name": "seat_index",
-            "type": "u16"
           },
           {
             "name": "deposit",
@@ -2357,6 +2216,34 @@
             "type": "u8"
           },
           {
+            "name": "room_commitment",
+            "docs": [
+              "`sha256(roomcode ‖ player_pubkey)` for private rooms (audit binding; enforcement is",
+              "backend confirm-at-lock); all zero for public rooms."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "confirmed",
+            "docs": [
+              "True once the backend confirmed this seat into the playing set at `lock`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "engine_seat",
+            "docs": [
+              "Contiguous engine seat index (position in the confirmed set passed to `lock`);",
+              "`NO_ENGINE_SEAT` until confirmed. The engine + settlement index by this."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "prediction_commitment",
             "docs": [
               "Hash of the time-lock ciphertext (prediction commitment)."
@@ -2376,83 +2263,11 @@
             "type": "u64"
           },
           {
-            "name": "seal_seq",
-            "docs": [
-              "Deterministic seal order (earlier seal => smaller). Tiebreak for remainders."
-            ],
-            "type": "u64"
-          },
-          {
             "name": "commitment_set",
             "docs": [
               "True once a valid commitment was recorded at or before `seal_deadline_ts`."
             ],
             "type": "bool"
-          },
-          {
-            "name": "is_non_sealer",
-            "docs": [
-              "True if this seat had the seal window but did not commit (dropped + penalized)."
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "penalty",
-            "docs": [
-              "Penalty forfeited to the pot/sealers if `is_non_sealer` (= buy_in * penalty_bps)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "engine_seat",
-            "docs": [
-              "Contiguous engine seat index assigned to a sealer at begin_live; `NO_ENGINE_SEAT`",
-              "for dropped non-sealers. The engine + settlement index by this, not `seat_index`."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "gets_remainder",
-            "docs": [
-              "On an UnderMinSealed void, the one sealer that receives the penalty-pool remainder."
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "reserved",
-            "type": {
-              "array": [
-                "u8",
-                8
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "SeatIndexAccount",
-      "docs": [
-        "One PDA per occupied seat index, preventing duplicate seat numbers in a match."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "match_key",
-            "type": "pubkey"
-          },
-          {
-            "name": "player",
-            "type": "pubkey"
-          },
-          {
-            "name": "seat_index",
-            "type": "u16"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
           },
           {
             "name": "reserved",
@@ -2581,8 +2396,8 @@
     {
       "name": "VoidKind",
       "docs": [
-        "Why a match voided. Drives the per-seat refund computation (plan_v2 §5), so a",
-        "pull-based `refund` can pay the exact amount without scanning every seat."
+        "Why a match voided. Retained for audit; in v2 every void refunds the full",
+        "`deposit + entry_fee_paid` regardless of kind."
       ],
       "type": {
         "kind": "enum",
@@ -2592,9 +2407,6 @@
           },
           {
             "name": "FillingVoid"
-          },
-          {
-            "name": "UnderMinSealed"
           },
           {
             "name": "Emergency"

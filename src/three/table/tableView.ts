@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { PriceRange } from '@/lib/priceRanges'
 
 /**
  * Bridges the 3D table to the 2D HUD: world-space anchors for each seat (on the
@@ -115,4 +116,39 @@ export function projectPot(): ScreenPoint | null {
 }
 export function projectFeltCentre(): ScreenPoint | null {
   return project(FELT_CENTRE_WORLD)
+}
+
+/**
+ * World-space anchors for the price cabinet's clickable timeframe tabs, handed in
+ * by tableScene once the cabinet mesh exists (its screen sits at a fixed local
+ * transform, so these anchors never move — only the camera does). Lets the 2D
+ * PriceBoardTabs overlay project each tab's real position without reaching into
+ * the Three.js scene graph itself.
+ */
+let priceTabAnchors: { range: PriceRange; world: THREE.Vector3 }[] = []
+export function bindPriceBoardTabs(anchors: { range: PriceRange; world: THREE.Vector3 }[]) {
+  priceTabAnchors = anchors
+}
+export function unbindPriceBoardTabs() {
+  priceTabAnchors = []
+}
+export function projectPriceTab(range: PriceRange): ScreenPoint | null {
+  const a = priceTabAnchors.find((x) => x.range === range)
+  return a ? project(a.world) : null
+}
+
+/**
+ * World-space anchor for the cabinet's "CHART" launch button (see priceBoard's
+ * getChartButtonAnchor), for the same invisible-overlay click technique as the
+ * timeframe tabs above.
+ */
+let chartButtonAnchor: THREE.Vector3 | null = null
+export function bindPriceChartButton(anchor: THREE.Vector3) {
+  chartButtonAnchor = anchor
+}
+export function unbindPriceChartButton() {
+  chartButtonAnchor = null
+}
+export function projectPriceChartButton(): ScreenPoint | null {
+  return chartButtonAnchor ? project(chartButtonAnchor) : null
 }

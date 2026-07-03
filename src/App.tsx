@@ -38,6 +38,13 @@ export default function App() {
     return () => feed.stop()
   }, [])
 
+  // DEV-only: expose the store for headless/console iteration, e.g.
+  //   window.__gameStore.setState({ priceHistory: [...] })
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as { __gameStore?: typeof useGameStore }).__gameStore = useGameStore
+  }, [])
+
   // DEV-only: jump straight into the seated "table filling" waiting state so the
   // waiting-room UI can be iterated on headlessly without a funded wallet on-chain.
   //   window.__mockWaiting({ seated: 2, max: 5, min: 3, secs: 78 })

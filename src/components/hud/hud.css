@@ -538,8 +538,51 @@
 .hud > .table-seats,
 .hud > .lobby,
 .hud > .ceremony,
-.hud > .waiting-room {
+.hud > .waiting-room,
+.hud > .pb-tabs {
   pointer-events: none;
+}
+
+/* ---- Price cabinet timeframe tabs ---- */
+/* The tab row's look is drawn on the cabinet's own canvas texture (priceBoard.ts) —
+ * these are just invisible hit-targets pinned over each drawn tab so the canvas
+ * stays the single source of visual truth. */
+.pb-tabs {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.pb-tab {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 56px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  opacity: 0 !important;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+}
+
+/* ---- Price cabinet "CHART" launch button — opens the full-screen analysis view ---- */
+.pb-chart-btn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  opacity: 0 !important;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
 }
 .table-seat {
   position: absolute;
@@ -952,6 +995,68 @@
   opacity: 0.5;
   filter: grayscale(0.55);
 }
+
+.pod-status--seated { color: var(--gold-line); }
+
+/* ---- your own pod: lit gold rim ---- */
+.pod--you {
+  border-color: var(--gold);
+  box-shadow:
+    0 0 0 1px rgba(243, 217, 138, 0.5),
+    0 0 20px rgba(243, 217, 138, 0.28),
+    0 12px 30px rgba(0, 0, 0, 0.62),
+    inset 0 1px 0 rgba(243, 217, 138, 0.2);
+}
+.pod--you .pod-avatar::before { background: conic-gradient(from 210deg, #b8923a, #fff2c4 25%, #c9a24a 52%, #ffe9a6 78%, #b8923a); }
+.pod--you .pod-mono { color: #2a1a06; }
+.pod--you .pod-avatar {
+  background: radial-gradient(circle at 50% 30%, #ffe9a6, #c99a3c 78%);
+}
+
+/* ---- open chair: locked & muted placeholder ---- */
+.pod--empty {
+  border-style: dashed;
+  border-color: rgba(202, 162, 63, 0.24);
+  background: linear-gradient(180deg, rgba(18, 12, 6, 0.7), rgba(10, 6, 3, 0.72));
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.45);
+}
+.pod--empty .pod-avatar {
+  background: radial-gradient(circle at 50% 34%, #1a1206, #0a0602 90%);
+}
+.pod--empty .pod-avatar::before { opacity: 0.4; }
+.pod--empty .pod-name { color: var(--text-faint); letter-spacing: 0.14em; }
+.pod-lock { width: 20px; height: 20px; color: rgba(202, 162, 63, 0.45); }
+
+/* ---- compact size (pre-game waiting ring) ---- */
+.pod--compact {
+  min-width: 158px;
+  max-width: 182px;
+  gap: 9px;
+  padding: 7px 13px 7px 7px;
+  border-radius: 36px;
+}
+.pod--compact .pod-avatar { width: 40px; height: 40px; }
+.pod--compact .pod-sigil { width: 21px; height: 21px; }
+.pod--compact .pod-mono { font-size: 17px; }
+.pod--compact .pod-lock { width: 16px; height: 16px; }
+.pod--compact .pod-name { font-size: 11px; max-width: 110px; letter-spacing: 0.05em; }
+.pod--compact .pod-status { font-size: 10.5px; }
+.pod--compact .pod-stack { font-size: 9.5px; }
+.pod--compact .pod-body { padding-right: 2px; }
+.pod--compact .pod-seatno {
+  top: 5px;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+}
+.pod--compact .pod-tag {
+  bottom: -9px;
+  left: 14px;
+  font-size: 7.5px;
+  padding: 2px 7px 2px 6px;
+}
+.pod--compact .pod-tag-icon { width: 9px; height: 9px; }
 
 /* ---- the pot, pinned to the centre of the felt ---- */
 .table-pot {
@@ -1967,6 +2072,73 @@
   font-size: 14px;
   color: var(--text);
 }
+/* Host-editable create settings (buy-in + fill window) */
+.lobby-create-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--hairline);
+}
+.lobby-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lobby-field-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-raised);
+  transition: border-color 0.15s var(--ease);
+}
+.lobby-field-input:focus-within {
+  border-color: var(--gold);
+  box-shadow: var(--glow-warm);
+}
+.lobby-field-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  outline: none;
+}
+/* Hide the number spinner — presets/typing cover it */
+.lobby-field-input input::-webkit-outer-spin-button,
+.lobby-field-input input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.lobby-field-input input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.lobby-field-unit {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.lobby-field-presets {
+  display: flex;
+  gap: 6px;
+}
+.lobby-field-presets .chip {
+  padding: 5px 0;
+  font-size: 12px;
+}
+.lobby-field-hint {
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 11px;
+}
+
 .lobby-cost {
   display: flex;
   justify-content: space-between;
@@ -2613,8 +2785,15 @@
   font-family: var(--font-ui);
 }
 .hud > .wr { pointer-events: none; }
-/* keep the brand + wallet header (and its dropdown) clickable above the rails */
+/* keep the brand + wallet header (and its dropdown) clickable above the rails,
+ * but only the two boxes themselves — the empty space between them (the header
+ * spans full width) must stay click-through, or it swallows clicks meant for
+ * whatever's underneath there (e.g. the price cabinet's centred tab row).
+ * `.hud > .hud-top` (not just `.hud-top`) to out-specificity global.css's
+ * `.hud > * { pointer-events: auto }`, which would otherwise win on source order. */
 .hud-top { position: relative; z-index: 5; }
+.hud > .hud-top { pointer-events: none; }
+.hud > .hud-top > * { pointer-events: auto; }
 
 /* ---- shared card chrome — antique brass plaque ---- */
 .wr-card {
@@ -3298,5 +3477,119 @@
   .txc-emblem--done .txc-emblem-core, .txc-emblem--done::after,
   .wr-ring--wait .wr-ring-arc, .wr-ring--wait .wr-ring-arc-glow {
     animation: none !important;
+  }
+}
+
+/* ============================================================================
+   Full-screen BTC/USD analysis chart — launched from the cabinet's brass
+   "CHART" button. Sits above every other layer (including the tx ceremony
+   veil); Esc or the × always hands the felt back.
+   ========================================================================== */
+.price-chart-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(10px, 3vw, 32px);
+  pointer-events: auto;
+  background:
+    radial-gradient(120% 90% at 50% 38%, rgba(90, 58, 20, 0.22), transparent 60%),
+    rgba(4, 3, 8, 0.86);
+  backdrop-filter: blur(16px) saturate(1.05);
+  -webkit-backdrop-filter: blur(16px) saturate(1.05);
+  animation: pco-veil 0.35s var(--ease);
+}
+@keyframes pco-veil {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.price-chart-panel {
+  position: relative;
+  width: min(1360px, 100%);
+  height: min(860px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel-strong);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow:
+    0 40px 120px rgba(0, 0, 0, 0.75),
+    0 0 0 1px rgba(243, 217, 138, 0.05) inset,
+    var(--glow-warm);
+  animation: pco-rise 0.4s var(--ease);
+}
+@keyframes pco-rise {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.price-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: linear-gradient(180deg, rgba(233, 196, 106, 0.06), transparent);
+}
+.price-chart-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--gold-bright);
+}
+.price-chart-title-sep {
+  color: var(--text-faint);
+  font-weight: 400;
+  margin: 0 2px;
+}
+.price-chart-sub {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+.price-chart-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  background: rgba(var(--gold-rgb, 212, 175, 55), 0.08);
+  color: var(--gold-bright);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.price-chart-close:hover {
+  background: rgba(var(--gold-rgb, 212, 175, 55), 0.18);
+  border-color: var(--gold-line);
+  transform: scale(1.06);
+}
+
+.price-chart-body {
+  flex: 1;
+  min-height: 0;
+  background: #0a0e13;
+}
+.price-chart-body .tradingview-widget-container__widget {
+  height: 100%;
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .price-chart-head {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+  }
+  .price-chart-sub {
+    order: 3;
+    flex-basis: 100%;
   }
 }
