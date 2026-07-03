@@ -138,6 +138,10 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
             "small_blind": row.small_blind,
             "big_blind": row.big_blind,
             "seal_window_sec": row.seal_window_sec,
+            // Needed by clients to compute the drand timelock target for sealing
+            // (target = round after seal_deadline + total_betting + begin_live_window).
+            "begin_live_window_sec": row.begin_live_window_sec,
+            "total_betting_duration_sec": row.total_betting_duration_sec(),
             "config_hash": row.config_hash.as_ref().map(hex::encode),
         },
         "timing": {

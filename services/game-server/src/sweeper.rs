@@ -23,7 +23,7 @@ async fn sweep(st: &AppState) -> Result<(), crate::error::ApiError> {
     let rows = client
         .query(
             &format!(
-                "SELECT {} FROM matches WHERE status NOT IN ('settled', 'voided')",
+                "SELECT {} FROM matches m WHERE m.status NOT IN ('settled', 'voided')",
                 db::MATCH_COLUMNS
             ),
             &[],
@@ -61,7 +61,7 @@ pub async fn recover_all(st: &AppState) -> Result<usize, crate::error::ApiError>
     let rows = client
         .query(
             &format!(
-                "SELECT {} FROM matches WHERE status NOT IN ('settled', 'voided')",
+                "SELECT {} FROM matches m WHERE m.status NOT IN ('settled', 'voided')",
                 db::MATCH_COLUMNS
             ),
             &[],

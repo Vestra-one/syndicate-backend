@@ -470,7 +470,7 @@ pub async fn get_room_code(
     let Some(row) = client
         .query_opt(
             &format!(
-                "SELECT {} FROM matches WHERE room_code = $1 AND status = 'filling'",
+                "SELECT {} FROM matches m WHERE m.room_code = $1 AND m.status = 'filling'",
                 db::MATCH_COLUMNS
             ),
             &[&code],

@@ -391,12 +391,15 @@ pub async fn prepare_settlement(
 /// Prefers the exact `priceInWad` from the signed payload; falls back to the numeric
 /// column + exponent.
 fn snapshot_price_wad(snapshot: &db::SealCloseSnapshot) -> Result<i128, String> {
+    // The signed-price-server payload carries the exact integer wad as top-level
+    // `price_in_wad` (snake_case). Prefer it — the human `price` string can carry f64
+    // formatting noise (e.g. "61978.565000…0003") that the decimal fallback can't scale.
     if let Some(wad) = snapshot
         .signed_payload
-        .pointer("/price/priceInWad")
+        .pointer("/price_in_wad")
         .and_then(Value::as_str)
     {
-        return wad.parse::<i128>().map_err(|e| format!("priceInWad: {e}"));
+        return wad.parse::<i128>().map_err(|e| format!("price_in_wad: {e}"));
     }
     // Numeric text like "64123.500000" with exponent −18: scale to wad.
     decimal_to_wad(&snapshot.price_text, snapshot.exponent)
@@ -410,15 +413,16 @@ fn decimal_to_wad(text: &str, _exponent: i32) -> Result<i128, String> {
         Some((i, f)) => (i, f),
         None => (text, ""),
     };
+    // Clamp fractional precision to the wad scale (exp −18). Anything beyond 18 places is
+    // below the representable resolution — and float-formatting noise there (e.g.
+    // "…0000003") would otherwise blow past i128 when concatenated. Truncate, don't error.
+    let frac_part: String = frac_part.chars().take(18).collect();
     let frac_part = frac_part.trim_end_matches('0');
     let digits: String = format!("{int_part}{frac_part}");
     let value: i128 = digits.parse().map_err(|e| format!("bad decimal: {e}"))?;
     let scale = 18i32 - frac_part.len() as i32;
-    if scale < 0 {
-        return Err("too many fractional digits".into());
-    }
     value
-        .checked_mul(10i128.pow(scale as u32))
+        .checked_mul(10i128.pow(scale.max(0) as u32))
         .ok_or_else(|| "wad overflow".to_string())
 }
 
@@ -434,6 +438,27 @@ mod tests {
             64_123_500_000_000_000_000_000
         );
         assert_eq!(decimal_to_wad("0.000001", -18).unwrap(), 1_000_000_000_000);
+    }
+
+    #[test]
+    fn decimal_to_wad_truncates_float_noise() {
+        // f64-formatting noise past 18 places must be truncated, not overflow the i128 parse.
+        let noisy = "61978.5650000000000000000000000000000000000000000000000000000000000000000000003";
+        assert_eq!(
+            decimal_to_wad(noisy, -18).unwrap(),
+            61_978_565_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn snapshot_prefers_signed_price_in_wad() {
+        let snap = db::SealCloseSnapshot {
+            price_text: "61978.565000000000000000000000000000003".into(),
+            exponent: -18,
+            signed_payload: serde_json::json!({ "price_in_wad": "61978565000000000000000" }),
+        };
+        // Uses the exact signed integer wad, ignoring the noisy human price string.
+        assert_eq!(snapshot_price_wad(&snap).unwrap(), 61_978_565_000_000_000_000_000);
     }
 
     #[test]

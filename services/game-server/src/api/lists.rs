@@ -93,9 +93,9 @@ pub async fn get_live(
     let rows = client
         .query(
             &format!(
-                r#"SELECT {} FROM matches
-                   WHERE status IN ('sealing', 'live', 'settlement_pending')
-                   ORDER BY live_start_ts DESC NULLS LAST LIMIT $1"#,
+                r#"SELECT {} FROM matches m
+                   WHERE m.status IN ('sealing', 'live', 'settlement_pending')
+                   ORDER BY m.live_start_ts DESC NULLS LAST LIMIT $1"#,
                 db::MATCH_COLUMNS
             ),
             &[&q.limit.clamp(1, 200)],
@@ -320,6 +320,39 @@ pub async fn get_claimables(
             "match_pda": syndicate_chain::pda::match_account(&st.program_id, onchain).0.to_string(),
             "kind": "refund",
             "reason": "candidate_not_confirmed_at_lock",
+            "refund_amount_hint": r.get::<_, Option<i64>>("buy_in_chips").unwrap_or(0)
+                + r.get::<_, i64>("entry_fee_chips"),
+        }));
+    }
+
+    // Depositors in a match that VOIDED BEFORE LOCK. `match_seats` is only populated at lock,
+    // so a pre-lock void (filling_void, or an emergency void while still filling) leaves the
+    // depositor with an on-chain refund but no match_seats row — surface it from the
+    // candidacy. Skip rows already covered by the match_seats path above (post-lock voids).
+    let rows = client
+        .query(
+            r#"
+            SELECT m.id, m.onchain_match_id, m.buy_in_chips, m.entry_fee_chips
+            FROM matches m
+            JOIN seat_candidates sc ON sc.match_id = m.id
+            WHERE sc.wallet = $1 AND m.status = 'voided'
+              AND sc.status IN ('reported', 'candidate', 'confirmed')
+              AND NOT EXISTS (
+                  SELECT 1 FROM match_seats ms
+                  WHERE ms.match_id = m.id AND ms.wallet_address = $1
+              )
+            "#,
+            &[&wallet],
+        )
+        .await?;
+    for r in &rows {
+        let onchain = r.get::<_, i64>("onchain_match_id") as u64;
+        claimables.push(json!({
+            "match_id": r.get::<_, uuid::Uuid>("id"),
+            "onchain_match_id": onchain,
+            "match_pda": syndicate_chain::pda::match_account(&st.program_id, onchain).0.to_string(),
+            "kind": "refund",
+            "reason": "voided_before_lock",
             "refund_amount_hint": r.get::<_, Option<i64>>("buy_in_chips").unwrap_or(0)
                 + r.get::<_, i64>("entry_fee_chips"),
         }));

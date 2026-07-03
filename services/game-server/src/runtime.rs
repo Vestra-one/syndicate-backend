@@ -315,7 +315,15 @@ impl Actor {
                 )
                 .await;
         }
-        self.evaluate_fill(true).await;
+        // This runs from BOTH the real fill-deadline timer and the sweeper `Poke` backstop.
+        // Only treat the fill window as elapsed once now >= fill_deadline_ts — otherwise a
+        // Poke would lock a merely quorum-met room (min ≤ n < max) long before its deadline.
+        let deadline_hit = self
+            .row
+            .fill_deadline_ts
+            .map(|d| now_ms() >= ts_ms(d))
+            .unwrap_or(false);
+        self.evaluate_fill(deadline_hit).await;
     }
 
     async fn confirmed_candidates(&self) -> Result<Vec<(String, i16)>, ApiError> {

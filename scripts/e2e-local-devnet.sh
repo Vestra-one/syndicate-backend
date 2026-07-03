@@ -27,7 +27,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # ---- config -------------------------------------------------------------------------
-[ -f deploy/.env ] && { set -a; . deploy/.env; set +a; }
+# Load deploy/.env WITHOUT shell-executing values (values like CORS_ALLOWED_ORIGINS contain
+# unquoted spaces/commas that `. deploy/.env` would try to run as commands). Read only
+# simple KEY=VALUE lines and export them verbatim.
+if [ -f deploy/.env ]; then
+  while IFS='=' read -r _k _v; do
+    case "$_k" in ''|\#*) continue ;; esac
+    export "$_k=$_v"
+  done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' deploy/.env)
+fi
 
 RPC="${SOLANA_RPC_URL:-${SOLANA_RPC_URL_PRIMARY:-https://api.devnet.solana.com}}"
 FUNDER="${FUNDER_KEYPAIR:-$HOME/.config/solana/id.json}"
@@ -114,7 +122,7 @@ fi
 
 # ---- 4. stack up + healthy ----------------------------------------------------------
 say "docker stack"
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env up -d >/dev/null
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env up -d --build >/dev/null
 say "waiting for health (game-server price feed + chain-worker RPC/signer)"
 for _ in $(seq 1 60); do
   gs="$(curl -s --max-time 4 "$GAME_SERVER_URL/healthz" 2>/dev/null || echo '{}')"
@@ -133,6 +141,8 @@ say "building + running the e2e suite"
 export GAME_SERVER_URL SOLANA_RPC_URL="$RPC" CHIPS_TOKEN_MINT="$MINT" BUY_IN
 export PLAYER1_KEYPAIR="$KEYDIR/player1.json" PLAYER2_KEYPAIR="$KEYDIR/player2.json"
 export PLAYER3_KEYPAIR="$KEYDIR/player3.json" ATTACKER_KEYPAIR="$KEYDIR/attacker.json"
+# Admin token for the API admin endpoints (first entry of ADMIN_TOKENS).
+export ADMIN_TOKEN="${ADMIN_TOKEN:-$(printf '%s' "${ADMIN_TOKENS:-}" | cut -d, -f1 | tr -d ' ')}"
 export E2E_SCENARIOS="${E2E_SCENARIOS:-all}"
 cargo run -q -p syndicate-e2e --bin e2e-devnet --release
 
