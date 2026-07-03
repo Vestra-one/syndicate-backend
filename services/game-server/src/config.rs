@@ -66,7 +66,12 @@ pub struct ServerConfig {
     pub database_url: String,
     pub rpc_url: String,
     pub program_id: String,
+    /// Primary/default chip mint (first entry of the allowlist) — the FE's default token.
     pub chips_token_mint: String,
+    /// Operator allowlist: the only SPL mints accepted as a match's chip token. A match's
+    /// mint is enforced against this set at create-tx verification; joiners inherit the
+    /// match mint on-chain, so this is the single control point.
+    pub chips_token_mints: Vec<String>,
     pub signed_price_server_url: String,
     pub admin_tokens: Vec<String>,
     pub cors_allowed_origins: Vec<String>,
@@ -89,6 +94,13 @@ impl ServerConfig {
                 database_url = inject_db_password(&database_url, pw.trim());
             }
         }
+        // Chip-token allowlist. `CHIPS_TOKEN_MINTS` (CSV) is the source of truth; the
+        // legacy singular `CHIPS_TOKEN_MINT` is a one-entry fallback. Primary = first.
+        let chips_token_mints = resolve_chip_mints(
+            &std::env::var("CHIPS_TOKEN_MINTS").unwrap_or_default(),
+            &std::env::var("CHIPS_TOKEN_MINT").unwrap_or_default(),
+        );
+        let chips_token_mint = chips_token_mints.first().cloned().unwrap_or_default();
         Ok(Self {
             port,
             database_url,
@@ -96,7 +108,8 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "https://api.devnet.solana.com".into()),
             program_id: std::env::var("SYNDICATE_PROGRAM_ID")
                 .unwrap_or_else(|_| syndicate_chain::PROGRAM_ID_STR.into()),
-            chips_token_mint: std::env::var("CHIPS_TOKEN_MINT").unwrap_or_default(),
+            chips_token_mint,
+            chips_token_mints,
             signed_price_server_url: std::env::var("SIGNED_PRICE_SERVER_URL")
                 .unwrap_or_else(|_| "http://localhost:8090".into()),
             admin_tokens: split_csv(&std::env::var("ADMIN_TOKENS").unwrap_or_default()),
@@ -118,6 +131,23 @@ impl ServerConfig {
             node_id: format!("game-server-{}", std::process::id()),
         })
     }
+
+    /// Whether `mint` (base58) is an operator-allowed chip token.
+    pub fn is_mint_allowed(&self, mint: &str) -> bool {
+        self.chips_token_mints.iter().any(|m| m == mint)
+    }
+}
+
+/// Resolve the chip-token allowlist: prefer the `CHIPS_TOKEN_MINTS` CSV; else fall back to
+/// the single `CHIPS_TOKEN_MINT`. De-dupes while preserving order (first = primary).
+pub fn resolve_chip_mints(csv: &str, single: &str) -> Vec<String> {
+    let mut v = split_csv(csv);
+    if v.is_empty() && !single.trim().is_empty() {
+        v.push(single.trim().to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|m| seen.insert(m.clone()));
+    v
 }
 
 fn split_csv(raw: &str) -> Vec<String> {
@@ -427,6 +457,44 @@ mod tests {
                 normalize_room_code(&format!(" {} ", code.to_lowercase()))
             );
         }
+    }
+
+    #[test]
+    fn chip_mint_allowlist_resolution() {
+        // CSV is source of truth, trims + de-dupes, preserves order.
+        assert_eq!(
+            resolve_chip_mints(" MintA, MintB ,MintA", "ignored"),
+            vec!["MintA".to_string(), "MintB".to_string()]
+        );
+        // Falls back to the single legacy var when the CSV is empty.
+        assert_eq!(
+            resolve_chip_mints("", " MintZ "),
+            vec!["MintZ".to_string()]
+        );
+        // Nothing configured → empty (create will 500 rather than accept any token).
+        assert!(resolve_chip_mints("", "").is_empty());
+
+        let cfg_allows = |mints: Vec<&str>, probe: &str| {
+            ServerConfig {
+                port: 0,
+                database_url: String::new(),
+                rpc_url: String::new(),
+                program_id: String::new(),
+                chips_token_mint: mints.first().map(|s| s.to_string()).unwrap_or_default(),
+                chips_token_mints: mints.iter().map(|s| s.to_string()).collect(),
+                signed_price_server_url: String::new(),
+                admin_tokens: vec![],
+                cors_allowed_origins: vec![],
+                geofence_blocklist: vec![],
+                drand_api: String::new(),
+                drand_chain_hash: String::new(),
+                node_id: String::new(),
+            }
+            .is_mint_allowed(probe)
+        };
+        assert!(cfg_allows(vec!["MintA", "MintB"], "MintB"));
+        assert!(!cfg_allows(vec!["MintA", "MintB"], "MintC"));
+        assert!(!cfg_allows(vec![], "MintA"));
     }
 
     #[test]

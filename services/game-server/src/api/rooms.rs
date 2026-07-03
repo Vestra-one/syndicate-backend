@@ -26,7 +26,10 @@ pub async fn get_config(State(st): State<AppState>) -> Json<Value> {
     Json(json!({
         "v": 1, "server_time_ms": now_ms(),
         "program_id": st.cfg.program_id,
+        // Default chip token + the full allowlist. The create form must restrict the token
+        // picker to `chips_token_mints`; the backend re-enforces it at create.
         "chips_token_mint": st.cfg.chips_token_mint,
+        "chips_token_mints": st.cfg.chips_token_mints,
         "feeds": config::FEEDS.iter().map(|(feed, sym, token)| json!({
             "feed": feed, "oracle_symbol": sym, "oracle_token": token,
         })).collect::<Vec<_>>(),
@@ -73,6 +76,10 @@ pub struct IntentBody {
     pub max_players: u8,
     pub streets: StreetsBody,
     pub visibility: String,
+    /// Chip token for this match. Must be one of the operator allowlist
+    /// (`GET /v1/config.chips_token_mints`). Defaults to the primary mint when omitted.
+    #[serde(default)]
+    pub chips_token_mint: Option<String>,
 }
 
 /// `POST /v1/rooms/intents` — validate, reserve an onchain_match_id, hand back everything
@@ -134,6 +141,21 @@ pub async fn post_intent(
     let visibility = match body.visibility.as_str() {
         "public" | "private" => body.visibility.clone(),
         _ => return Err(ApiError::bad_request("visibility must be public|private")),
+    };
+    // Chip token: caller-chosen but must be on the operator allowlist; default to primary.
+    let chips_token_mint = match &body.chips_token_mint {
+        Some(m) if st.cfg.is_mint_allowed(m) => m.clone(),
+        Some(m) => {
+            return Err(ApiError::bad_request(format!(
+                "chip token {m} is not in the allowed list"
+            )))
+        }
+        None => {
+            if st.cfg.chips_token_mint.is_empty() {
+                return Err(ApiError::internal("no chip token configured"));
+            }
+            st.cfg.chips_token_mint.clone()
+        }
     };
 
     // ---- derived params ----------------------------------------------------------------
@@ -204,6 +226,7 @@ pub async fn post_intent(
         "time_bank_sec": overlay.time_bank_sec,
         "small_blind": small_blind,
         "big_blind": big_blind,
+        "chips_token_mint": chips_token_mint,
         "config_hash": hex::encode(hash),
         "canonical_json": canonical_config_json(&canonical),
     });
@@ -233,6 +256,8 @@ pub async fn post_intent(
         "intent_id": intent_id,
         "onchain_match_id": onchain as u64,
         "match_pda": match_pda.to_string(),
+        // The FE must pass this exact SPL mint as the `mint` account of create_and_deposit.
+        "chips_token_mint": chips_token_mint,
         "room_code": room_code,
         "room_commitment": hex::encode(room_commitment),
         "config_hash": hex::encode(hash),
@@ -349,6 +374,10 @@ pub async fn post_room(
         .ok_or_else(|| ApiError::internal("intent missing config_hash"))?;
     let fill_window = g("fill_window_sec").as_u64().unwrap_or(300);
     let fill_deadline = chrono::Utc::now() + chrono::Duration::seconds(fill_window as i64);
+    let chips_token_mint: Option<String> = g("chips_token_mint")
+        .as_str()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
     let creator_room_commitment = room_code.as_ref().map(|code| {
         let pk: solana_sdk::pubkey::Pubkey = wallet.parse().expect("validated wallet");
         syndicate_chain::room_commitment(code, &pk).to_vec()
@@ -383,6 +412,7 @@ pub async fn post_room(
                 &(g("begin_live_window_sec").as_u64().unwrap_or(30) as i32),
                 &fill_deadline,
                 &Option::<i64>::None,
+                &chips_token_mint,
             ],
         )
         .await?;
@@ -470,6 +500,7 @@ pub async fn get_room_code(
         "match_pda": syndicate_chain::pda::match_account(&st.program_id, m.onchain_match_id).0.to_string(),
         "feed": m.feed_symbol,
         "buy_in": m.buy_in,
+        "chips_token_mint": m.mint,
         "min_players": m.min_players,
         "max_players": m.max_players,
         "seats_confirmed": counts.get::<_, i64>("confirmed"),

@@ -35,6 +35,7 @@ fn lobby_row(r: &tokio_postgres::Row) -> Value {
         "phase": r.get::<_, String>("status"),
         "feed": r.get::<_, Option<String>>("feed_symbol"),
         "buy_in": r.get::<_, Option<i64>>("buy_in_chips").unwrap_or(0),
+        "chips_token_mint": r.get::<_, Option<String>>("mint"),
         "min_players": r.get::<_, Option<i16>>("min_players"),
         "max_players": r.get::<_, Option<i16>>("max_players"),
         "round_count": r.get::<_, Option<i16>>("round_count"),
@@ -55,7 +56,7 @@ pub async fn get_lobby(
         .query(
             r#"
             SELECT m.id, m.onchain_match_id, m.status::text AS status, m.feed_symbol,
-                   m.buy_in_chips, m.min_players, m.max_players, m.round_count,
+                   m.buy_in_chips, m.mint, m.min_players, m.max_players, m.round_count,
                    m.fill_deadline_ts, m.created_at,
                    count(sc.*) FILTER (WHERE sc.status = 'confirmed') AS confirmed,
                    count(sc.*) FILTER (WHERE sc.status IN ('reported','candidate')) AS candidates
@@ -111,6 +112,7 @@ pub async fn get_live(
             "phase": m.status,
             "feed": m.feed_symbol,
             "buy_in": m.buy_in,
+            "chips_token_mint": m.mint,
             "round_count": m.round_count,
             "live_start": m.live_start_ts.map(ts_ms),
             "scheduled_end": m.scheduled_end_ts.map(ts_ms),

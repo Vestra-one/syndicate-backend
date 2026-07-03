@@ -13,7 +13,7 @@ reconnect, and claims. This is the single authoritative frontend guide for v2.
 | Price feed (read-only) | `https://price.devnet.satoshitable.fun` (`GET /prices`, WS `/ws`) |
 | Solana cluster | devnet |
 | Program id | `91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK` |
-| Chips mint (SPL) | `3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X` (6 decimals) |
+| Chips mint (SPL) | default `3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X` (6 decimals). **Not fixed** — the operator configures an allowlist; read `chips_token_mints` from `/v1/config` and let the creator pick one. |
 | IDL | [`docs/frontend/idl/syndicate_program.json`](idl/syndicate_program.json) |
 | drand beacon | quicknet — chain `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`, genesis `1692803367`, period `3s`, scheme `bls-unchained-g1-rfc9380` |
 
@@ -84,14 +84,26 @@ FE                                          backend                          cha
 - `create_params` is byte-exact: encode the fields in order with Borsh (or use the IDL);
   the server already computed `config_hash` (sha256 of the canonical param JSON — recipe
   in Appendix A) and `room_commitment` (zeroed 32 bytes for public rooms).
+- **Chip token**: the intent body accepts an optional `chips_token_mint` — it must be one of
+  `chips_token_mints` from `/v1/config` (400 otherwise); omit it to use the default. The
+  intent response echoes the chosen `chips_token_mint`; pass **that exact SPL mint** as the
+  `mint` account of `create_and_deposit`. The backend re-verifies the on-chain mint against
+  the allowlist and against the value it advertised — a mismatched mint is rejected at
+  confirm and the seat never seats. It is **not** part of `create_params` (it's an account).
 - Idempotent: re-POSTing the same `{intent_id, tx_sig}` returns the prior result.
 
 ## 5. Join a room
 
 **Public**: pick from `GET /v1/lobby`. **Private**: user pastes the code →
-`GET /v1/rooms/code/{code}` (session) → `200 {match_id, params, seats_confirmed,
-candidates, fill_deadline, join_commitment}` or `404` if unknown/expired/full.
+`GET /v1/rooms/code/{code}` (session) → `200 {match_id, params, chips_token_mint,
+seats_confirmed, candidates, fill_deadline, join_commitment}` or `404` if unknown/expired/full.
 `join_commitment = sha256(roomcode ‖ joiner_pubkey)` — the server computes it for you.
+
+**Use the match's token, not the global default.** A match can be denominated in any allowed
+token, so build the `deposit` against the match's `chips_token_mint` (present on lobby rows,
+`/v1/rooms/code/{code}`, and `GET /v1/matches/{id}.params.chips_token_mint`) — your
+`player_token` ATA must be for that mint. The contract enforces `player_token.mint ==
+match.mint`, so depositing the wrong token fails on-chain.
 
 ```
 │ build deposit(join_commitment) tx  ────────────────────────────────────► sign+send

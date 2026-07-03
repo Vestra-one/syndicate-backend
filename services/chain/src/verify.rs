@@ -44,6 +44,10 @@ pub struct VerifiedDeposit {
 pub struct VerifiedCreate {
     pub slot: u64,
     pub params: CreateParams,
+    /// The SPL mint the creator chose for this match's chip token (CreateAndDeposit
+    /// account index 2). Joiners inherit it on-chain, so the backend enforces its
+    /// allowlist here.
+    pub mint: Pubkey,
 }
 
 /// Fetch a finalized, successful transaction and return its decoded static account keys
@@ -214,7 +218,20 @@ pub async fn verify_create_tx(
         if keys.get(match_idx) != Some(&expected_match) {
             return Err(VerifyError::WrongMatch);
         }
-        return Ok(VerifiedCreate { slot, params });
+        // CreateAndDeposit account order: authority, protocol, mint, match, vault, seat, ...
+        let mint_idx = accounts
+            .get(2)
+            .copied()
+            .ok_or(VerifyError::Malformed("no mint account".into()))?
+            as usize;
+        let mint = *keys
+            .get(mint_idx)
+            .ok_or(VerifyError::Malformed("bad mint index".into()))?;
+        return Ok(VerifiedCreate {
+            slot,
+            params,
+            mint,
+        });
     }
     Err(VerifyError::WrongInstruction)
 }

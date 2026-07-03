@@ -125,6 +125,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "feed": row.feed_symbol,
         "params": {
             "buy_in": row.buy_in,
+            "chips_token_mint": row.mint,
             "entry_fee": row.entry_fee,
             "rake_bps": row.rake_bps,
             "rake_cap": row.rake_cap,

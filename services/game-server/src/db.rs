@@ -20,7 +20,7 @@ pub const MATCH_COLUMNS: &str = "\
     m.small_blind, m.big_blind, m.min_players, m.max_players, m.seal_window_sec, \
     m.begin_live_window_sec, m.fill_deadline_ts, m.lock_ts, m.seal_deadline_ts, \
     m.live_start_ts, m.scheduled_end_ts, m.button, m.button_seed, m.timelock_target, \
-    m.void_kind, m.event_count, m.event_head";
+    m.void_kind, m.event_count, m.event_head, m.mint";
 
 pub const INSERT_MATCH_V2_SQL: &str = r#"
 INSERT INTO matches (
@@ -28,13 +28,13 @@ INSERT INTO matches (
     room_commitment, feed_symbol, config_hash, buy_in_chips, entry_fee_chips, rake_bps,
     rake_cap_chips, round_count, round_durations_sec, observation_windows_sec,
     action_timeout_ms, time_bank_sec, small_blind, big_blind, min_players, max_players,
-    seal_window_sec, begin_live_window_sec, fill_deadline_ts, timelock_target
+    seal_window_sec, begin_live_window_sec, fill_deadline_ts, timelock_target, mint
 ) VALUES (
     $1, $2, ('filling'::text)::match_status, $3, $4, $5,
     $6, $7, $8, $9, $10, $11,
     $12, $13, $14, $15,
     $16, $17, $18, $19, $20, $21,
-    $22, $23, $24, $25
+    $22, $23, $24, $25, $26
 )
 ON CONFLICT (onchain_match_id) DO NOTHING
 RETURNING id
@@ -102,6 +102,9 @@ pub struct MatchRow {
     pub void_kind: Option<String>,
     pub event_count: u64,
     pub event_head: Vec<u8>,
+    /// The match's chip-token mint (base58). Set from the create intent / verifier; may be
+    /// null for matches created before the mint column existed.
+    pub mint: Option<String>,
 }
 
 impl MatchRow {
@@ -151,6 +154,7 @@ impl MatchRow {
             void_kind: row.get("void_kind"),
             event_count: row.get::<_, i64>("event_count") as u64,
             event_head: row.get("event_head"),
+            mint: row.get("mint"),
         })
     }
 

@@ -21,6 +21,9 @@ use crate::util::now_ms;
 pub struct VerifiedDeposit {
     pub slot: u64,
     pub join_commitment: [u8; 32],
+    /// The chip mint the creator chose (create_and_deposit only). `None` for joiner
+    /// deposits — they inherit the match mint on-chain, so there is nothing to re-check.
+    pub mint: Option<Pubkey>,
 }
 
 /// The RPC boundary, mockable for tests.
@@ -65,6 +68,7 @@ impl ChainVerify for RpcVerifier {
             .map(|v| VerifiedDeposit {
                 slot: v.slot,
                 join_commitment: v.join_commitment,
+                mint: None,
             })
             .map_err(|e| e.to_string())
     }
@@ -81,6 +85,7 @@ impl ChainVerify for RpcVerifier {
             .map(|v| VerifiedDeposit {
                 slot: v.slot,
                 join_commitment: v.params.room_commitment,
+                mint: Some(v.mint),
             })
             .map_err(|e| e.to_string())
     }
@@ -132,7 +137,7 @@ async fn tick(st: &AppState) -> Result<(), crate::error::ApiError> {
             r#"
             SELECT sc.id, sc.match_id, sc.wallet, sc.tx_sig, sc.reported_at,
                    m.onchain_match_id, m.visibility, m.room_code, m.buy_in_chips,
-                   m.creator_wallet, m.status::text AS match_status, m.max_players
+                   m.creator_wallet, m.status::text AS match_status, m.max_players, m.mint
             FROM seat_candidates sc
             JOIN matches m ON m.id = sc.match_id
             WHERE sc.status = 'reported'
@@ -155,6 +160,7 @@ async fn tick(st: &AppState) -> Result<(), crate::error::ApiError> {
         let creator: Option<String> = row.get("creator_wallet");
         let match_status: String = row.get("match_status");
         let max_players: i16 = row.get::<_, Option<i16>>("max_players").unwrap_or(5);
+        let match_mint: Option<String> = row.get("mint");
 
         let Ok(wallet) = wallet_str.parse::<Pubkey>() else {
             reject(st, candidate_id, "bad wallet").await;
@@ -173,6 +179,41 @@ async fn tick(st: &AppState) -> Result<(), crate::error::ApiError> {
 
         match verified {
             Ok(v) => {
+                // Chip-token allowlist. The mint is chosen at create_and_deposit; joiners
+                // inherit it on-chain (player_token.mint == match.mint), so enforcing it on
+                // the creator's tx is sufficient. Reject a match whose token is not allowed,
+                // or whose on-chain mint disagrees with the mint the intent advertised.
+                if is_creator {
+                    let Some(mint) = v.mint else {
+                        reject(st, candidate_id, "create tx missing chip mint").await;
+                        continue;
+                    };
+                    let mint_str = mint.to_string();
+                    if !st.cfg.is_mint_allowed(&mint_str) {
+                        reject(st, candidate_id, &format!("chip token not allowed: {mint_str}"))
+                            .await;
+                        continue;
+                    }
+                    if let Some(intended) = &match_mint {
+                        if intended != &mint_str {
+                            reject(
+                                st,
+                                candidate_id,
+                                &format!("chip mint mismatch: intent {intended}, tx {mint_str}"),
+                            )
+                            .await;
+                            continue;
+                        }
+                    } else if let Ok(client) = st.pool.get().await {
+                        // Backfill the match mint if the intent didn't set it.
+                        let _ = client
+                            .execute(
+                                "UPDATE matches SET mint = $2 WHERE id = $1 AND mint IS NULL",
+                                &[&match_id, &mint_str],
+                            )
+                            .await;
+                    }
+                }
                 // Private rooms: the tx's commitment must equal sha256(code ‖ wallet).
                 let room_ok = if visibility == "private" {
                     match &room_code {
