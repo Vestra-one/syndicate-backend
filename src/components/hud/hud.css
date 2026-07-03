@@ -202,6 +202,28 @@
   font-size: 12px;
   color: var(--text-dim);
 }
+/* whose move it is — one quiet line under the round label */
+.round-toact {
+  color: var(--gold-line);
+}
+/* round progress pips: one dot per round, filled up to the current one */
+.round-pips {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.round-pip {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(202, 162, 63, 0.35);
+}
+.round-pip--done {
+  background: var(--gold-bright);
+  border-color: var(--gold-bright);
+  box-shadow: 0 0 6px rgba(243, 217, 138, 0.5);
+}
 
 /* ---- Betting panel ---- */
 .betpanel {
@@ -414,6 +436,12 @@
 }
 .exposure-value--accent {
   color: var(--gold-bright);
+}
+.exposure-token {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
 }
 
 /* ---- Poker actions ---- */
@@ -907,6 +935,25 @@
   color: var(--text-dim);
   background: rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(202, 162, 63, 0.28);
+}
+
+/* dealer button — a small brass "D" chip riding the avatar's rim */
+.pod-dealer {
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  color: #1a1206;
+  background: radial-gradient(circle at 42% 34%, #fff2c4, var(--gold) 84%);
+  border: 1px solid rgba(255, 246, 214, 0.65);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
 }
 
 /* green "acted" checkmark, right edge */

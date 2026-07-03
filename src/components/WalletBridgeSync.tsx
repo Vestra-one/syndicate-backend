@@ -10,6 +10,7 @@ import { useEffect } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { walletBridge } from '@/lib/walletBridge'
+import { useGameStore } from '@/store/gameStore'
 export function WalletBridgeSync() {
   const { wallet, publicKey, connected } = useWallet()
   const { setVisible } = useWalletModal()
@@ -28,6 +29,11 @@ export function WalletBridgeSync() {
         walletBridge.onConnected = null
         walletBridge.onConnectError = null
         cb(publicKey.toBase58())
+      } else {
+        // No pending callback → this is the provider's silent autoConnect on page
+        // load (a returning player), not a user-initiated connect. If the wallet
+        // already holds a waiting/live seat, drop back into that table.
+        void useGameStore.getState().resumeActiveTable(publicKey.toBase58())
       }
     }
   }, [connected, publicKey])

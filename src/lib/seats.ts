@@ -1,15 +1,20 @@
 import type { PublicEvent, SeatIndex } from '@/lib/protocol'
+import { formatChips } from '@/lib/format'
 
 /**
  * Pseudonymous, seat-indexed aliases. The protocol never exposes opponent
  * wallets (§8) — only the seat index — so we derive a stable, characterful
  * table name from the seat. Deterministic: no identity is leaked.
+ *
+ * 'You' is intentionally NOT in this list — your own seat resolves via the
+ * `yourSeat` check, and every other seat must always read as an opponent
+ * (seat indices are engine-assigned, so any seat can be an opponent).
  */
-const ALIASES = ['You', 'The Banker', 'The Duchess', 'The Cardinal', 'The Stranger', 'The Marquis']
+const ALIASES = ['The Banker', 'The Duchess', 'The Cardinal', 'The Stranger', 'The Marquis', 'The Chancellor']
 
 export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
   if (seat === yourSeat) return 'You'
-  return ALIASES[seat] ?? `Seat ${seat}`
+  return ALIASES[seat] ?? `Seat ${seat + 1}`
 }
 
 /**
@@ -34,29 +39,31 @@ export function seatTag(seat: SeatIndex, yourSeat?: SeatIndex): SeatTag {
   return TAGS[seat % TAGS.length]
 }
 
-/** Human-readable line for the action feed. */
-export function describeEvent(e: PublicEvent, yourSeat?: SeatIndex): string {
+/** Human-readable line for the action feed. Amounts arrive in token base units. */
+export function describeEvent(e: PublicEvent, yourSeat?: SeatIndex, token = ''): string {
   const who = 'seat' in e ? seatAlias(e.seat, yourSeat) : ''
+  const you = who === 'You' // second-person conjugation ("You call", not "You calls")
   switch (e.kind) {
     case 'action': {
-      const amt = e.amount > 0 ? ` ${e.amount}` : ''
+      const amt = e.amount > 0 ? ` ${formatChips(e.amount)}${token ? ` ${token}` : ''}` : ''
+      const s = you ? '' : 's'
       const verb: Record<string, string> = {
-        check: 'checks',
-        call: `calls${amt}`,
-        betTo: `bets${amt}`,
-        raiseTo: `raises${amt}`,
-        allIn: `is all-in${amt}`,
-        fold: 'folds',
+        check: `check${s}`,
+        call: `call${s}${amt}`,
+        betTo: `bet${s}${amt}`,
+        raiseTo: `raise${s}${amt}`,
+        allIn: `${you ? 'are' : 'is'} all-in${amt}`,
+        fold: `fold${s}`,
       }
       return `${who} ${verb[e.action] ?? e.action}`
     }
     case 'fold':
-      return `${who} folds`
+      return `${who} fold${you ? '' : 's'}`
     case 'round':
       return `— Round ${e.round} —`
     case 'settlement':
       return `Settlement locked`
     case 'reveal':
-      return `${who}'s prediction opens`
+      return you ? 'Your prediction opens' : `${who}'s prediction opens`
   }
 }

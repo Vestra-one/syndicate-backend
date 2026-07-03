@@ -427,6 +427,68 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setDashboardSort: (key) => set({ dashboardSort: key }),
 
+  /**
+   * Returning-player reconnect (§ `GET /v1/wallets/{wallet}/active`). Called on the
+   * wallet's silent autoConnect: if the wallet already holds a seat in a waiting or
+   * live match, restore the table view (WaitingRoom while FILLING/SEALING, live HUD
+   * once LIVE) instead of leaving the player on the dashboard. Public reads + the WS
+   * challenge only — no Bearer handshake, so no signature prompt on page load.
+   */
+  resumeActiveTable: async (wallet) => {
+    if (resumeAttempted) return
+    resumeAttempted = true
+    // Don't hijack an explicit flow: a ?table=… invite, or a join/create in progress.
+    const s = get()
+    if (s.view !== 'discovery' || s.seated || s.playResolving || s.pendingInvite) return
+    set({ walletAddress: wallet })
+
+    let seat: { match_id: string; phase: string } | undefined
+    try {
+      const { active } = await api.getActive(wallet)
+      seat = active
+        .filter((a) => a.phase in RESUME_PHASE_RANK)
+        .sort((a, b) => RESUME_PHASE_RANK[a.phase] - RESUME_PHASE_RANK[b.phase])[0]
+    } catch (err) {
+      console.warn('[resume] active-seats lookup failed:', err)
+      return
+    }
+    if (!seat) return
+    // The user may have clicked Play Now while we awaited — re-check before taking over.
+    if (get().view !== 'discovery' || get().seated || get().playResolving) return
+
+    console.log('[resume] found active seat — match', seat.match_id, 'phase', seat.phase)
+    if (!adapters) adapters = createAdapters()
+    joinMatchId = seat.match_id
+    try {
+      const detail = await api.getMatch(seat.match_id)
+      set({
+        view: 'table',
+        seated: true,
+        playMode: null,
+        playResolving: false,
+        playError: null,
+        match: null,
+        feed: [],
+        settlement: null,
+        voided: null,
+        terms: matchDetailToTerms(detail),
+        // FILLING details carry no seats (engine seats assign at lock) — WS `seat_update`
+        // delivers the live confirmed count right after subscribe.
+        lobbySeated: detail.seats.length > 0 ? detail.seats.length : null,
+        fillDeadline: detail.timing.fill_deadline != null ? toEpochMs(detail.timing.fill_deadline) : null,
+        roundStartedAt: detail.timing.live_start != null ? toEpochMs(detail.timing.live_start) : null,
+      })
+    } catch (err) {
+      console.warn('[resume] match detail failed — staying on dashboard:', err)
+      joinMatchId = null
+      return
+    }
+    resetActionChain()
+    await get().connect()
+    subscribeMatch(seat.match_id)
+    void refreshBalance(set)
+  },
+
   /** Spectate a table from the dashboard: open the WS, subscribe to its match channel,
    *  and seed terms from REST detail for an instant render (§6). No auth needed to watch. */
   enterTable: async (matchId) => {

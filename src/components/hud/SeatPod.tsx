@@ -25,6 +25,8 @@ export interface SeatPodProps {
   folded?: boolean
   checked?: boolean
   timer?: string
+  /** holds the dealer button this hand */
+  dealer?: boolean
   side?: 'left' | 'right'
   size?: 'full' | 'compact'
   /** an unfilled chair — renders a locked, muted placeholder */
@@ -55,6 +57,7 @@ export function SeatPod({
   folded,
   checked,
   timer,
+  dealer,
   side = 'left',
   size = 'full',
   empty,
@@ -104,6 +107,12 @@ export function SeatPod({
       </div>
 
       {seatNo != null && !empty && <span className="pod-seatno">{seatNo}</span>}
+
+      {dealer && !empty && (
+        <span className="pod-dealer" title="Dealer button" aria-label="Dealer button">
+          D
+        </span>
+      )}
 
       {checked && (
         <span className="pod-check" aria-hidden="true">

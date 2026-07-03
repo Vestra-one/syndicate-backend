@@ -21,7 +21,7 @@ import { SeatPod, type StatusTone } from './SeatPod'
 export function Seats() {
   const match = useGameStore((s) => s.match)
   const feed = useGameStore((s) => s.feed)
-  const token = useGameStore((s) => s.terms?.chipsToken ?? 'ETH')
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   const actionSecs = useGameStore((s) => s.terms?.actionTimerSec ?? 0)
   if (!match) return null
   // Opponents in stable seat order, laid out symmetrically for this table size
@@ -44,7 +44,7 @@ export function Seats() {
           actionSecs={actionSecs}
         />
       ))}
-      {match.pot > 0 && <Pot amount={match.pot} />}
+      {match.pot > 0 && <Pot amount={match.pot} token={token} />}
     </div>
   )
 }
@@ -83,7 +83,12 @@ function podStatus(
   if (seat.allIn) return { text: `All in · ${formatChips(seat.totalContribution)} ${token}`, tone: 'allin' }
 
   const a = lastAction(feed, seat.seat)
-  const amt = seat.committedThisStreet > 0 ? `${formatChips(seat.committedThisStreet)} ${token}` : ''
+  // committedThisStreet only refreshes on snapshots; between them the feed
+  // event's own amount is fresher, so prefer whichever is non-zero.
+  const committed = seat.committedThisStreet > 0
+    ? seat.committedThisStreet
+    : a?.kind === 'action' ? a.amount : 0
+  const amt = committed > 0 ? `${formatChips(committed)} ${token}` : ''
   if (a?.kind === 'action') {
     switch (a.action) {
       case 'raiseTo':
@@ -128,14 +133,21 @@ function OpponentPod({
   const [turnStart, setTurnStart] = useState<number | null>(null)
   useEffect(() => { setTurnStart(active ? Date.now() : null) }, [active])
 
+  // Once the estimate hits zero the server is auto-acting for them — a pinned
+  // "0s" pip reads as broken, so drop the pip and let the status line carry it.
   let timer: string | undefined
+  let timedOut = false
   if (active) {
+    let remaining: number | null = null
     if (seat.seat === match.yourSeat && yourTurn) {
-      timer = `${Math.max(0, Math.ceil((yourTurn.deadline - now) / 1000))}s`
+      remaining = Math.ceil((yourTurn.deadline - now) / 1000)
     } else if (turnStart && actionSecs > 0) {
-      timer = `${Math.max(0, Math.ceil(actionSecs - (now - turnStart) / 1000))}s`
+      remaining = Math.ceil(actionSecs - (now - turnStart) / 1000)
     }
+    if (remaining != null && remaining > 0) timer = `${remaining}s`
+    else if (remaining != null) timedOut = true
   }
+  const shownStatus = timedOut ? { text: 'Timing out', tone: 'thinking' as StatusTone } : status
 
   return (
     <div ref={ref} className="table-seat" style={{ opacity: 0 }}>
@@ -143,13 +155,14 @@ function OpponentPod({
         name={alias}
         seatNo={seat.seat + 1}
         emblem={sigil ?? monogram(alias)}
-        status={status}
+        status={shownStatus}
         stack={`${formatChips(seat.stack)} ${token}`}
         tag={seatTag(seat.seat, match.yourSeat)}
         active={active}
         folded={seat.folded}
         checked={status.tone === 'called'}
         timer={timer}
+        dealer={match.buttonSeat === seat.seat}
         side={angle < 0 ? 'left' : 'right'}
       />
     </div>
@@ -192,6 +205,15 @@ const SIGILS: Record<string, ReactElement> = {
       d="M4 11c5-2 19-2 24 0 1 6-3 11-8 11-2 0-3-1-4-2-1 1-2 2-4 2-5 0-9-5-8-11zM9 13a3 2.2 0 1 0 6 0 3 2.2 0 1 0-6 0zM17 13a3 2.2 0 1 0 6 0 3 2.2 0 1 0-6 0z"
     />
   ),
+  // Chancellor — a ceremonial key
+  'The Chancellor': (
+    <g fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="5.5" />
+      <path d="M15 15l11 11" />
+      <path d="M21 21l3.5-3.5" />
+      <path d="M25 25l3.5-3.5" />
+    </g>
+  ),
   // Marquis — a fleur-de-lis
   'The Marquis': (
     <g fill="currentColor">
@@ -204,14 +226,14 @@ const SIGILS: Record<string, ReactElement> = {
   ),
 }
 
-function Pot({ amount }: { amount: number }) {
+function Pot({ amount, token }: { amount: number; token: string }) {
   const ref = useAnchor(useCallback(() => projectPot(), []))
   // The chips themselves are real 3D coins in the Three.js scene (see pot.ts);
   // the HUD only carries the amount label, floated just above the pile.
   return (
     <div ref={ref} className="table-pot" style={{ opacity: 0 }}>
-      <div className="pot-eyebrow eyebrow">pot</div>
-      <div className="pot-amount mono">{amount}</div>
+      <div className="pot-eyebrow eyebrow">pot · {token}</div>
+      <div className="pot-amount mono">{formatChips(amount)}</div>
     </div>
   )
 }

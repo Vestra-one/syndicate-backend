@@ -50,7 +50,9 @@ export function YourPosition() {
         <div className="position-row eyebrow">
           <span>seat {match.yourSeat + 1}</span>
           <span className="mono">stack {formatChips(match.yourStack ?? 0)}</span>
-          <span className="mono">committed {formatChips(match.yourExposure ?? 0)}</span>
+          <span className="mono">
+            committed {formatChips(match.yourExposure ?? 0)} {terms?.chipsToken ?? 'USDC'}
+          </span>
         </div>
       )}
 

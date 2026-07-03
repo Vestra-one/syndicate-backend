@@ -9,6 +9,7 @@ import { describeEvent } from '@/lib/seats'
 export function ActionFeed() {
   const feed = useGameStore((s) => s.feed)
   const yourSeat = useGameStore((s) => s.match?.yourSeat)
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   if (feed.length === 0) return null
 
   const recent = [...feed].slice(-7).reverse()
@@ -19,7 +20,7 @@ export function ActionFeed() {
       <ul className="feed-list">
         {recent.map((e, i) => (
           <li key={`${e.ts}-${i}`} className={`feed-row feed-row--${e.kind} ${i === 0 ? 'feed-row--new' : ''}`}>
-            {describeEvent(e, yourSeat)}
+            {describeEvent(e, yourSeat, token)}
           </li>
         ))}
       </ul>

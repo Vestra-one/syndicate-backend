@@ -1,4 +1,6 @@
 import { useGameStore } from '@/store/gameStore'
+import { formatChips } from '@/lib/format'
+import { seatAlias } from '@/lib/seats'
 import type { MatchPhase } from '@/lib/protocol'
 import { useWaiting } from './WaitingRoom'
 
@@ -34,22 +36,37 @@ export function RoundStatus() {
     )
   }
 
-  const label =
-    match.phase === 'LIVE'
-      ? `Round ${match.round} of ${terms?.roundCount ?? match.round}`
-      : PHASE_COPY[match.phase]
+  const live = match.phase === 'LIVE'
+  const roundCount = terms?.roundCount ?? match.round
+  const token = terms?.chipsToken ?? 'USDC'
+  const label = live ? `Round ${match.round} of ${roundCount}` : PHASE_COPY[match.phase]
+
+  // Whose move it is, phrased from your side of the felt.
+  const toAct =
+    live && match.toActSeat != null
+      ? match.toActSeat === match.yourSeat
+        ? 'Your move'
+        : `${seatAlias(match.toActSeat, match.yourSeat)} to act`
+      : null
 
   return (
     <div>
       <div className={`round panel round--${match.phase.toLowerCase()}`}>
         <div className="round-head">
           <span className="eyebrow">{PHASE_COPY[match.phase]}</span>
-          <span className="round-clock mono">{match.pot}</span>
+          {live && roundCount > 1 && (
+            <span className="round-pips" aria-label={label}>
+              {Array.from({ length: roundCount }, (_, i) => (
+                <i key={i} className={i < match.round ? 'round-pip round-pip--done' : 'round-pip'} />
+              ))}
+            </span>
+          )}
         </div>
         <div className="round-label">{label}</div>
+        {toAct && <div className="round-toact eyebrow">{toAct}</div>}
         <div className="round-prices mono">
-          <span>pot {match.pot}</span>
-          <span>current bet {match.currentBet}</span>
+          <span>pot {formatChips(match.pot)} {token}</span>
+          <span>bet {formatChips(match.currentBet)} {token}</span>
         </div>
       </div>
     </div>

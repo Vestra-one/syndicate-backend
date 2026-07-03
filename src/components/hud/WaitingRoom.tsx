@@ -322,6 +322,7 @@ function HowItWorksCard({ max }: { max: number }) {
 function RecentActivityCard() {
   const feed = useGameStore((s) => s.feed)
   const yourSeat = useGameStore((s) => s.match?.yourSeat)
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   const now = useNow(15_000)
   const recent = [...feed].slice(-4).reverse()
 
@@ -337,7 +338,7 @@ function RecentActivityCard() {
           {recent.map((e, i) => (
             <li key={`${e.ts}-${i}`} className="wr-activity-row">
               <span className="wr-activity-dot" aria-hidden="true" />
-              <span className="wr-activity-text">{describeEvent(e, yourSeat)}</span>
+              <span className="wr-activity-text">{describeEvent(e, yourSeat, token)}</span>
               <span className="wr-activity-ago mono">{ago(e.ts, now)}</span>
             </li>
           ))}

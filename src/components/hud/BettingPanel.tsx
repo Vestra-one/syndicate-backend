@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { useNow } from '@/lib/useNow'
-import { formatClock } from '@/lib/format'
+import { formatChips, formatClock } from '@/lib/format'
+import { seatAlias } from '@/lib/seats'
 import type { BettingAction } from '@/lib/protocol'
 import { useWaiting } from './WaitingRoom'
 
@@ -119,16 +120,20 @@ function SealedWaitingPanel() {
   )
 }
 
+/**
+ * Not your move — say WHO the table is waiting on instead of a dead
+ * "waiting…" (your own stack/committed already live in YourPosition, so
+ * repeating them here was pure noise).
+ */
 function WaitingPanel() {
-  const exposure = useGameStore((s) => s.match?.yourExposure ?? 0)
-  const stack = useGameStore((s) => s.match?.yourStack ?? 0)
+  const toActSeat = useGameStore((s) => s.match?.toActSeat)
+  const yourSeat = useGameStore((s) => s.match?.yourSeat)
+  const alias = toActSeat != null ? seatAlias(toActSeat, yourSeat) : null
   return (
     <div className="betpanel panel">
       <div className="panel-title">Live</div>
-      <div className="betpanel-locked eyebrow">waiting for your turn…</div>
-      <div className="exposure">
-        <Exposure label="committed" value={exposure} />
-        <Exposure label="stack" value={stack} />
+      <div className="betpanel-locked eyebrow">
+        {alias ? `${alias} is deciding…` : 'waiting for the next turn…'}
       </div>
     </div>
   )
@@ -138,15 +143,20 @@ function ActionPanel() {
   const match = useGameStore((s) => s.match)!
   const yourTurn = useGameStore((s) => s.yourTurn)!
   const act = useGameStore((s) => s.act)
+  const terms = useGameStore((s) => s.terms)
   const now = useNow()
 
+  const token = terms?.chipsToken ?? 'USDC'
   const stack = match.yourStack ?? 0
   const exposure = match.yourExposure ?? 0
   const { toCall, minRaiseTo, deadline } = yourTurn
   const remaining = Math.max(0, deadline - now)
 
+  // raiseTo is kept in token base units (what the engine speaks); the input
+  // edits it in whole-token terms so the player types "0.02", never "20000".
   const [raiseTo, setRaiseTo] = useState(minRaiseTo)
   useEffect(() => setRaiseTo(minRaiseTo), [minRaiseTo])
+  const step = terms?.bigBlind ?? 10_000
 
   const send = (action: BettingAction) => act(action)
   const canRaise = stack > toCall
@@ -160,9 +170,9 @@ function ActionPanel() {
       </div>
 
       <div className="exposure">
-        <Exposure label="to call" value={toCall} accent />
-        <Exposure label="committed" value={exposure} />
-        <Exposure label="stack" value={stack} />
+        <Exposure label="to call" value={toCall} token={token} accent />
+        <Exposure label="committed" value={exposure} token={token} />
+        <Exposure label="stack" value={stack} token={token} />
       </div>
 
       <div className="poker-actions">
@@ -179,11 +189,11 @@ function ActionPanel() {
             onClick={() => send({ type: 'call' })}
             disabled={stack === 0}
           >
-            Call {toCall}
+            Call {formatChips(toCall)}
           </button>
         )}
         <button className="pk-btn pk-allin" onClick={() => send({ type: 'allIn' })}>
-          All-in {stack}
+          All-in {formatChips(stack)}
         </button>
       </div>
 
@@ -192,16 +202,17 @@ function ActionPanel() {
           <input
             className="raise-input mono"
             type="number"
-            min={minRaiseTo}
-            value={raiseTo}
-            onChange={(e) => setRaiseTo(Number(e.target.value))}
+            min={minRaiseTo / 1e6}
+            step={step / 1e6}
+            value={raiseTo / 1e6}
+            onChange={(e) => setRaiseTo(Math.round(Number(e.target.value) * 1e6))}
           />
           <button
             className="pk-btn pk-raise"
             onClick={() => send({ type: 'raiseTo', amount: raiseTo })}
             disabled={!raiseValid}
           >
-            Raise to {raiseTo}
+            Raise to {formatChips(raiseTo)}
           </button>
         </div>
       )}
@@ -209,11 +220,13 @@ function ActionPanel() {
   )
 }
 
-function Exposure({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+function Exposure({ label, value, token, accent }: { label: string; value: number; token: string; accent?: boolean }) {
   return (
     <div className="exposure-item">
       <span className="eyebrow">{label}</span>
-      <span className={`mono exposure-value ${accent ? 'exposure-value--accent' : ''}`}>{value}</span>
+      <span className={`mono exposure-value ${accent ? 'exposure-value--accent' : ''}`}>
+        {formatChips(value)} <span className="exposure-token">{token}</span>
+      </span>
     </div>
   )
 }
