@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -16,12 +16,21 @@ export default defineConfig(({ mode }) => {
     ? { Authorization: `Basic ${Buffer.from(`${devUser}:${devPass}`).toString('base64')}` }
     : {}
 
-  const proxyEntry = (prefix: string, target: string) => ({
+  const proxyEntry = (prefix: string, target: string): ProxyOptions => ({
     target,
     changeOrigin: true,
     secure: false, // devnet TLS cert doesn't cover all subdomains
     rewrite: (path: string) => path.replace(new RegExp(`^${prefix}`), ''),
-    headers: proxyHeaders,
+    // Inject Basic auth ONLY when the browser sent no Authorization header — the v2
+    // session flow sends `Authorization: Bearer <token>`, and a blanket `headers:`
+    // override would clobber it (the server then 401s "missing Bearer token").
+    configure: (proxy) => {
+      proxy.on('proxyReq', (proxyReq) => {
+        if (proxyHeaders.Authorization && !proxyReq.getHeader('authorization')) {
+          proxyReq.setHeader('Authorization', proxyHeaders.Authorization)
+        }
+      })
+    },
   })
 
   return {

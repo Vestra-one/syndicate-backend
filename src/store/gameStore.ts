@@ -130,6 +130,9 @@ interface GameState {
   openPriceChart: () => void
   closePriceChart: () => void
   setDashboardSort: (key: DashboardSortKey) => void
+  /** Returning player: if the wallet already holds a waiting/live seat, skip the
+   *  dashboard and drop straight back into that table (§ reconnect). */
+  resumeActiveTable: (wallet: string) => Promise<void>
   enterTable: (matchId: string) => Promise<void>
   leaveToDiscovery: () => void
   backToDashboard: () => void
@@ -287,6 +290,17 @@ function subscribeMatch(matchId: string, lastSeq = 0) {
 let createCtx: { config: ApiConfig; feed: string; intent: CreateIntentResponse | null } | null = null
 /** The match UUID we resolved to JOIN — target of the deposit POST + candidate polling. */
 let joinMatchId: string | null = null
+
+/** One-shot latch: only auto-resume once per page load (wallet autoConnect can re-fire). */
+let resumeAttempted = false
+
+/** Reconnect priority — a live game outranks a still-filling one if the wallet holds both. */
+const RESUME_PHASE_RANK: Record<string, number> = {
+  live: 0,
+  sealing_closed: 1,
+  sealing: 2,
+  filling: 3,
+}
 
 /**
  * Turn a raw deposit error into a user-facing message. `simulateSignAndSend` throws
@@ -489,14 +503,20 @@ export const useGameStore = create<GameState>((set, get) => ({
         return
       }
       joinMatchId = detail.match_id
-      const seated = detail.seats.length
+      // During FILLING `detail.seats` is EMPTY (engine seats assign at lock) — the confirmed
+      // count lives on the lobby listing; WS `seat_update` keeps it live from here on.
+      const listed = get().upcomingGames.find((g) => g.matchId === matchId)
       set({
         terms: matchDetailToTerms(detail),
-        lobbySeated: seated,
+        lobbySeated: listed?.seated ?? detail.seats.length,
         playMode: 'join',
         playResolving: false,
         fillDeadline: detail.timing.fill_deadline != null ? toEpochMs(detail.timing.fill_deadline) : null,
       })
+      // Watch the room live (spectate needs no auth) — seat_update/phase flow pre-deposit.
+      resetActionChain()
+      await get().connect()
+      subscribeMatch(matchId)
     } catch (err) {
       const msg = err instanceof ApiError && err.status === 404
         ? 'That table just closed or expired — pick another.'

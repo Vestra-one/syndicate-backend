@@ -54,8 +54,8 @@ export interface CreateAndDepositInput {
   sealWindowSec: number
   beginLiveWindowSec: number
   fillWindowSec: number
-  /** Signed-price confidence gate; 0 for the company signed-price path (not Pyth-gated). */
-  maxOracleConfidence?: number
+  /** Signed-price confidence gate (u64 — may be a decimal string when ≥ 2^53, e.g. u64::MAX). */
+  maxOracleConfidence?: number | string
   /** Fixed exponent the settlement price is quoted at (−18 = WAD). */
   oracleExponent?: number
 }

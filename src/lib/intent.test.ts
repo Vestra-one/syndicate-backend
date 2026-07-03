@@ -107,6 +107,22 @@ describe('default & prediction messages — domain tags + lengths', () => {
   })
 })
 
+describe('parseJsonU64Safe — u64 fields survive JSON.parse', () => {
+  it('quotes u64::MAX (the create_params max_oracle_confidence case)', async () => {
+    const { parseJsonU64Safe } = await import('./api')
+    const j = parseJsonU64Safe('{"max_oracle_confidence":18446744073709551615,"oracle_exponent":-18}') as Record<string, unknown>
+    expect(j.max_oracle_confidence).toBe('18446744073709551615') // exact, as a string
+    expect(j.oracle_exponent).toBe(-18)
+  })
+  it('leaves normal numbers, ms timestamps, and string values untouched', async () => {
+    const { parseJsonU64Safe } = await import('./api')
+    const j = parseJsonU64Safe('{"buy_in":1000000,"expires_at":1783080695231,"sig":"5K1x","nested":{"a":[1,2]}}') as Record<string, unknown>
+    expect(j.buy_in).toBe(1_000_000)
+    expect(j.expires_at).toBe(1_783_080_695_231) // 13 digits — stays numeric
+    expect(j.sig).toBe('5K1x')
+  })
+})
+
 describe('hex helpers', () => {
   it('roundtrips a 32-byte hex string', () => {
     const h = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'

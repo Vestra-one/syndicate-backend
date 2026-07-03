@@ -12,9 +12,10 @@
  */
 import type { Chips } from '@/lib/protocol'
 
-// In local dev (VITE_DEVNET_USER set) the browser hits the same-origin Vite proxy, which
-// injects basic-auth and forwards to VITE_API_URL (already `.../v1`), sidestepping CORS.
-// In prod we hit VITE_API_URL directly. Either way, route paths below omit the `/v1`.
+// v2 talks to VITE_API_URL (already `.../v1`) DIRECTLY — the server has open CORS and no
+// basic auth, and the session's `Authorization: Bearer` must reach it untouched. The
+// legacy VITE_DEVNET_USER proxy branch remains only for local backends that still need
+// header injection; the proxy passes Bearer through (vite.config.ts) when set.
 const API_BASE = (import.meta.env.VITE_DEVNET_USER as string | undefined)
   ? '/api-proxy'
   : (import.meta.env.VITE_API_URL as string | undefined)
@@ -148,7 +149,19 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
     }
     throw new ApiError(code, message, res.status)
   }
-  return (await res.json()) as T
+  return parseJsonU64Safe(await res.text()) as T
+}
+
+/**
+ * JSON.parse that survives u64-sized integers. The backend emits full u64s (e.g.
+ * `max_oracle_confidence: 18446744073709551615` = u64::MAX in create_params), which
+ * JSON.parse silently rounds to a float (→ wrong Borsh bytes on-chain, and BN.js throws
+ * a bare "Assertion failed" for numbers ≥ 2^53). Quote any ≥16-digit integer value into
+ * a string pre-parse; consumers (BN) accept decimal strings losslessly.
+ */
+export function parseJsonU64Safe(text: string): unknown {
+  const quoted = text.replace(/("[^"]+"\s*:\s*)(\d{16,})(\s*[,}\]])/g, '$1"$2"$3')
+  return JSON.parse(quoted)
 }
 
 function postJson<T>(path: string, body: unknown, auth: boolean): Promise<T> {
@@ -213,7 +226,8 @@ export interface ApiCreateParams {
   seal_window_sec: number
   begin_live_window_sec: number
   fill_window_sec: number
-  max_oracle_confidence: number
+  /** u64 — arrives as a decimal STRING when ≥16 digits (u64::MAX today; see parseJsonU64Safe). */
+  max_oracle_confidence: number | string
   oracle_exponent: number
 }
 

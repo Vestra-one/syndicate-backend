@@ -29,11 +29,14 @@ export function useWaiting() {
   const match = useGameStore((s) => s.match)
   const terms = useGameStore((s) => s.terms)
   const fillDeadline = useGameStore((s) => s.fillDeadline)
+  const lobbySeated = useGameStore((s) => s.lobbySeated)
 
   // Seated, and the match hasn't advanced past the join window (FILLING, or the
   // gateway's transient "UNKNOWN" for a freshly-created room it has no engine for yet).
   const active = seated && (!match || !PAST_FILLING_PHASES.includes(match.phase))
-  const filled = Math.max(match?.seats.length ?? 0, seated ? 1 : 0)
+  // During FILLING the snapshot's `seats` is EMPTY (engine seats are assigned at lock) —
+  // the live confirmed count arrives via WS `seat_update` → store.lobbySeated (§5).
+  const filled = Math.max(match?.seats.length ?? 0, lobbySeated ?? 0, seated ? 1 : 0)
   const min = terms?.minPlayers ?? 2
   const max = Math.max(terms?.maxPlayers ?? 0, filled, min)
   return { active, filled, min, max, enough: filled >= min, fillDeadline, terms, match }
@@ -48,7 +51,7 @@ export function WaitingRoom() {
   if (!w.active) return null
   return (
     <div className="wr">
-      <SeatRing max={w.max} match={w.match} />
+      <SeatRing max={w.max} match={w.match} filled={w.filled} />
       <FeltCaption filled={w.filled} max={w.max} min={w.min} enough={w.enough} />
 
       <aside className="wr-rail wr-rail--left">
@@ -73,10 +76,15 @@ export function WaitingRoom() {
 // chairs as locked "open seat" chips. All pinned to the 3D table's rim.
 // ---------------------------------------------------------------------------
 
-function SeatRing({ max, match }: { max: number; match: ReturnType<typeof useWaiting>['match'] }) {
+function SeatRing({ max, match, filled }: { max: number; match: ReturnType<typeof useWaiting>['match']; filled: number }) {
   const yourSeat = match?.yourSeat ?? 0
   const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   const byIndex = new Map((match?.seats ?? []).map((s) => [s.seat, s]))
+
+  // During FILLING the engine hasn't assigned seats yet (snapshot.seats is empty), but we
+  // know how many players are confirmed (`filled`, from WS seat_update). Show the extras
+  // as anonymous "Seated" pods in the first open slots so joins are visible immediately.
+  let anonLeft = Math.max(0, filled - 1 - (match?.seats.filter((s) => s.seat !== yourSeat).length ?? 0))
 
   // Every chair gets a fixed slot by seat index (0→leftmost … max-1→rightmost),
   // fanned across the front of the felt clear of the cabinet. Your chair is a lit
@@ -93,9 +101,10 @@ function SeatRing({ max, match }: { max: number; match: ReturnType<typeof useWai
           </SeatSlot>
         }
         const sv = byIndex.get(seat)
+        const showAnon = !sv && anonLeft > 0 && (anonLeft--, true)
         return (
           <SeatSlot key={seat} angle={angle} side={side}>
-            {sv ? (
+            {sv || showAnon ? (
               <SeatPod
                 size="compact"
                 side={side}
@@ -103,7 +112,7 @@ function SeatRing({ max, match }: { max: number; match: ReturnType<typeof useWai
                 seatNo={seat + 1}
                 emblem={personaEmblem(seatAlias(seat, yourSeat))}
                 status={{ text: 'Seated', tone: 'seated' }}
-                stack={`${formatChips(sv.stack)} ${token}`}
+                stack={sv ? `${formatChips(sv.stack)} ${token}` : undefined}
                 tag={seatTag(seat, yourSeat)}
               />
             ) : (
