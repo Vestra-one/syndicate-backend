@@ -1,5 +1,6 @@
 Role: Expert principle RUST/Solana backend developer
-Context: The syndicate-backend repo contains the backend logic for the price prediction poker game. The repo already has exisitng game logic code. But it does not fullfill the complete requirement of the game that can be sucessfully integrated on the UI and that have all the below feature.  
+Context: The syndicate-backend repo contains the backend logic for the price prediction poker game. The repo already has exisitng game logic code. But it does not fullfill the complete requirement of the game that can be sucessfully integrated on the UI and that have all the below feature.
+THe current repo is bloated, have multiple bugs and is not accurate wrt to features as well as requirements. 
 
 Feature-wise requirements of the backend:
 1. Create Game -
@@ -41,17 +42,19 @@ b. Private - On this section user can paste the room code, and if the room code 
 
 3. Historical games - This will show all the sucessfull games that have happened till now.
 
-<Syndicate-backend review>
-Read the existing backend code and evaluate the condition if the repo is good enough to fix/refactor to implement all the above features and requirements of the game. Other wise read code to understand the different sections of the code and will it helpful in implementing the backend in other directory.
+<Syndicate-backend review and context collection>
+Read the existing backend code(Don't read any documentation/plans md files) and understand the context of the game.
 
 <Task>
 The deliverable are -
-1. Complete implementation of the backend with the above explained features.
+1. Complete implementation of the new v2 backend with the above explained features.
 2. Backend must be able to handle 1000 users concurrently.
 3. Repo must have deployment script and config files along with md file ro deploy such as in syndicate-backend
 4. The backend must be product ready with clean and low latency code without unnecessary bloatings.
 5. Must have frontend integration docs which should be enough for the frontend to implement all the screens.
 6. The UI must feel smooth in terms of data flow from backend to frontend.
+
+Ask all the clarifying questions before accepting any decisions.
 
 # Syndicate Backend — Agent Build Charter
 

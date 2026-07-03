@@ -1,8 +1,20 @@
 # deploy/secrets — provisioning
 
 Everything in this directory except `README.md` and `*.example` is **gitignored**. Each
-secret is a single file, mounted read-only into its container (`*_FILE` convention),
-`chmod 600`.
+secret is a single file, mounted read-only into its container (`*_FILE` convention).
+
+> **Permissions — must be `chmod 644`, not 600.** The Rust images run as the unprivileged
+> in-image user `syndicate`, whose UID does **not** match the host file owner. A bind-mounted
+> `600` file (owner-only) is therefore unreadable inside the container: chain-worker fails with
+> `Permission denied (os error 13)`, and game-server fails more obscurely with
+> `db connect: ... invalid configuration` (it swallows the read error, then tries to connect
+> with no password). Set all four files world-readable:
+> ```bash
+> chmod 644 deploy/secrets/{postgres-password,operator-keypair.json,price-signer.key,session-signing-key}
+> ```
+> These files are gitignored and the VPS is single-tenant behind the cloud firewall, so 644 is
+> acceptable. If your host is multi-tenant, instead `sudo chown 999:999 deploy/secrets/*`
+> (or whatever UID `id syndicate` reports *inside* the container) and keep `640`.
 
 | File | Used by | How to generate |
 |---|---|---|

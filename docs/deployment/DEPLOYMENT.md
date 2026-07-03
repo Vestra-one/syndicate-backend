@@ -54,8 +54,16 @@ git clone <repo> /opt/syndicate && cd /opt/syndicate
 
 Follow [deploy/secrets/README.md](../../deploy/secrets/README.md) — four files:
 `postgres-password`, `operator-keypair.json`, `price-signer.key`, `session-signing-key`.
-All `chmod 600`, all gitignored. Fund the operator keypair (`solana transfer`, keep ≥ 1 SOL
-on devnet; chain-worker alarms below `MIN_SIGNER_SOL`).
+All gitignored. Fund the operator keypair (`solana transfer`, keep ≥ 1 SOL on devnet;
+chain-worker alarms below `MIN_SIGNER_SOL`).
+
+> **`chmod 644`, not 600.** The Rust containers run as an unprivileged in-image user whose
+> UID differs from the host owner, so a `600` bind-mounted secret is unreadable inside the
+> container — chain-worker dies with `Permission denied (os error 13)` and game-server with
+> `db connect: ... invalid configuration`. Run:
+> ```bash
+> chmod 644 deploy/secrets/{postgres-password,operator-keypair.json,price-signer.key,session-signing-key}
+> ```
 
 ## 5. Program deploy (fresh v2)
 
