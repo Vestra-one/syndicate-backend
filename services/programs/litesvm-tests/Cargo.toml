@@ -27,6 +27,8 @@ syndicate-engine-core = { path = "../../engine-core" }
 # crate the contract uses transitively, so wire-compatible.
 libsecp256k1 = "0.6"
 solana-keccak-hasher = "2"
+# Byte-parity gate: the host chain layer must encode exactly what the program decodes.
+syndicate-chain = { path = "../../chain" }
 
 [[test]]
 name = "funds_exit_matrix"

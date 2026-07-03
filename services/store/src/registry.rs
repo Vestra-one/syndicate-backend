@@ -79,14 +79,16 @@ impl MatchRegistryStore {
         &self.pool
     }
 
-    pub async fn insert_match(&self, params: InsertMatchParams) -> Result<PersistedMatchRow, RegistryError> {
+    pub async fn insert_match(
+        &self,
+        params: InsertMatchParams,
+    ) -> Result<PersistedMatchRow, RegistryError> {
         let config_hash = decode_config_hash(&params.config_hash_hex)?;
         let pyth_feed_id = oracle_token_to_feed_id(&params.oracle_token_hex)?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let config_id = ensure_config_id(&client, &config_hash, &pyth_feed_id, &params).await?;
-        let config_uuid = uuid::Uuid::parse_str(&config_id).map_err(|e| {
-            RegistryError::Invalid(format!("invalid config_id uuid: {e}"))
-        })?;
+        let config_uuid = uuid::Uuid::parse_str(&config_id)
+            .map_err(|e| RegistryError::Invalid(format!("invalid config_id uuid: {e}")))?;
         let row = client
             .query_one(
                 INSERT_MATCH_SQL,
@@ -166,7 +168,8 @@ impl MatchRegistryStore {
 
 fn decode_config_hash(hex_str: &str) -> Result<Vec<u8>, RegistryError> {
     let hex = hex_str.trim().trim_start_matches("0x");
-    let bytes = hex::decode(hex).map_err(|e| RegistryError::Invalid(format!("config_hash: {e}")))?;
+    let bytes =
+        hex::decode(hex).map_err(|e| RegistryError::Invalid(format!("config_hash: {e}")))?;
     if bytes.len() != 32 {
         return Err(RegistryError::Invalid(format!(
             "config_hash must be 32 bytes, got {}",
@@ -179,7 +182,8 @@ fn decode_config_hash(hex_str: &str) -> Result<Vec<u8>, RegistryError> {
 /// Signed-price token (20 bytes) left-padded to 32 bytes for `match_configs.pyth_feed_id`.
 fn oracle_token_to_feed_id(token_hex: &str) -> Result<Vec<u8>, RegistryError> {
     let hex = token_hex.trim().trim_start_matches("0x");
-    let token = hex::decode(hex).map_err(|e| RegistryError::Invalid(format!("oracle_token: {e}")))?;
+    let token =
+        hex::decode(hex).map_err(|e| RegistryError::Invalid(format!("oracle_token: {e}")))?;
     if token.len() != 20 {
         return Err(RegistryError::Invalid(format!(
             "oracle_token must be 20 bytes, got {}",
@@ -252,7 +256,7 @@ async fn ensure_config_id(
         .query_one(INSERT_MATCH_CONFIG_SQL, insert_params)
         .await
     {
-        Ok(row) => return Ok(row.get(0)),
+        Ok(row) => Ok(row.get(0)),
         Err(err) if is_unique_violation(&err) => {
             if let Some(row) = client
                 .query_opt(
@@ -275,9 +279,9 @@ async fn ensure_config_id(
             {
                 return Ok(row.get(0));
             }
-            return Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG"));
+            Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG"))
         }
-        Err(err) => return Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG")),
+        Err(err) => Err(map_pg_stmt(err, "INSERT_MATCH_CONFIG")),
     }
 }
 
@@ -328,7 +332,10 @@ mod tests {
     fn oracle_token_pads_to_32_bytes() {
         let id = oracle_token_to_feed_id("0xa7BaE7da3E4950700BE9f107EB186e89a474d180").unwrap();
         assert_eq!(id.len(), 32);
-        assert_eq!(&id[..20], &hex::decode("a7bae7da3e4950700be9f107eb186e89a474d180").unwrap());
+        assert_eq!(
+            &id[..20],
+            &hex::decode("a7bae7da3e4950700be9f107eb186e89a474d180").unwrap()
+        );
         assert!(id[20..].iter().all(|&b| b == 0));
     }
 

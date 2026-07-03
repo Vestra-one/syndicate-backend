@@ -1,0 +1,225 @@
+# Syndicate v2 application stack.
+#
+#   cp deploy/.env.example deploy/.env   # fill in
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+#
+# Devnet overrides: add `-f deploy/docker-compose.devnet.yml`.
+# Observability (prometheus + grafana): add `--profile observability`.
+
+name: syndicate
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-syndicate}
+      POSTGRES_DB: ${POSTGRES_DB:-syndicate}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./secrets/postgres-password:/run/secrets/postgres-password:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-syndicate} -d ${POSTGRES_DB:-syndicate}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  db-migrate:
+    image: postgres:16-bookworm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSFILE: /dev/null
+    volumes:
+      - ../services/store/migrations:/migrations:ro
+      - ./secrets/postgres-password:/run/secrets/postgres-password:ro
+    entrypoint: ["/bin/bash", "-ceu"]
+    command:
+      - |
+        export PGPASSWORD="$$(cat /run/secrets/postgres-password)"
+        psql -h postgres -U ${POSTGRES_USER:-syndicate} -d ${POSTGRES_DB:-syndicate} -v ON_ERROR_STOP=1 \
+          -c 'CREATE TABLE IF NOT EXISTS schema_migrations (filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());'
+        for f in $$(ls /migrations/*.sql | sort); do
+          name="$$(basename "$$f")"
+          done="$$(psql -h postgres -U ${POSTGRES_USER:-syndicate} -d ${POSTGRES_DB:-syndicate} -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$$name'")"
+          if [ "$$done" != "1" ]; then
+            echo "applying $$name"
+            psql -h postgres -U ${POSTGRES_USER:-syndicate} -d ${POSTGRES_DB:-syndicate} -v ON_ERROR_STOP=1 -f "$$f"
+            psql -h postgres -U ${POSTGRES_USER:-syndicate} -d ${POSTGRES_DB:-syndicate} -v ON_ERROR_STOP=1 \
+              -c "INSERT INTO schema_migrations (filename) VALUES ('$$name')"
+          fi
+        done
+        echo "migrations up to date"
+    restart: "no"
+
+  game-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rust
+      args:
+        BIN: syndicate-game-server
+    restart: unless-stopped
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      signed-price-server:
+        condition: service_started
+    environment:
+      APP_ENV: ${APP_ENV:-devnet}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      GAME_SERVER_PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-syndicate}@postgres:5432/${POSTGRES_DB:-syndicate}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres-password
+      SOLANA_RPC_URL_PRIMARY: ${SOLANA_RPC_URL_PRIMARY}
+      SOLANA_RPC_URL_SECONDARY: ${SOLANA_RPC_URL_SECONDARY:-}
+      SYNDICATE_PROGRAM_ID: ${SYNDICATE_PROGRAM_ID}
+      CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
+      SIGNED_PRICE_SERVER_URL: http://signed-price-server:8080
+      SESSION_SIGNING_KEY_FILE: /run/secrets/session-signing-key
+      ADMIN_TOKENS: ${ADMIN_TOKENS}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      GEOFENCE_BLOCKLIST: ${GEOFENCE_BLOCKLIST:-IN}
+      DRAND_API: ${DRAND_API:-https://api.drand.sh}
+      DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH}
+    volumes:
+      - ./secrets/postgres-password:/run/secrets/postgres-password:ro
+      - ./secrets/session-signing-key:/run/secrets/session-signing-key:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  chain-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rust
+      args:
+        BIN: syndicate-chain-worker
+    restart: unless-stopped
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      signed-price-server:
+        condition: service_started
+    environment:
+      APP_ENV: ${APP_ENV:-devnet}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      CHAIN_WORKER_PORT: 8084
+      DATABASE_URL: postgres://${POSTGRES_USER:-syndicate}@postgres:5432/${POSTGRES_DB:-syndicate}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres-password
+      SOLANA_RPC_URL_PRIMARY: ${SOLANA_RPC_URL_PRIMARY}
+      SOLANA_RPC_URL_SECONDARY: ${SOLANA_RPC_URL_SECONDARY:-}
+      SYNDICATE_PROGRAM_ID: ${SYNDICATE_PROGRAM_ID}
+      CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
+      TREASURY_TOKEN_ACCOUNT: ${TREASURY_TOKEN_ACCOUNT:-}
+      OPERATOR_KEYPAIR_PATH: /run/secrets/operator-keypair.json
+      SIGNED_PRICE_SERVER_URL: http://signed-price-server:8080
+      CHAIN_JOBS_POLL_MS: ${CHAIN_JOBS_POLL_MS:-1000}
+      SETTLEMENT_CONFIRMATION_TIMEOUT_MS: ${SETTLEMENT_CONFIRMATION_TIMEOUT_MS:-60000}
+      SETTLEMENT_CU_PRICE_MICRO_LAMPORTS: ${SETTLEMENT_CU_PRICE_MICRO_LAMPORTS:-100000}
+      MIN_SIGNER_SOL: ${MIN_SIGNER_SOL:-0.5}
+      DRAND_API: ${DRAND_API:-https://api.drand.sh}
+      DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH}
+      TIMELOCK_GRACE_SEC: ${TIMELOCK_GRACE_SEC:-300}
+    volumes:
+      - ./secrets/postgres-password:/run/secrets/postgres-password:ro
+      - ./secrets/operator-keypair.json:/run/secrets/operator-keypair.json:ro
+    expose:
+      - "8084"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  signed-price-server:
+    build:
+      context: ../services/signed-price-server
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      ECDSA_PRIVATE_KEY_FILE: /run/secrets/price-signer.key
+    volumes:
+      - ./secrets/price-signer.key:/run/secrets/price-signer.key:ro
+    expose:
+      - "8080"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  nginx:
+    image: nginx:1.27-bookworm
+    restart: unless-stopped
+    depends_on:
+      game-server:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./nginx/syndicate.conf.template:/etc/nginx/templates/syndicate.conf.template:ro
+      - certbot-webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # --- optional profiles -----------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    expose:
+      - "9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+    restart: unless-stopped
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  # redis:
+  #   image: redis:7-bookworm
+  #   profiles: ["redis"]   # only needed if the game-server ever goes multi-instance
+  #   restart: unless-stopped
+
+volumes:
+  pgdata:
+  certbot-webroot:
+  letsencrypt:
+  prometheus-data:
+  grafana-data:

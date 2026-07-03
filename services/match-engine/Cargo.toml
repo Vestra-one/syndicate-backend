@@ -1,16 +1,12 @@
 [package]
-name = "syndicate-engine"
+name = "syndicate-match-runtime"
 version = "0.1.0"
 edition = "2021"
-description = "Authoritative match engine core: state machine, betting legality, turn order, contribution tracking, end-condition detection. Pure + deterministic; produces the settlement inputs consumed by syndicate-shared. Networking/persistence (tokio, lease) layer on top."
+description = "Authoritative match runtime library: fenced replay-safe runtime around the pure engine core (FencedMatchRuntime), ed25519 intent verification, and Postgres match persistence. Consumed by the game-server actor loop and the chain-worker reconstructor."
 
 [lib]
-name = "syndicate_engine"
+name = "syndicate_match_runtime"
 path = "src/lib.rs"
-
-[[bin]]
-name = "syndicate-match-engine"
-path = "src/main.rs"
 
 [dependencies]
 syndicate-shared = { path = "../shared" }
@@ -23,8 +19,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 deadpool-postgres = "0.14"
 uuid = { version = "1", features = ["serde"] }
-redis = { version = "0.27", features = ["tokio-comp"] }

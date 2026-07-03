@@ -158,7 +158,7 @@ fn settle_on_chain_matches_shared_core() {
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
+    h.lock_match(&[0, 1]);
     let tlt = h.valid_timelock_target();
     for s in 0..2 {
         h.register_prediction_commitment(s, [s as u8 + 1; 32], tlt)
@@ -166,7 +166,7 @@ fn settle_on_chain_matches_shared_core() {
     }
     let m = h.match_account();
     h.set_clock(m.seal_deadline_ts + 1);
-    h.begin_live([1u8; 32]).expect("begin_live");
+    h.begin_live().expect("begin_live");
 
     // Reference settlement via the shared core. S = 100000; seat 0 predicts closest.
     let players = vec![
@@ -218,7 +218,7 @@ fn settle_on_chain_matches_shared_core() {
         payouts[id.0 as usize].amount += *amt;
     }
 
-    h.submit_settlement(&[0, 1], reference.rake_collected, payouts.clone(), PRICE_WAD)
+    h.submit_settlement(reference.rake_collected, payouts.clone(), PRICE_WAD)
         .expect("submit_settlement");
     assert_eq!(h.match_account().status, SETTLED);
 

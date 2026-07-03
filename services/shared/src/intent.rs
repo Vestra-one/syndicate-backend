@@ -18,6 +18,7 @@ pub const DEFAULT_TAG_CHECK_FOLD: u8 = 0;
 pub const DEFAULT_TAG_CHECK_CALL_ANY: u8 = 1;
 
 /// Action intent signed by the seat owner before each move.
+#[allow(clippy::too_many_arguments)]
 pub fn action_intent_message(
     match_id: u64,
     onchain_match_id: u64,
@@ -106,37 +107,28 @@ pub fn chain_hash(prev: &[u8; 32], payload: &[u8]) -> [u8; 32] {
     out
 }
 
-/// SHA-256 style commitment using a simple deterministic hash (no external deps).
+/// SHA-256 commitment over `(prediction, blinding)` — off-chain reveal binding
+/// (`prediction(i128 LE, 16) ‖ blinding(32)`).
 pub fn prediction_commitment_hash(prediction: Price, blinding: &[u8; 32]) -> [u8; 32] {
     let mut buf = [0u8; 48];
     buf[..16].copy_from_slice(&prediction.to_le_bytes());
     buf[16..].copy_from_slice(blinding);
-    simple_sha256(&buf)
+    sha256(&buf)
 }
 
-pub fn simple_sha256(data: &[u8]) -> [u8; 32] {
-    // FNV-1a expanded to 32 bytes — deterministic, std-only. Production uses sha2 off-chain;
-    // on-chain program uses solana's hash or the same algorithm for binding.
-    let mut state: [u64; 4] = [
-        0x6a09e667f3bcc908,
-        0xbb67ae8584caa73b,
-        0x3c6ef372fe94f82b,
-        0xa54ff53a5f1d36f1,
-    ];
-    for chunk in data.chunks(8) {
-        let mut word = 0u64;
-        for (i, b) in chunk.iter().enumerate() {
-            word |= (*b as u64) << (i * 8);
-        }
-        for s in &mut state {
-            *s ^= word;
-            *s = s.wrapping_mul(0x5851f42d4c957f2d);
-        }
-    }
+/// v2 on-chain prediction commitment binding: `sha256(tlock_ciphertext_bytes)`. This is
+/// the 32-byte commitment registered on the seat during Sealing and re-checked by the
+/// settlement worker after timelock decryption.
+pub fn ciphertext_commitment_hash(ciphertext: &[u8]) -> [u8; 32] {
+    sha256(ciphertext)
+}
+
+/// Real SHA-256 (sha2 crate) — the normative commitment hash. Reproduce byte-identically
+/// in TypeScript with `crypto.subtle.digest('SHA-256', ...)`.
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
     let mut out = [0u8; 32];
-    for (i, s) in state.iter().enumerate() {
-        out[i * 8..(i + 1) * 8].copy_from_slice(&s.to_le_bytes());
-    }
+    out.copy_from_slice(&Sha256::digest(data));
     out
 }
 
@@ -163,6 +155,41 @@ fn push_u16(out: &mut Vec<u8>, v: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Interop vector: the commitment hash must be REAL SHA-256 (FIPS 180-4), so the
+    /// frontend (tlock-js + WebCrypto) reproduces it byte-identically.
+    #[test]
+    fn ciphertext_commitment_is_real_sha256() {
+        // sha256("abc") — canonical NIST test vector.
+        let expected: [u8; 32] = [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ];
+        assert_eq!(ciphertext_commitment_hash(b"abc"), expected);
+        assert_eq!(sha256(b"abc"), expected);
+        // Empty input — sha256("").
+        let empty: [u8; 32] = [
+            0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+            0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+            0x78, 0x52, 0xb8, 0x55,
+        ];
+        assert_eq!(ciphertext_commitment_hash(b""), empty);
+    }
+
+    #[test]
+    fn prediction_commitment_hash_matches_sha256_of_price_le_and_blinding() {
+        let blinding = [7u8; 32];
+        let price: Price = 100_000;
+        let mut buf = [0u8; 48];
+        buf[..16].copy_from_slice(&price.to_le_bytes());
+        buf[16..].copy_from_slice(&blinding);
+        assert_eq!(prediction_commitment_hash(price, &blinding), sha256(&buf));
+        assert_ne!(
+            prediction_commitment_hash(price, &blinding),
+            prediction_commitment_hash(price + 1, &blinding)
+        );
+    }
 
     #[test]
     fn action_message_is_deterministic() {

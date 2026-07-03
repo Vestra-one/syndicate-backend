@@ -1,0 +1,32 @@
+[package]
+name = "syndicate-e2e"
+version = "0.1.0"
+edition = "2021"
+description = "End-to-end lifecycle driver + WS load sanity against a deployed Syndicate v2 stack"
+publish = false
+
+[[bin]]
+name = "e2e-devnet"
+path = "src/main.rs"
+
+[[bin]]
+name = "load-sanity"
+path = "src/load.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+serde_json = "1"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.8"
+ed25519-dalek = "2"
+
+solana-sdk = "2.2"
+solana-client = "2.2"
+spl-token = "7"
+
+syndicate-chain = { path = "../chain", features = ["rpc"] }
+syndicate-shared = { path = "../shared" }

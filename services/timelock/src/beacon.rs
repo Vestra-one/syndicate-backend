@@ -68,7 +68,7 @@ pub fn round_at(genesis_time: u64, period: u64, unix_time: u64) -> u64 {
     if period == 0 || unix_time <= genesis_time {
         return 1;
     }
-    (unix_time - genesis_time + period - 1) / period + 1
+    (unix_time - genesis_time).div_ceil(period) + 1
 }
 
 impl DrandRound {
@@ -150,7 +150,7 @@ impl BeaconClient for HttpBeaconClient {
 
 pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())

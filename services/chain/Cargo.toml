@@ -1,0 +1,41 @@
+[package]
+name = "syndicate-chain"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-native Solana instruction builders, PDAs, account decoders, and RPC verification for the Syndicate v2 program"
+
+[features]
+default = []
+# RPC verification + tx submission helpers (game-server verify pool, chain-worker, init-protocol bin).
+rpc = [
+    "dep:solana-client",
+    "dep:solana-transaction-status",
+    "dep:solana-account-decoder",
+    "dep:bincode",
+    "dep:tokio",
+    "dep:serde_json",
+]
+
+[dependencies]
+solana-sdk = "2.2"
+borsh = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+bs58 = "0.5"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+
+solana-client = { version = "2.2", optional = true }
+solana-transaction-status = { version = "2.2", optional = true }
+solana-account-decoder = { version = "2.2", optional = true }
+bincode = { version = "1.3", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[[bin]]
+name = "init-protocol"
+path = "src/bin/init_protocol.rs"
+required-features = ["rpc"]
+
+[dev-dependencies]
+serde_json = "1"

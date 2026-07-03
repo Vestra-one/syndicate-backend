@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,9 +34,22 @@ func main() {
 
 	logger.Info().Msg("Starting price-bot server")
 
+	// Accept the key either inline (ECDSA_PRIVATE_KEY) or via a mounted secret file
+	// (ECDSA_PRIVATE_KEY_FILE), matching the *_FILE secrets convention the rest of the
+	// stack uses (postgres-password, session-signing-key, …).
 	privateKeyHex := os.Getenv("ECDSA_PRIVATE_KEY")
 	if privateKeyHex == "" {
-		logger.Fatal().Msg("ECDSA_PRIVATE_KEY environment variable not set")
+		if keyFile := os.Getenv("ECDSA_PRIVATE_KEY_FILE"); keyFile != "" {
+			b, err := os.ReadFile(keyFile)
+			if err != nil {
+				logger.Fatal().Err(err).Str("file", keyFile).Msg("failed to read ECDSA_PRIVATE_KEY_FILE")
+				return
+			}
+			privateKeyHex = strings.TrimSpace(string(b))
+		}
+	}
+	if privateKeyHex == "" {
+		logger.Fatal().Msg("neither ECDSA_PRIVATE_KEY nor ECDSA_PRIVATE_KEY_FILE is set")
 		return
 	}
 

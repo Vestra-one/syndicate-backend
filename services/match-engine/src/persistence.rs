@@ -262,7 +262,10 @@ impl PostgresMatchStore {
         let match_uuid = self.resolve_match_uuid(match_id).await?;
         let client = self.pool.get().await.map_err(map_pool)?;
         let row = client
-            .query_one(LOAD_MATCH_SETTLEMENT_CONTEXT_SQL, &[&match_uuid.to_string()])
+            .query_one(
+                LOAD_MATCH_SETTLEMENT_CONTEXT_SQL,
+                &[&match_uuid.to_string()],
+            )
             .await
             .map_err(map_pg)?;
         let mut context = row_to_settlement_context(&row)?;
@@ -650,7 +653,14 @@ pub fn parse_persisted_event(payload: &Value) -> Result<EngineLogEvent, Persiste
         }),
         "snapshot.written" => Ok(EngineLogEvent::SnapshotWritten {
             round: payload.get("round").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
-            phase: crate::Phase::Live,
+            // Reconstruct the exact phase — the event hash covers `format!("{phase:?}")`, so
+            // defaulting to Live would break replay hash verification for a snapshot taken in
+            // Settlement/Done (e.g. the end-of-match snapshot).
+            phase: match payload.get("phase").and_then(|v| v.as_str()).unwrap_or("Live") {
+                "Done" => crate::Phase::Done,
+                "Settlement" => crate::Phase::Settlement,
+                _ => crate::Phase::Live,
+            },
         }),
         "prediction.sealed" => {
             let ciphertext_hex = payload

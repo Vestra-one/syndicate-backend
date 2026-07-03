@@ -162,7 +162,7 @@ fn pot_rake(amount: Chips, bps: u32, cap: Chips) -> Chips {
     r.min(cap).min(amount)
 }
 
-fn player<'a>(players: &'a [PlayerState], id: PlayerId) -> &'a PlayerState {
+fn player(players: &[PlayerState], id: PlayerId) -> &PlayerState {
     players
         .iter()
         .find(|p| p.id == id)

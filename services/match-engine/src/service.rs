@@ -416,7 +416,8 @@ impl FencedMatchRuntime {
         if round == 0 || round > self.config.round_count {
             return false;
         }
-        let open = live_start_ms.saturating_add(self.street_start_offset_sec(round).saturating_mul(1000));
+        let open =
+            live_start_ms.saturating_add(self.street_start_offset_sec(round).saturating_mul(1000));
         let close =
             live_start_ms.saturating_add(self.betting_close_offset_sec(round).saturating_mul(1000));
         now_ms >= open && now_ms < close
@@ -425,8 +426,10 @@ impl FencedMatchRuntime {
     /// Wall-clock deadline (ms epoch) at which the engine's current betting street is
     /// hard-capped and any pending actors are force-resolved.
     pub fn current_street_close_ms(&self, live_start_ms: u64) -> u64 {
-        live_start_ms
-            .saturating_add(self.betting_close_offset_sec(self.engine.round).saturating_mul(1000))
+        live_start_ms.saturating_add(
+            self.betting_close_offset_sec(self.engine.round)
+                .saturating_mul(1000),
+        )
     }
 
     /// Total betting span = scheduled_end - live_start (Σ all durations + observations).
@@ -568,9 +571,9 @@ impl FencedMatchRuntime {
                     e.apply_timeout(*seat_index, *default)?;
                 }
                 EngineLogEvent::DefaultPolicyRegistered { policy } => {
-                    if !registered_defaults
+                    if registered_defaults
                         .insert(policy.seat_index, policy.clone())
-                        .is_none()
+                        .is_some()
                     {
                         return Err(MatchServiceError::Replay("duplicate default policy"));
                     }
@@ -611,7 +614,10 @@ impl FencedMatchRuntime {
     }
 
     pub fn set_lease(&mut self, lease: MatchLease) {
-        assert_eq!(self.config.match_id, lease.match_id, "lease must match config");
+        assert_eq!(
+            self.config.match_id, lease.match_id,
+            "lease must match config"
+        );
         self.lease = lease;
     }
 
@@ -635,7 +641,9 @@ impl FencedMatchRuntime {
         if !self.engine.is_complete() {
             return None;
         }
-        let resolved_target = self.resolved_timelock_target_round().unwrap_or(timelock_target_round);
+        let resolved_target = self
+            .resolved_timelock_target_round()
+            .unwrap_or(timelock_target_round);
         let event_root = hex::encode(self.head);
         Some(self.append_event(EngineLogEvent::MatchCompleted {
             event_root,
@@ -644,10 +652,12 @@ impl FencedMatchRuntime {
     }
 
     fn resolved_timelock_target_round(&self) -> Option<u64> {
-        self.events.iter().find_map(|envelope| match &envelope.event {
-            EngineLogEvent::PredictionSealed { target_round, .. } => Some(*target_round),
-            _ => None,
-        })
+        self.events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                EngineLogEvent::PredictionSealed { target_round, .. } => Some(*target_round),
+                _ => None,
+            })
     }
 
     pub fn engine(&self) -> &Engine {
@@ -692,11 +702,12 @@ impl FencedMatchRuntime {
             return Ok(());
         }
         let (tag, amount) = action_to_tag_amount(intent.action);
-        let signing_match_id = match_id_signing_key(&self.config.match_id);
+        // Both u64 slots of the intent message carry the REAL on-chain match id (the
+        // string match_id is a DB key, not signing material — see intent.rs layout).
         verify::verify_action_intent(
             &intent.wallet,
             &intent.signature,
-            signing_match_id,
+            self.config.onchain_match_id,
             self.config.onchain_match_id,
             intent.seat_index as u16,
             intent.nonce,
@@ -725,7 +736,7 @@ impl FencedMatchRuntime {
         verify::verify_default_policy(
             &policy.wallet,
             &policy.signature,
-            match_id_signing_key(&self.config.match_id),
+            self.config.onchain_match_id,
             self.config.onchain_match_id,
             policy.seat_index as u16,
             tag,
@@ -747,7 +758,7 @@ impl FencedMatchRuntime {
         verify::verify_prediction_commitment(
             &commitment.wallet,
             &commitment.signature,
-            match_id_signing_key(&self.config.match_id),
+            self.config.onchain_match_id,
             self.config.onchain_match_id,
             commitment.player_id,
             timelock_target,
@@ -927,14 +938,6 @@ fn allow_dev_signature(signature: &str) -> bool {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
         && signature.starts_with("sig-")
-}
-
-fn match_id_signing_key(match_id: &str) -> u64 {
-    let mut hash: u64 = 0;
-    for b in match_id.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(u64::from(b));
-    }
-    hash
 }
 
 fn action_to_tag_amount(action: Action) -> (u8, u64) {
@@ -1189,7 +1192,10 @@ mod tests {
         assert!(rt.betting_open(ls, 0), "open at street-1 start");
         assert!(rt.betting_open(ls, 199_000), "open just before close");
         assert!(!rt.betting_open(ls, 200_000), "closed at exact close");
-        assert!(!rt.betting_open(ls, 210_000), "closed during observation gap");
+        assert!(
+            !rt.betting_open(ls, 210_000),
+            "closed during observation gap"
+        );
     }
 
     #[test]
@@ -1209,12 +1215,7 @@ mod tests {
         let folded = rt.engine().seats.iter().filter(|s| s.folded).count();
         assert_eq!(folded, 2, "the two non-BB seats fold facing the blind");
         // Conservation: only the posted blinds are in play (1 + 2 = 3).
-        let total: u64 = rt
-            .engine()
-            .seats
-            .iter()
-            .map(|s| s.total_contribution)
-            .sum();
+        let total: u64 = rt.engine().seats.iter().map(|s| s.total_contribution).sum();
         assert_eq!(total, 3);
         // Each forced resolution is recorded for faithful on-chain replay.
         let timeouts = rt
@@ -1243,7 +1244,11 @@ mod tests {
         while rt.engine().round == start_round && !rt.engine().is_complete() {
             let seat = rt.engine().to_act.unwrap();
             let to_call = rt.engine().to_call(seat);
-            let action = if to_call == 0 { Action::Check } else { Action::Call };
+            let action = if to_call == 0 {
+                Action::Check
+            } else {
+                Action::Call
+            };
             let head = rt.head();
             rt.apply_signed_action(&leases, now, intent(seat, nonce, action, head))
                 .unwrap();
@@ -1253,7 +1258,11 @@ mod tests {
         // Now on a fresh postflop street, the first actor faces no bet (current_bet 0).
         if !rt.engine().is_complete() {
             let first = rt.engine().to_act.unwrap();
-            assert_eq!(rt.engine().to_call(first), 0, "fresh street has no bet to call");
+            assert_eq!(
+                rt.engine().to_call(first),
+                0,
+                "fresh street has no bet to call"
+            );
             rt.force_resolve_street(&leases, now).unwrap();
             // Auto-checked players stay in; nobody is folded by a free check.
             assert!(

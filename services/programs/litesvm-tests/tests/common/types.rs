@@ -1,4 +1,4 @@
-//! Wire-compatible instruction arg types (mirror Anchor layouts in the on-chain program).
+//! Wire-compatible instruction arg types (mirror Anchor v2 layouts in the on-chain program).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_sdk::pubkey::Pubkey;
@@ -24,8 +24,11 @@ pub struct MatchBounds {
     pub buy_in_max: u64,
     pub fill_window_min_sec: u64,
     pub fill_window_max_sec: u64,
+    pub total_betting_duration_min_sec: u64,
+    pub total_betting_duration_max_sec: u64,
 }
 
+/// v2 CreateParams (171 bytes Borsh).
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
 pub struct CreateParams {
     pub match_id: u64,
@@ -33,9 +36,10 @@ pub struct CreateParams {
     pub entry_fee: u64,
     pub rake_bps: u32,
     pub rake_cap: u64,
-    pub nonseal_penalty_bps: u32,
     pub min_players: u8,
     pub max_players: u8,
+    pub is_private: bool,
+    pub room_commitment: [u8; 32],
     pub config_hash: [u8; 32],
     pub price_token: [u8; 20],
     pub total_betting_duration_sec: u64,
@@ -44,11 +48,6 @@ pub struct CreateParams {
     pub fill_window_sec: u64,
     pub max_oracle_confidence: u64,
     pub oracle_exponent: i32,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
-pub struct BeginLiveArgs {
-    pub button_randomness: [u8; 32],
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
@@ -80,9 +79,8 @@ pub struct SettleArgs {
     pub payouts: Vec<SeatPayout>,
 }
 
-/// Borsh mirror of the on-chain `MatchAccount` (state.rs), field order identical, used to
-/// decode account data after stripping the 8-byte Anchor discriminator. Anchor account
-/// serialization is plain borsh, so this round-trips the on-chain layout exactly.
+/// Borsh mirror of the on-chain v2 `MatchAccount` (state.rs), field order identical, used
+/// to decode account data after stripping the 8-byte Anchor discriminator.
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
 pub struct MatchAccountData {
     pub authority: Pubkey,
@@ -93,6 +91,8 @@ pub struct MatchAccountData {
     pub status: u8,
     pub config_hash: [u8; 32],
     pub price_token: [u8; 20],
+    pub is_private: bool,
+    pub room_commitment: [u8; 32],
     pub fill_deadline_ts: u64,
     pub lock_ts: u64,
     pub seal_deadline_ts: u64,
@@ -108,18 +108,15 @@ pub struct MatchAccountData {
     pub entry_fee: u64,
     pub rake_bps: u32,
     pub rake_cap: u64,
-    pub nonseal_penalty_bps: u32,
     pub min_players: u8,
     pub max_players: u8,
-    pub player_count: u8,
+    pub candidate_count: u8,
+    pub confirmed_count: u8,
     pub sealed_count: u8,
-    pub next_seal_seq: u64,
     pub total_deposited: u64,
     pub total_fees: u64,
-    pub forfeited_fees: u64,
-    pub dead_money: u64,
     pub settled_payout: u64,
-    pub button_randomness: [u8; 32],
+    pub button_seed: [u8; 32],
     pub button: u8,
     pub button_set: bool,
     pub vault_bump: u8,
@@ -129,24 +126,21 @@ pub struct MatchAccountData {
     pub reserved: [u8; 32],
 }
 
-/// Borsh mirror of the on-chain `SeatAccount` (state.rs) for decoding seat data.
+/// Borsh mirror of the on-chain v2 `SeatAccount` (state.rs) for decoding seat data.
 #[derive(BorshSerialize, BorshDeserialize, Clone)]
 pub struct SeatAccountData {
     pub match_key: Pubkey,
     pub player: Pubkey,
-    pub seat_index: u16,
     pub deposit: u64,
     pub entry_fee_paid: u64,
     pub payout: u64,
     pub claimed: bool,
     pub bump: u8,
+    pub room_commitment: [u8; 32],
+    pub confirmed: bool,
+    pub engine_seat: u8,
     pub prediction_commitment: [u8; 32],
     pub timelock_target: u64,
-    pub seal_seq: u64,
     pub commitment_set: bool,
-    pub is_non_sealer: bool,
-    pub penalty: u64,
-    pub engine_seat: u8,
-    pub gets_remainder: bool,
     pub reserved: [u8; 8],
 }

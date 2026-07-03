@@ -10,8 +10,6 @@ pub enum SyndicateError {
     MatchFull,
     #[msg("Not enough players to start.")]
     NotEnoughPlayers,
-    #[msg("Settlement re-verification failed; funds will NOT be released (04 §18).")]
-    SettlementMismatch,
     #[msg("Conservation check failed: payouts + fees != deposits.")]
     ConservationViolation,
     #[msg("Oracle/settlement inputs invalid or insufficient.")]
@@ -26,22 +24,10 @@ pub enum SyndicateError {
     Unauthorized,
     #[msg("Protocol action is paused.")]
     Paused,
-    #[msg("Seat index is invalid or duplicated.")]
+    #[msg("Seat is invalid or duplicated.")]
     InvalidSeat,
-    #[msg("Settlement did not include exactly the occupied seats.")]
+    #[msg("Settlement did not include exactly the confirmed seats.")]
     SeatSetMismatch,
-    #[msg("Invalid signed action input.")]
-    InvalidActionInput,
-    #[msg("Action log is invalid or not initialized.")]
-    InvalidActionLog,
-    #[msg("Ed25519 signature verification failed.")]
-    InvalidSignature,
-    #[msg("Not this player's turn.")]
-    NotYourTurn,
-    #[msg("Action log is not finalized.")]
-    ActionLogNotFinalized,
-    #[msg("Engine replay is not complete.")]
-    EngineNotComplete,
     #[msg("Prediction reveal does not match signed commitment.")]
     PredictionCommitmentMismatch,
     #[msg("Settlement deadline passed; use void/refund path.")]
@@ -62,14 +48,18 @@ pub enum SyndicateError {
     BeginLiveWindowPassed,
     #[msg("Seat has already recorded a seal commitment.")]
     AlreadySealed,
-    #[msg("drand button round is invalid (must publish after the seal deadline).")]
+    #[msg("Timelock target round is invalid (must publish just after the latest match end).")]
     InvalidDrandRound,
-    #[msg("drand button randomness is missing or does not match the committed round.")]
-    InvalidButtonRandomness,
     #[msg("Oracle tolerance window is too wide; must be tight (single-update).")]
     OracleToleranceTooWide,
     #[msg("Invalid match configuration parameter.")]
     InvalidConfig,
-    #[msg("Refund not available for this seat in the current void kind.")]
+    #[msg("Refund not available for this seat in the current match state.")]
     RefundUnavailable,
+    #[msg("Seat was not confirmed into the playing set at lock.")]
+    SeatNotConfirmed,
+    #[msg("Candidate limit reached for this match.")]
+    CandidateLimitReached,
+    #[msg("Room commitment is required for private rooms and must be zero for public rooms.")]
+    InvalidRoomCommitment,
 }

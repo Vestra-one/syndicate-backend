@@ -1019,15 +1019,15 @@ mod tests {
 
     #[test]
     fn migration_0006_makes_scheduled_end_nullable_and_guards_live() {
-        const MIGRATION_0006: &str =
-            include_str!("../migrations/0006_match_lifecycle_columns.sql");
+        const MIGRATION_0006: &str = include_str!("../migrations/0006_match_lifecycle_columns.sql");
         assert!(MIGRATION_0006.contains("ALTER COLUMN scheduled_end_ts DROP NOT NULL"));
         assert!(MIGRATION_0006.contains("room_status"));
         assert!(MIGRATION_0006.contains("matches_scheduled_end_set_when_live"));
         assert!(MIGRATION_0006
             .contains("CHECK (room_status IS NULL OR room_status IN ('Filling', 'Sealing', 'Live', 'Settled', 'Void'))"));
-        assert!(MIGRATION_0006
-            .contains("void_kind IS NULL OR void_kind IN ('FillingVoid', 'UnderMinSealed', 'Emergency')"));
+        assert!(MIGRATION_0006.contains(
+            "void_kind IS NULL OR void_kind IN ('FillingVoid', 'UnderMinSealed', 'Emergency')"
+        ));
     }
 
     #[test]

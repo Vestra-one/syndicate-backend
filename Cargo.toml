@@ -6,12 +6,13 @@ resolver = "2"
 members = [
     "services/shared",
     "services/engine-core",
-    "services/settlement",
     "services/match-engine",
-    "services/match-orchestrator",
     "services/timelock",
     "services/store",
-    "services/worker",
+    "services/chain",
+    "services/chain-worker",
+    "services/game-server",
+    "services/e2e",
 ]
 # The Anchor program builds with the Solana toolchain (`anchor build`), not the host
 # cargo workspace, so it is excluded here. It still links `services/shared` by path.

@@ -1,17 +1,15 @@
-//! # syndicate-engine — authoritative match engine service
+//! # syndicate-match-runtime — authoritative match runtime library
 //!
-//! Re-exports the pure engine from `syndicate-engine-core`. Networking, persistence,
-//! signed-intent verification, and leasing live in submodules.
+//! Re-exports the pure engine from `syndicate-engine-core` and layers the production
+//! runtime mechanics on top: the fenced, replay-safe [`service::FencedMatchRuntime`],
+//! ed25519 signed-intent [`verify`] helpers, and the Postgres-backed
+//! [`persistence::PostgresMatchStore`]. No networking — the game-server owns transport.
 
 pub use syndicate_engine_core::{
     Action, DefaultAction, Engine, EngineError, Phase, Seat, GENESIS_HEAD, MAX_SEATS,
 };
 
-pub mod coordinator;
-pub mod lease;
 pub mod persistence;
-pub mod redis_pub;
-pub mod server;
 pub mod service;
 pub mod verify;
 

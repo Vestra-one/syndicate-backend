@@ -6,16 +6,16 @@ use crate::{error::SyndicateError, state::MatchStatus, RegisterPredictionCommitm
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct RegisterPredictionCommitmentArgs {
-    /// Hash of the time-lock ciphertext (the prediction commitment).
+    /// Hash of the time-lock ciphertext (the prediction commitment): sha256(ciphertext).
     pub commitment: [u8; 32],
     /// drand round the prediction is time-lock encrypted to (must publish after match end).
     pub timelock_target: u64,
 }
 
-/// Record the player's seal commitment on their seat DURING Sealing, before LIVE — the
-/// §207 fix (plan_v2 §1). Gated `status == Sealing && now <= seal_deadline_ts`. The player
-/// is the transaction Signer (explicit seal signature; no session key). `seal_seq` is
-/// assigned on-chain by arrival order so it cannot be gamed for tie-remainders.
+/// Record the player's seal commitment on their seat DURING Sealing, before LIVE.
+/// Gated `status == Sealing && now <= seal_deadline_ts && seat.confirmed`. The player is
+/// the transaction Signer (explicit seal signature; no session key). Seal ORDER is a
+/// backend concern in v2 (off-chain event order); the chain only binds the commitment.
 pub fn register_prediction_commitment_handler(
     ctx: Context<RegisterPredictionCommitment>,
     args: RegisterPredictionCommitmentArgs,
@@ -32,7 +32,7 @@ pub fn register_prediction_commitment_handler(
         // target against that worst case:
         //  - lower: must publish AFTER the latest match end (never decryptable mid-match).
         //  - upper: within MAX_TIMELOCK_SKEW_SEC of it, so it is always decryptable at
-        //    settlement — a far-future round would force a MissingPrediction VOID (grief).
+        //    settlement — a far-future round would force a void (grief vector).
         let latest_match_end = m
             .seal_deadline_ts
             .checked_add(m.total_betting_duration_sec)
@@ -46,19 +46,12 @@ pub fn register_prediction_commitment_handler(
             .ok_or(SyndicateError::Overflow)?;
         require!(target_pub <= max_target_pub, SyndicateError::InvalidDrandRound);
     }
-    require!(
-        !ctx.accounts.seat.commitment_set,
-        SyndicateError::AlreadySealed
-    );
-
-    let seal_seq = ctx.accounts.match_account.next_seal_seq;
     let seat = &mut ctx.accounts.seat;
+    require!(seat.confirmed, SyndicateError::SeatNotConfirmed);
+    require!(!seat.commitment_set, SyndicateError::AlreadySealed);
+
     seat.prediction_commitment = args.commitment;
     seat.timelock_target = args.timelock_target;
-    seat.seal_seq = seal_seq;
     seat.commitment_set = true;
-
-    let m = &mut ctx.accounts.match_account;
-    m.next_seal_seq = seal_seq.checked_add(1).ok_or(SyndicateError::Overflow)?;
     Ok(())
 }

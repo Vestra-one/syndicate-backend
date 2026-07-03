@@ -1,4 +1,8 @@
 //! Standalone litesvm harness (no Anchor host dependency — loads the built `.so` directly).
+//!
+//! v2 model: deposits create seat CANDIDATES; `lock_match(confirmed)` passes the confirmed
+//! seat PDAs as writable remaining accounts in engine order; `begin_live()` takes no args
+//! (button derives on-chain from seal commitments); non-sealers keep playing.
 
 mod types;
 
@@ -17,13 +21,32 @@ use solana_sdk::{
 };
 use spl_token::instruction as token_ix;
 use std::path::PathBuf;
-use syndicate_shared::intent::{action_intent_message, default_policy_message};
-use types::{
-    BeginLiveArgs, CreateParams, ProtocolRoles, RegisterPredictionCommitmentArgs, SettleArgs,
+use types::{ProtocolRoles, RegisterPredictionCommitmentArgs};
+// Re-exported for use by the test modules.
+pub use types::{
+    CreateParams, MatchAccountData, MatchBounds, SeatAccountData, SeatPayout, SettleArgs,
     SignedPriceDto,
 };
-// Re-exported for use by the test modules.
-pub use types::{MatchAccountData, MatchBounds, SeatAccountData, SeatPayout};
+
+/// A deterministic SettleArgs fixture for byte-parity tests.
+#[allow(dead_code)]
+pub fn build_settle_args_fixture() -> SettleArgs {
+    SettleArgs {
+        signed_price: SignedPriceDto {
+            token: [3u8; 20],
+            price_in_wad: [5u8; 32],
+            timestamp_ms: 1_700_000_600_000,
+            v: 27,
+            r: [11u8; 32],
+            s: [13u8; 32],
+        },
+        rake_collected: 9,
+        payouts: vec![
+            SeatPayout { engine_seat: 0, amount: 150 },
+            SeatPayout { engine_seat: 1, amount: 141 },
+        ],
+    }
+}
 
 #[allow(unused_imports)]
 pub use types::DEFAULT_TAG_CHECK_FOLD;
@@ -32,17 +55,14 @@ pub use syndicate_engine_core::GENESIS_HEAD;
 
 // Must match `declare_id!` in the program source (the `.so` is built from it); Anchor rejects a
 // load address that differs (error 4100, DeclaredProgramIdMismatch).
-pub const PROGRAM_ID: Pubkey = pubkey!("2LR4uxkMoGCGZZ9vVGeyyVAxtGF3DC3P5Y9RP7zmuAPT");
+pub const PROGRAM_ID: Pubkey = pubkey!("91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK");
 pub const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 
+pub const NO_ENGINE_SEAT: u8 = u8::MAX;
+
 /// Base wall-clock the harness seeds the litesvm `Clock` to before any instruction runs.
-/// litesvm defaults `unix_timestamp` to 0, which is *before* `DRAND_GENESIS_TIME`
-/// (1_692_803_367) — so every derived `seal_deadline_ts`/`scheduled_end_ts` would land before
-/// drand genesis and NO valid `timelock_target` round would exist in the
-/// `(latest_match_end, latest_match_end + MAX_TIMELOCK_SKEW_SEC]` window, making seals
-/// un-registerable (`InvalidDrandRound`). Seed a realistic "now" well after genesis so the
-/// full lifecycle's timing is valid. Chosen << the default `fill_deadline_ts` so creates pass.
+/// Must be well after `DRAND_GENESIS_TIME` so valid timelock target rounds exist.
 pub const BASE_TS: u64 = 1_700_000_000;
 
 pub const MATCH_ID: u64 = 1;
@@ -51,8 +71,13 @@ pub const ENTRY_FEE: u64 = 0;
 pub const SB: u64 = 1;
 pub const BB: u64 = 2;
 
+pub const NUM_KEYPAIRS: usize = 6;
+
 /// 20-byte token/feed id used by the harness (matches `price_token` in `create_match`).
 pub const PRICE_TOKEN: [u8; 20] = [7u8; 20];
+
+/// Room code used by private-room fixtures (normalized: uppercase A-Z2-9).
+pub const ROOM_CODE: &str = "KX7Q2M";
 
 pub fn program_so_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/syndicate_program.so")
@@ -90,11 +115,12 @@ pub fn seat_pda(match_key: &Pubkey, player: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"seat", match_key.as_ref(), player.as_ref()], &PROGRAM_ID)
 }
 
-pub fn seat_index_pda(match_key: &Pubkey, seat_index: u16) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[b"seat-index", match_key.as_ref(), &seat_index.to_le_bytes()],
-        &PROGRAM_ID,
-    )
+/// Normative room commitment: `sha256(roomcode_utf8 ‖ wallet_pubkey_bytes)`.
+pub fn room_commitment(room_code: &str, wallet: &Pubkey) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(room_code.as_bytes());
+    hasher.update(wallet.as_ref());
+    hasher.finalize().into()
 }
 
 pub fn signing_key_from_keypair(kp: &Keypair) -> SigningKey {
@@ -144,9 +170,7 @@ pub fn send(
 }
 
 /// Fixed 32-byte secp256k1 test secret key whose public address is seeded as the
-/// protocol `price_signer`, so the test holds the private half and can produce a real
-/// recoverable EIP-191 signature for the settlement signed-price path (full fidelity —
-/// no stub at the `verify_signed_price` boundary). Non-zero, valid scalar < curve order.
+/// protocol `price_signer` (full-fidelity signed-price path).
 pub const PRICE_SIGNER_SECRET: [u8; 32] = [
     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01,
     0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x20,
@@ -156,7 +180,6 @@ pub const PRICE_SIGNER_SECRET: [u8; 32] = [
 pub fn eth_address_of_secret(secret: &[u8; 32]) -> [u8; 20] {
     let sk = libsecp256k1::SecretKey::parse(secret).expect("valid secp256k1 secret");
     let pk = libsecp256k1::PublicKey::from_secret_key(&sk);
-    // serialize() = 0x04 || X(32) || Y(32); Ethereum hashes the 64-byte X||Y.
     let full = pk.serialize();
     let hash = solana_keccak_hasher::hash(&full[1..]);
     let mut addr = [0u8; 20];
@@ -188,7 +211,7 @@ pub fn signed_price_dto(
     let sk = libsecp256k1::SecretKey::parse(secret).expect("valid secret");
     let msg = libsecp256k1::Message::parse(&eth_hash.to_bytes());
     let (sig, rec) = libsecp256k1::sign(&msg, &sk);
-    let sig_bytes = sig.serialize(); // 64 bytes r||s
+    let sig_bytes = sig.serialize();
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
     r.copy_from_slice(&sig_bytes[..32]);
@@ -197,13 +220,13 @@ pub fn signed_price_dto(
         token,
         price_in_wad,
         timestamp_ms,
-        v: rec.serialize() + 27, // EIP-191 v in {27, 28}
+        v: rec.serialize() + 27,
         r,
         s,
     }
 }
 
-/// Per-match economics knobs for building harnesses in arbitrary terminal states.
+/// Per-match knobs for building harnesses in arbitrary terminal states.
 #[derive(Clone, Copy)]
 pub struct MatchConfig {
     pub match_id: u64,
@@ -211,11 +234,13 @@ pub struct MatchConfig {
     pub entry_fee: u64,
     pub rake_bps: u32,
     pub rake_cap: u64,
-    pub nonseal_penalty_bps: u32,
     pub min_players: u8,
     pub max_players: u8,
+    /// How many of the harness keypairs deposit (become candidates).
     pub num_players: usize,
     pub fill_deadline_ts: u64,
+    pub is_private: bool,
+    pub total_betting_duration_sec: u64,
 }
 
 impl Default for MatchConfig {
@@ -226,11 +251,12 @@ impl Default for MatchConfig {
             entry_fee: ENTRY_FEE,
             rake_bps: 0,
             rake_cap: 0,
-            nonseal_penalty_bps: 0,
             min_players: 2,
             max_players: 5,
             num_players: 3,
             fill_deadline_ts: 9_999_999_999,
+            is_private: false,
+            total_betting_duration_sec: 600,
         }
     }
 }
@@ -238,26 +264,31 @@ impl Default for MatchConfig {
 pub struct MatchHarness {
     pub svm: LiteSVM,
     pub admin: Keypair,
-    pub players: [Keypair; 3],
+    pub players: [Keypair; NUM_KEYPAIRS],
     pub mint: Keypair,
     pub match_key: Pubkey,
-    pub player_tokens: [Pubkey; 3],
+    pub player_tokens: [Pubkey; NUM_KEYPAIRS],
     pub cfg: MatchConfig,
+    /// The confirmed set passed to `lock_match`, in engine order (player indices).
+    pub confirmed: Vec<usize>,
 }
 
 impl MatchHarness {
+    /// Default fixture: 3 candidates, all confirmed at lock in deposit order.
     pub fn new() -> Self {
         let mut h = Self::bare(MatchConfig::default());
         h.create_match();
         h.deposit_all();
-        h.lock_match();
+        h.lock_match(&[0, 1, 2]);
         h
     }
 
-    /// Build a harness up to (but not including) `create_match`, leaving lifecycle steps
-    /// to the caller so terminal-state matrix rows can drive any path.
+    /// Build a harness up to (but not including) `create_match`.
     pub fn bare(cfg: MatchConfig) -> Self {
-        assert!(cfg.num_players <= 3, "harness has 3 player keypairs");
+        assert!(
+            cfg.num_players <= NUM_KEYPAIRS,
+            "harness has {NUM_KEYPAIRS} player keypairs"
+        );
         let mut svm = LiteSVM::new();
         svm.add_program_from_file(PROGRAM_ID, program_so_path())
             .expect("load syndicate_program.so — run `cargo build-sbf` first");
@@ -270,7 +301,7 @@ impl MatchHarness {
         }
 
         let admin = Keypair::new();
-        let players = [Keypair::new(), Keypair::new(), Keypair::new()];
+        let players: [Keypair; NUM_KEYPAIRS] = std::array::from_fn(|_| Keypair::new());
         let mint = Keypair::new();
         svm.airdrop(&admin.pubkey(), 10_000_000_000).unwrap();
         for p in &players {
@@ -283,17 +314,36 @@ impl MatchHarness {
             players,
             mint,
             match_key: Pubkey::default(),
-            player_tokens: [Pubkey::default(); 3],
+            player_tokens: [Pubkey::default(); NUM_KEYPAIRS],
             cfg,
+            confirmed: Vec::new(),
         };
         h.init_mint();
         h.init_protocol();
         h
     }
 
-    /// Players actually seated in this match.
+    /// Players who deposited into this match (candidates).
     pub fn seated(&self) -> &[Keypair] {
         &self.players[..self.cfg.num_players]
+    }
+
+    /// The room commitment recorded on the match (creator binding) for private fixtures.
+    pub fn creator_room_commitment(&self) -> [u8; 32] {
+        if self.cfg.is_private {
+            room_commitment(ROOM_CODE, &self.admin.pubkey())
+        } else {
+            [0u8; 32]
+        }
+    }
+
+    /// The join commitment a given player passes to `deposit`.
+    pub fn join_commitment(&self, seat: usize) -> [u8; 32] {
+        if self.cfg.is_private {
+            room_commitment(ROOM_CODE, &self.players[seat].pubkey())
+        } else {
+            [0u8; 32]
+        }
     }
 
     // ---- Clock control -------------------------------------------------------------
@@ -325,7 +375,6 @@ impl MatchHarness {
     pub fn vault_balance(&self) -> u64 {
         let (vault, _) = vault_pda(&self.match_key);
         let acc = self.svm.get_account(&vault).expect("vault account");
-        // SPL token account: amount is u64 LE at offset 64.
         u64::from_le_bytes(acc.data[64..72].try_into().unwrap())
     }
 
@@ -351,13 +400,7 @@ impl MatchHarness {
             6,
         )
         .unwrap();
-        send(
-            &mut self.svm,
-            &self.admin,
-            vec![ix1, ix2],
-            &[&self.mint],
-        )
-        .expect("init mint");
+        send(&mut self.svm, &self.admin, vec![ix1, ix2], &[&self.mint]).expect("init mint");
     }
 
     fn init_protocol(&mut self) {
@@ -373,13 +416,15 @@ impl MatchHarness {
             upgrade_authority: self.admin.pubkey(),
             price_signer: eth_address_of_secret(&PRICE_SIGNER_SECRET),
         };
-        // Wide-open bounds so existing harness fixtures (arbitrary buy-ins / far-future fill
-        // deadlines) pass the on-chain range check; bound-specific tests override these.
+        // Wide-open bounds so existing harness fixtures pass the on-chain range checks;
+        // bound-specific tests override these via `set_match_bounds`.
         let bounds = MatchBounds {
             buy_in_min: 1,
             buy_in_max: u64::MAX,
             fill_window_min_sec: 1,
             fill_window_max_sec: u64::MAX,
+            total_betting_duration_min_sec: 1,
+            total_betting_duration_max_sec: u64::MAX,
         };
         let ix = Instruction {
             program_id: PROGRAM_ID,
@@ -390,16 +435,14 @@ impl MatchHarness {
             ],
             data: ix_data("initialize_protocol", &(roles, bounds)),
         };
-        send(&mut self.svm, &self.admin, vec![ix], &[])
-            .expect("initialize_protocol");
+        send(&mut self.svm, &self.admin, vec![ix], &[]).expect("initialize_protocol");
     }
 
     pub fn create_match(&mut self) {
         self.try_create_match().expect("create_match");
     }
 
-    /// Update the operator-governed match bounds as `config_admin` (the harness admin holds
-    /// every role). Returns the raw send result so bound-rejection tests can assert failures.
+    /// Update the operator-governed match bounds as `config_admin`.
     pub fn set_match_bounds(&mut self, bounds: MatchBounds) -> Result<(), String> {
         let (protocol, _) = protocol_pda();
         let ix = Instruction {
@@ -413,34 +456,48 @@ impl MatchHarness {
         send(&mut self.svm, &self.admin, vec![ix], &[])
     }
 
-    /// `create_match` returning the send result (for asserting bound rejections).
-    pub fn try_create_match(&mut self) -> Result<(), String> {
-        let (protocol, _) = protocol_pda();
-        let (match_key, _) = match_pda(self.cfg.match_id);
-        let (vault, _) = vault_pda(&match_key);
-        self.match_key = match_key;
+    fn create_params(&self) -> CreateParams {
         // The on-chain deadline is derived as `now + fill_window_sec`; express the harness's
-        // desired absolute `fill_deadline_ts` as a window relative to the current clock so
-        // existing fixtures and `set_clock(cfg.fill_deadline_ts + 1)` assertions still hold.
+        // desired absolute `fill_deadline_ts` as a window relative to the current clock.
         let fill_window_sec = self.cfg.fill_deadline_ts.saturating_sub(self.now());
-        let params = CreateParams {
+        CreateParams {
             match_id: self.cfg.match_id,
             buy_in: self.cfg.buy_in,
             entry_fee: self.cfg.entry_fee,
             rake_bps: self.cfg.rake_bps,
             rake_cap: self.cfg.rake_cap,
-            nonseal_penalty_bps: self.cfg.nonseal_penalty_bps,
             min_players: self.cfg.min_players,
             max_players: self.cfg.max_players,
+            is_private: self.cfg.is_private,
+            room_commitment: self.creator_room_commitment(),
             config_hash: [1u8; 32],
             price_token: PRICE_TOKEN,
-            total_betting_duration_sec: 600,
+            total_betting_duration_sec: self.cfg.total_betting_duration_sec,
             seal_window_sec: 20,
             begin_live_window_sec: 5,
             fill_window_sec,
             max_oracle_confidence: 100,
             oracle_exponent: -18,
-        };
+        }
+    }
+
+    /// `create_match` returning the send result (for asserting rejections).
+    pub fn try_create_match(&mut self) -> Result<(), String> {
+        let params = self.create_params();
+        self.try_create_match_with(params)
+    }
+
+    /// Expose the fixture-derived params so tests can mutate them before creating.
+    pub fn build_create_params(&self) -> CreateParams {
+        self.create_params()
+    }
+
+    /// `create_match` with explicit params (private-room / bound rejection cases).
+    pub fn try_create_match_with(&mut self, params: CreateParams) -> Result<(), String> {
+        let (protocol, _) = protocol_pda();
+        let (match_key, _) = match_pda(params.match_id);
+        let (vault, _) = vault_pda(&match_key);
+        self.match_key = match_key;
         let ix = Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
@@ -458,82 +515,203 @@ impl MatchHarness {
         send(&mut self.svm, &self.admin, vec![ix], &[])
     }
 
-    pub fn deposit_all(&mut self) {
-        let buy_in = self.cfg.buy_in;
-        let entry_fee = self.cfg.entry_fee;
-        let num = self.cfg.num_players;
-        for seat in 0..num {
-            let player = self.players[seat].insecure_clone();
-            let (seat_key, _) = seat_pda(&self.match_key, &player.pubkey());
-            let (seat_index_key, _) = seat_index_pda(&self.match_key, seat as u16);
-            let (protocol, _) = protocol_pda();
-            let (vault, _) = vault_pda(&self.match_key);
-            let token = Keypair::new();
-            self.player_tokens[seat] = token.pubkey();
-            let rent = self.svm.minimum_balance_for_rent_exemption(165);
-            let create = solana_sdk::system_instruction::create_account(
-                &player.pubkey(),
-                &token.pubkey(),
-                rent,
-                165,
-                &TOKEN_PROGRAM_ID,
-            );
-            let init = token_ix::initialize_account(
-                &TOKEN_PROGRAM_ID,
-                &token.pubkey(),
-                &self.mint.pubkey(),
-                &player.pubkey(),
-            )
-            .unwrap();
-            send(&mut self.svm, &player, vec![create, init], &[&token]).expect("init player token");
-            let mint_to = token_ix::mint_to(
-                &TOKEN_PROGRAM_ID,
-                &self.mint.pubkey(),
-                &token.pubkey(),
-                &self.admin.pubkey(),
-                &[],
-                buy_in + entry_fee + 1_000,
-            )
-            .unwrap();
-            send(&mut self.svm, &self.admin, vec![mint_to], &[]).expect("mint_to");
+    /// Ensure a funded SPL token account exists for `seat`.
+    fn ensure_player_token(&mut self, seat: usize) {
+        if self.player_tokens[seat] != Pubkey::default() {
+            return;
+        }
+        let player = self.players[seat].insecure_clone();
+        let token = Keypair::new();
+        self.player_tokens[seat] = token.pubkey();
+        let rent = self.svm.minimum_balance_for_rent_exemption(165);
+        let create = solana_sdk::system_instruction::create_account(
+            &player.pubkey(),
+            &token.pubkey(),
+            rent,
+            165,
+            &TOKEN_PROGRAM_ID,
+        );
+        let init = token_ix::initialize_account(
+            &TOKEN_PROGRAM_ID,
+            &token.pubkey(),
+            &self.mint.pubkey(),
+            &player.pubkey(),
+        )
+        .unwrap();
+        send(&mut self.svm, &player, vec![create, init], &[&token]).expect("init player token");
+        let mint_to = token_ix::mint_to(
+            &TOKEN_PROGRAM_ID,
+            &self.mint.pubkey(),
+            &token.pubkey(),
+            &self.admin.pubkey(),
+            &[],
+            self.cfg.buy_in + self.cfg.entry_fee + 1_000,
+        )
+        .unwrap();
+        send(&mut self.svm, &self.admin, vec![mint_to], &[]).expect("mint_to");
+    }
 
-            let seat_index = seat as u16;
-            let ix = Instruction {
-                program_id: PROGRAM_ID,
-                accounts: vec![
-                    AccountMeta::new(player.pubkey(), true),
-                    AccountMeta::new_readonly(protocol, false),
-                    AccountMeta::new(self.match_key, false),
-                    AccountMeta::new(seat_key, false),
-                    AccountMeta::new(seat_index_key, false),
-                    AccountMeta::new(token.pubkey(), false),
-                    AccountMeta::new(vault, false),
-                    AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
-                    AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
-                ],
-                data: ix_data("deposit", &seat_index),
-            };
-            send(&mut self.svm, &player, vec![ix], &[]).expect("deposit");
+    /// Deposit for one player with an explicit join commitment. Returns the send result.
+    pub fn deposit_with_commitment(
+        &mut self,
+        seat: usize,
+        join_commitment: [u8; 32],
+    ) -> Result<(), String> {
+        self.ensure_player_token(seat);
+        let player = self.players[seat].insecure_clone();
+        let (seat_key, _) = seat_pda(&self.match_key, &player.pubkey());
+        let (protocol, _) = protocol_pda();
+        let (vault, _) = vault_pda(&self.match_key);
+        let ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(player.pubkey(), true),
+                AccountMeta::new_readonly(protocol, false),
+                AccountMeta::new(self.match_key, false),
+                AccountMeta::new(seat_key, false),
+                AccountMeta::new(self.player_tokens[seat], false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: ix_data("deposit", &join_commitment),
+        };
+        send(&mut self.svm, &player, vec![ix], &[])
+    }
+
+    /// Deposit for one player with the fixture-appropriate commitment.
+    pub fn deposit(&mut self, seat: usize) -> Result<(), String> {
+        let jc = self.join_commitment(seat);
+        self.deposit_with_commitment(seat, jc)
+    }
+
+    /// Deposit from a brand-new funded keypair (candidate-cap tests beyond the fixed
+    /// keypair set). Returns the send result.
+    pub fn deposit_new_player(&mut self) -> Result<(), String> {
+        let player = Keypair::new();
+        self.svm.airdrop(&player.pubkey(), 10_000_000_000).unwrap();
+        let token = Keypair::new();
+        let rent = self.svm.minimum_balance_for_rent_exemption(165);
+        let create = solana_sdk::system_instruction::create_account(
+            &player.pubkey(),
+            &token.pubkey(),
+            rent,
+            165,
+            &TOKEN_PROGRAM_ID,
+        );
+        let init = token_ix::initialize_account(
+            &TOKEN_PROGRAM_ID,
+            &token.pubkey(),
+            &self.mint.pubkey(),
+            &player.pubkey(),
+        )
+        .unwrap();
+        send(&mut self.svm, &player, vec![create, init], &[&token])?;
+        let mint_to = token_ix::mint_to(
+            &TOKEN_PROGRAM_ID,
+            &self.mint.pubkey(),
+            &token.pubkey(),
+            &self.admin.pubkey(),
+            &[],
+            self.cfg.buy_in + self.cfg.entry_fee + 1_000,
+        )
+        .unwrap();
+        send(&mut self.svm, &self.admin, vec![mint_to], &[])?;
+
+        let jc = if self.cfg.is_private {
+            room_commitment(ROOM_CODE, &player.pubkey())
+        } else {
+            [0u8; 32]
+        };
+        let (seat_key, _) = seat_pda(&self.match_key, &player.pubkey());
+        let (protocol, _) = protocol_pda();
+        let (vault, _) = vault_pda(&self.match_key);
+        let ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(player.pubkey(), true),
+                AccountMeta::new_readonly(protocol, false),
+                AccountMeta::new(self.match_key, false),
+                AccountMeta::new(seat_key, false),
+                AccountMeta::new(token.pubkey(), false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: ix_data("deposit", &jc),
+        };
+        send(&mut self.svm, &player, vec![ix], &[])
+    }
+
+    /// Deposit all `num_players` candidates.
+    pub fn deposit_all(&mut self) {
+        for seat in 0..self.cfg.num_players {
+            self.deposit(seat).expect("deposit");
         }
     }
 
-    pub fn lock_match(&mut self) {
+    /// Seat PDAs of a set of player indices, in the given order.
+    pub fn seat_pdas_of(&self, players: &[usize]) -> Vec<Pubkey> {
+        players
+            .iter()
+            .map(|&i| seat_pda(&self.match_key, &self.players[i].pubkey()).0)
+            .collect()
+    }
+
+    /// Lock with an explicit confirmed set (player indices, in engine order). Records the
+    /// order so `begin_live`/`submit_settlement` pass seats identically.
+    pub fn lock_match(&mut self, confirmed: &[usize]) {
+        self.try_lock_match(confirmed).expect("lock");
+    }
+
+    /// `lock` returning the send result. `remaining_accounts` = confirmed seat PDAs
+    /// (writable), engine order = slice order.
+    pub fn try_lock_match(&mut self, confirmed: &[usize]) -> Result<(), String> {
         let (protocol, _) = protocol_pda();
-        let lock_ix = Instruction {
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.admin.pubkey(), true),
+            AccountMeta::new_readonly(protocol, false),
+            AccountMeta::new(self.match_key, false),
+        ];
+        for s in self.seat_pdas_of(confirmed) {
+            accounts.push(AccountMeta::new(s, false));
+        }
+        let ix = Instruction {
             program_id: PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new_readonly(self.admin.pubkey(), true),
-                AccountMeta::new_readonly(protocol, false),
-                AccountMeta::new(self.match_key, false),
-            ],
+            accounts,
             data: anchor_discriminator("lock").to_vec(),
         };
-        send(&mut self.svm, &self.admin, vec![lock_ix], &[]).expect("lock");
+        let admin = self.admin.insecure_clone();
+        let res = send(&mut self.svm, &admin, vec![ix], &[]);
+        if res.is_ok() {
+            self.confirmed = confirmed.to_vec();
+        }
+        res
+    }
+
+    /// Raw lock with arbitrary seat account keys (validation-failure tests).
+    pub fn try_lock_match_raw(&mut self, seat_accounts: &[Pubkey]) -> Result<(), String> {
+        let (protocol, _) = protocol_pda();
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.admin.pubkey(), true),
+            AccountMeta::new_readonly(protocol, false),
+            AccountMeta::new(self.match_key, false),
+        ];
+        for s in seat_accounts {
+            accounts.push(AccountMeta::new(*s, false));
+        }
+        let ix = Instruction {
+            program_id: PROGRAM_ID,
+            accounts,
+            data: anchor_discriminator("lock").to_vec(),
+        };
+        let admin = self.admin.insecure_clone();
+        send(&mut self.svm, &admin, vec![ix], &[])
     }
 
     // ---- Lifecycle helpers (matrix-driving) ----------------------------------------
 
-    /// Seal a seated player's prediction commitment during Sealing.
+    /// Seal a confirmed player's prediction commitment during Sealing.
     pub fn register_prediction_commitment(
         &mut self,
         seat: usize,
@@ -559,59 +737,72 @@ impl MatchHarness {
     }
 
     /// drand round whose published time falls just inside the valid seal window
-    /// `(latest_match_end, latest_match_end + MAX_TIMELOCK_SKEW_SEC]`. Uses the live
-    /// match account's timing so it is always valid at call time.
+    /// `(latest_match_end, latest_match_end + MAX_TIMELOCK_SKEW_SEC]`.
     pub fn valid_timelock_target(&self) -> u64 {
         let m = self.match_account();
         let latest_match_end =
             m.seal_deadline_ts + m.total_betting_duration_sec + m.begin_live_window_sec;
-        // round * 3 + GENESIS > latest_match_end  =>  round > (latest - GENESIS)/3
         const GENESIS: u64 = 1_692_803_367;
         const PERIOD: u64 = 3;
         let mut round = (latest_match_end.saturating_sub(GENESIS)) / PERIOD + 1;
-        // bump until strictly after latest_match_end
         while GENESIS + round * PERIOD <= latest_match_end {
             round += 1;
         }
         round
     }
 
-    /// Seat PDAs of seated players (the `remaining_accounts` set for begin_live).
-    pub fn seated_seat_pdas(&self) -> Vec<Pubkey> {
-        (0..self.cfg.num_players)
-            .map(|i| seat_pda(&self.match_key, &self.players[i].pubkey()).0)
-            .collect()
+    /// Advance Sealing → Live. `remaining_accounts` = the confirmed seats in the engine
+    /// order recorded at lock. No args (button derives on-chain).
+    pub fn begin_live(&mut self) -> Result<(), String> {
+        let confirmed = self.confirmed.clone();
+        self.begin_live_with(&confirmed)
     }
 
-    /// Advance Sealing → Live (or UnderMinSealed VOID). Passes every seated seat as a
-    /// writable `remaining_account`.
-    pub fn begin_live(&mut self, button_randomness: [u8; 32]) -> Result<(), String> {
+    /// begin_live with an explicit seat order (order-validation tests).
+    pub fn begin_live_with(&mut self, order: &[usize]) -> Result<(), String> {
         let (protocol, _) = protocol_pda();
         let mut accounts = vec![
             AccountMeta::new_readonly(self.admin.pubkey(), true),
             AccountMeta::new_readonly(protocol, false),
             AccountMeta::new(self.match_key, false),
         ];
-        for s in self.seated_seat_pdas() {
-            accounts.push(AccountMeta::new(s, false));
+        for s in self.seat_pdas_of(order) {
+            accounts.push(AccountMeta::new_readonly(s, false));
         }
-        let args = BeginLiveArgs { button_randomness };
         let ix = Instruction {
             program_id: PROGRAM_ID,
             accounts,
-            data: ix_data("begin_live", &args),
+            data: anchor_discriminator("begin_live").to_vec(),
         };
         let admin = self.admin.insecure_clone();
         send(&mut self.svm, &admin, vec![ix], &[])
     }
 
-    /// Submit settlement with a real signed price recoverable to `price_signer`. The
-    /// price timestamp_ms is `scheduled_end_ts * 1000` so `publish_time == scheduled_end_ts`.
-    /// `sealed_seats` are the seat indices (deposit-time) of sealers passed as
-    /// `remaining_accounts`; `payouts` are indexed by engine_seat.
+    /// Recompute the normative button seed off-chain (parity assertions).
+    pub fn expected_button_seed(&self) -> ([u8; 32], u8) {
+        let m = self.match_account();
+        let mut preimage: Vec<u8> = Vec::new();
+        preimage.extend_from_slice(b"syndicate:button:v2");
+        preimage.extend_from_slice(self.match_key.as_ref());
+        preimage.extend_from_slice(&m.lock_ts.to_le_bytes());
+        for &i in &self.confirmed {
+            let seat = self.seat_account(i);
+            preimage.extend_from_slice(self.players[i].pubkey().as_ref());
+            preimage.push(seat.commitment_set as u8);
+            preimage.extend_from_slice(&seat.prediction_commitment);
+            preimage.extend_from_slice(&seat.timelock_target.to_le_bytes());
+        }
+        let seed = solana_keccak_hasher::hash(&preimage).to_bytes();
+        let rnd = u64::from_le_bytes(seed[0..8].try_into().unwrap());
+        let button = (rnd % self.confirmed.len() as u64) as u8;
+        (seed, button)
+    }
+
+    /// Submit settlement with a real signed price recoverable to `price_signer`.
+    /// Seats are passed in the engine order recorded at lock; `payouts` indexed by
+    /// engine_seat and must cover every confirmed seat.
     pub fn submit_settlement(
         &mut self,
-        sealed_seats: &[usize],
         rake_collected: u64,
         payouts: Vec<SeatPayout>,
         price: u128,
@@ -630,9 +821,9 @@ impl MatchHarness {
             AccountMeta::new_readonly(protocol, false),
             AccountMeta::new(self.match_key, false),
         ];
-        for &s in sealed_seats {
-            let pk = seat_pda(&self.match_key, &self.players[s].pubkey()).0;
-            accounts.push(AccountMeta::new(pk, false));
+        let confirmed = self.confirmed.clone();
+        for s in self.seat_pdas_of(&confirmed) {
+            accounts.push(AccountMeta::new(s, false));
         }
         let ix = Instruction {
             program_id: PROGRAM_ID,
@@ -646,11 +837,6 @@ impl MatchHarness {
     fn claim_like(&mut self, seat: usize, disc: &str) -> Result<(), String> {
         let player = self.players[seat].insecure_clone();
         let (seat_key, _) = seat_pda(&self.match_key, &player.pubkey());
-        // `deposit_all` assigns `seat_index = seat as u16`, so derive it directly rather than
-        // reading the seat account — on a double-claim the seat PDA is already closed, and a
-        // read would panic in the harness instead of letting the program reject the tx.
-        let seat_index = seat as u16;
-        let (seat_index_key, _) = seat_index_pda(&self.match_key, seat_index);
         let (vault, _) = vault_pda(&self.match_key);
         let ix = Instruction {
             program_id: PROGRAM_ID,
@@ -658,7 +844,6 @@ impl MatchHarness {
                 AccountMeta::new(player.pubkey(), true),
                 AccountMeta::new(self.match_key, false),
                 AccountMeta::new(seat_key, false),
-                AccountMeta::new(seat_index_key, false),
                 AccountMeta::new(vault, false),
                 AccountMeta::new(self.player_tokens[seat], false),
                 AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
@@ -668,12 +853,12 @@ impl MatchHarness {
         send(&mut self.svm, &player, vec![ix], &[])
     }
 
-    /// Claim a settled seat's payout (closes seat + seat-index PDAs).
+    /// Claim a settled seat's payout (closes the seat PDA).
     pub fn claim(&mut self, seat: usize) -> Result<(), String> {
         self.claim_like(seat, "claim")
     }
 
-    /// Refund a voided seat (closes seat + seat-index PDAs). Same account layout as claim.
+    /// Refund (voided confirmed seat, or unconfirmed candidate after lock).
     pub fn refund(&mut self, seat: usize) -> Result<(), String> {
         self.claim_like(seat, "refund")
     }
@@ -716,7 +901,7 @@ impl MatchHarness {
         send(&mut self.svm, &admin, vec![ix], &[])
     }
 
-    /// Withdraw fees (rake + forfeited entry fees) to the treasury token account.
+    /// Withdraw fees (confirmed entry fees + rake) to the treasury token account.
     pub fn withdraw_fees(&mut self, treasury_token: &Pubkey) -> Result<(), String> {
         let (protocol, _) = protocol_pda();
         let (vault, _) = vault_pda(&self.match_key);
@@ -759,7 +944,6 @@ impl MatchHarness {
         token.pubkey()
     }
 }
-
 
 pub fn canonical_action_step(
     seat_index: u16,

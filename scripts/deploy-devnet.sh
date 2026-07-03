@@ -1,54 +1,37 @@
 #!/usr/bin/env bash
+# Build + deploy the v2 app stack on the current host (devnet flavor).
+#
+#   cp deploy/.env.example deploy/.env   # fill in first
+#   scripts/deploy-devnet.sh
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
-export APP_ENV="${APP_ENV:-devnet}"
-export SOLANA_CLUSTER="${SOLANA_CLUSTER:-devnet}"
-
-required_vars=(
-  DATABASE_URL
-  REDIS_URL
-  NATS_URL
-  SOLANA_RPC_URL_PRIMARY
-  PYTH_API_KEY
-  SYNDICATE_PROGRAM_ID
-  SETTLEMENT_CHAIN_AUTH_TOKEN_FILE
-  SETTLEMENT_SIGNER_KEYPAIR_PATH
-  DEPLOYER_MULTISIG_ADDRESS
-)
-
-for name in "${required_vars[@]}"; do
-  if [[ -z "${!name:-}" ]]; then
-    echo "missing required environment variable: $name" >&2
-    exit 1
-  fi
+[ -f deploy/.env ] || { echo "deploy/.env missing (cp deploy/.env.example deploy/.env)"; exit 1; }
+for f in postgres-password operator-keypair.json price-signer.key session-signing-key; do
+  [ -f "deploy/secrets/$f" ] || { echo "deploy/secrets/$f missing (see deploy/secrets/README.md)"; exit 1; }
 done
 
-if [[ -z "${PYTH_RECEIVER_STACK:-}" ]]; then
-  for name in PYTH_HERMES_URL PYTH_RECEIVER_PROGRAM_ID PYTH_WORMHOLE_PROGRAM_ID PYTH_PUSH_ORACLE_PROGRAM_ID; do
-    if [[ -z "${!name:-}" ]]; then
-      echo "missing required environment variable: $name (or set PYTH_RECEIVER_STACK=legacy|upgraded)" >&2
-      exit 1
-    fi
-  done
-fi
+COMPOSE=(docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env)
 
-./scripts/test-all.sh
+"${COMPOSE[@]}" config -q
+echo "building images…"
+"${COMPOSE[@]}" build game-server chain-worker signed-price-server
+echo "starting stack…"
+"${COMPOSE[@]}" up -d
 
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  docker compose -f deploy/docker-compose.localnet.yml config >/dev/null
-  docker compose -f deploy/docker-compose.app.yml config >/dev/null
-else
-  echo "docker compose not available; skipping compose syntax validation"
-fi
+echo "waiting for health…"
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 2 http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 
-if ! command -v anchor >/dev/null 2>&1; then
-  echo "anchor is required for devnet deployment" >&2
-  exit 1
-fi
+GAME_SERVER_URL=http://127.0.0.1:18080 \
+CHAIN_WORKER_URL=http://127.0.0.1:18084 \
+PRICE_URL=http://127.0.0.1:18088 \
+  bash scripts/smoke-test.sh
 
-(cd services/programs && anchor build)
-
-echo "Devnet build checks passed."
-echo "Deploy/upgrade must be executed through the configured devnet authority workflow."
+echo "devnet stack deployed."

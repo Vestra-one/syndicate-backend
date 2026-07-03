@@ -24,10 +24,10 @@ pub mod types;
 
 pub use intent::{
     action_head_step, action_intent_message, action_tag_and_amount, chain_hash,
-    default_policy_message, prediction_commitment_hash, prediction_commitment_message,
-    ACTION_TAG_ALL_IN, ACTION_TAG_BET_TO, ACTION_TAG_CALL, ACTION_TAG_CHECK, ACTION_TAG_FOLD,
-    ACTION_TAG_RAISE_TO, DEFAULT_TAG_CHECK_CALL_ANY, DEFAULT_TAG_CHECK_FOLD, DOMAIN_ACTION,
-    DOMAIN_DEFAULT, DOMAIN_PREDICTION,
+    ciphertext_commitment_hash, default_policy_message, prediction_commitment_hash,
+    prediction_commitment_message, sha256, ACTION_TAG_ALL_IN, ACTION_TAG_BET_TO, ACTION_TAG_CALL,
+    ACTION_TAG_CHECK, ACTION_TAG_FOLD, ACTION_TAG_RAISE_TO, DEFAULT_TAG_CHECK_CALL_ANY,
+    DEFAULT_TAG_CHECK_FOLD, DOMAIN_ACTION, DOMAIN_DEFAULT, DOMAIN_PREDICTION,
 };
 
 pub use events::{

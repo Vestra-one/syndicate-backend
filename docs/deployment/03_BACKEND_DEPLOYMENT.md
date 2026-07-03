@@ -5,6 +5,48 @@
 
 ---
 
+## First-time run (checklist)
+
+Use this once on a **fresh VPS + empty Postgres**. Later deploys are §12 (git pull + rebuild).
+
+| Step | Section | Action |
+|------|---------|--------|
+| 1 | [§0](#0-inputs-from-guide-01) | Copy program id, PDA, RPC, `price_signer`, chips mint, admin keypair from guide 01 |
+| 2 | [§2](#2-clone-repository) | Clone repo to `/opt/syndicate/backend` |
+| 3 | [§3](#3-secrets) | Create `deploy/secrets/` — `settlement-chain.token`, `settlement-admin-keypair.json`, `chmod` |
+| 4 | [§4](#4-environment-file-deploysecretsappenv) | Write `deploy/secrets/app.env` (cluster, program id, `ECDSA_PRIVATE_KEY`, vestigial `PYTH_*`) |
+| 5 | [§5](#5-compose-override) | Write `deploy/docker-compose.override.yml` |
+| 6 | [§6](#6-compose-helpers) | Export `COMPOSE_APP` and `COMPOSE_INFRA` |
+| 7 | [§7](#7-start-infrastructure) | `$COMPOSE_INFRA up -d` — wait for Postgres healthy on **host port 5433** |
+| 8 | [§8](#8-database-migrations) | `./scripts/db-migrate-local.sh` — applies **0001–0007** (see below) |
+| 9 | [§9](#9-build-and-start-application) | `$COMPOSE_APP build` then `$COMPOSE_APP up -d` (first Rust build: 10–25 min) |
+| 10 | [§10](#10-verify) | Curl all `/healthz` endpoints; confirm worker logs `production runtime ready` |
+| 11 | [§11](#11-frontend-urls-after-reverse-proxy) | DNS + Caddy ([04_DOMAIN_AND_TLS.md](./04_DOMAIN_AND_TLS.md)) |
+| 12 | *(optional)* | E2E from your laptop — see [§10.1](#101-end-to-end-smoke-test-devnet) |
+
+**Match rows (v1, no indexer).** `POST /rooms` writes Postgres `matches` / `match_seats` via
+**settlement-worker** (`POST /internal/matches` on port 8084). Compose already wires:
+
+- `matchmaking` → `MATCH_PERSISTENCE_URL=http://settlement-worker:8084`
+- `match-orchestrator` → same URL for `begin_live` updates
+- `match-engine` → `MATCH_ENGINE_POSTGRES_LEASES=true` (requires a `matches` row before start)
+
+So the first-time path **must** include migrations **0006** (`fill_deadline_ts`, `room_status`, …)
+and **0007** (`match_configs.config_hash`). `./scripts/db-migrate-local.sh` runs them after 0001/0002;
+do not skip §8.
+
+**One-liner recap** (after §3–§6 are done):
+
+```bash
+cd /opt/syndicate/backend
+$COMPOSE_INFRA up -d
+DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
+$COMPOSE_APP build
+$COMPOSE_APP up -d
+```
+
+---
+
 ## 0. Inputs from guide 01
 
 ```
@@ -275,25 +317,52 @@ docker network inspect syndicate-localnet_default -f '{{range .Containers}}{{.Na
 
 ## 8. Database migrations
 
-The migrations are **not idempotent** and the runner stops on first error (`ON_ERROR_STOP=1`),
-so they must run **once on a clean schema**. The Docker Postgres is on host port **5433** — always
-pass `-p 5433` (omitting it defaults to 5432 and hits a different/absent Postgres:
-`password authentication failed`).
+**First-time:** run `./scripts/db-migrate-local.sh` once on an empty database. It applies:
+
+| Script / step | Migrations | Purpose |
+|---------------|------------|---------|
+| `db-migrate-local.sh` (first half) | `0001_production_persistence.sql`, `0002_settlement_queue.sql` | Base schema (matches, match_configs, settlement queue) |
+| `db-migrate-incremental.sh` (called automatically) | `0003`–`0007` | Signed intents, profile metadata, **match lifecycle columns (0006)**, **config_hash (0007)** |
+
+Migrations **0001** and **0002** are **not idempotent** — the runner stops on first error
+(`ON_ERROR_STOP=1`). Incremental **0003–0007** use `IF NOT EXISTS` / `DO` blocks where possible
+and are safe to re-run on an existing DB that already has 0001/0002.
+
+The Docker Postgres is on host port **5433** (not 5432). Always pass `-p 5433` when using `psql`
+from the host; omitting it hits a different/absent Postgres (`password authentication failed`).
 
 ```bash
 DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
   ./scripts/db-migrate-local.sh
 
 PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local -c '\dt' | head
+
+# Confirm lifecycle + config_hash columns exist (required for POST /rooms).
+PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name = 'matches' AND column_name IN ('fill_deadline_ts','room_status');"
+PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name = 'match_configs' AND column_name = 'config_hash';"
 ```
 
-> **Re-running fails with `type "match_status" already exists`?** A previous run partially applied.
-> On a fresh DB (no real data) reset the schema and re-run:
- ```bash
-PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local \
-   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
+**Upgrading an older DB** (already ran 0001/0002 before this guide): run only the incremental
+script — do **not** re-apply 0001/0002:
+
+```bash
+DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
+  ./scripts/db-migrate-incremental.sh
+```
+
+> **Re-running 0001 fails with `type "match_status" already exists`?** A previous run partially
+> applied the base schema. On a fresh DB (no real data) reset and re-run:
+>
+> ```bash
+> PGPASSWORD=syndicate psql -h 127.0.0.1 -p 5433 -U syndicate -d syndicate_local \
+>   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+> DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" ./scripts/db-migrate-local.sh
 > ```
+>
 > Or wipe the volume entirely: `$COMPOSE_INFRA down -v && $COMPOSE_INFRA up -d` (destroys all infra data).
 
 ---
@@ -359,7 +428,29 @@ is unavailable at `scheduled_end_ts`.
 ```bash
 docker logs $(docker ps -qf name=settlement-worker) 2>&1 | tail -n 20
 # Expect: production runtime ready
+# Expect: settlement-worker http listening on http://0.0.0.0:8084
 ```
+
+### 10.1 End-to-end smoke test (devnet)
+
+After §11 (reverse proxy) or against loopback ports, run the lifecycle script from a machine with
+Solana CLI + player keypairs. It exercises create → `POST /rooms` → deposit → seal → `begin_live` →
+match-engine start.
+
+```bash
+# From repo root on your laptop (not the VPS)
+export BASIC_AUTH="dev:yourpassword"          # nginx basic auth for *.devnet.satoshitable.fun
+export PLAYER2_KEYPAIR=/path/to/player2.json
+export MATCHMAKING_URL=https://matchmaking.devnet.satoshitable.fun
+export GATEWAY_URL=wss://gateway.devnet.satoshitable.fun
+./scripts/run-e2e-devnet.sh
+```
+
+If **Step 2 (`POST /rooms`)** fails with `match persistence failed`:
+
+1. On the VPS: confirm migrations 0006/0007 (§8 verification queries).
+2. Rebuild worker: `$COMPOSE_APP build --no-cache settlement-worker && $COMPOSE_APP up -d settlement-worker`.
+3. See troubleshooting row for `error serializing parameter 3` (§13).
 
 ---
 
@@ -389,10 +480,14 @@ Full wire protocol: [../frontend/INTEGRATION_GUIDE.md](../frontend/INTEGRATION_G
 # Logs
 docker logs -f $(docker ps -qf name=settlement-chain)
 
-# Update
+# Update (after git pull — rebuild services whose code changed)
 git pull
 $COMPOSE_APP build
 $COMPOSE_APP up -d
+
+# Schema upgrades only (DB already has 0001/0002; new incremental migrations added)
+DATABASE_URL="postgres://syndicate:syndicate@localhost:5433/syndicate_local" \
+  ./scripts/db-migrate-incremental.sh
 
 # Stop (data preserved)
 $COMPOSE_APP down
@@ -417,6 +512,10 @@ $COMPOSE_APP down && $COMPOSE_INFRA down -v
 | Worker restarts: `settlement-chain health check failed`                | Wait for chain startup; `curl 127.0.0.1:18790/health`                                                                                                                                                                         |
 | Worker: `missing required environment variable`                        | Fill `deploy/secrets/app.env`; re-export `COMPOSE_APP`                                                                                                                                                                        |
 | `settlement relay/poller error: error serializing parameter`           | `git pull` (LIMIT batch size must be `i64`); `$COMPOSE_APP build --no-cache settlement-worker`                                                                                                                                |
+| `POST /rooms` → `INSERT_MATCH: error serializing parameter 2` | `git pull` (`config_id` must bind as `uuid::Uuid`, not `&str`, for `matches.config_id uuid`); `$COMPOSE_APP build --no-cache settlement-worker && $COMPOSE_APP up -d settlement-worker` |
+| `POST /rooms` → `match persistence failed` / `error serializing parameter 3` (INSERT_MATCH_CONFIG) | On first deploy: run §8 migrations (0006+0007). Then `git pull` (match-registry `oracle_exponent` must bind as `i16` for `match_configs.oracle_exponent smallint`); `$COMPOSE_APP build --no-cache settlement-worker && $COMPOSE_APP up -d settlement-worker`. Confirm matchmaking has `MATCH_PERSISTENCE_URL=http://settlement-worker:8084` (default in compose). |
+| `POST /rooms` → `column "fill_deadline_ts" does not exist` (or `config_hash`) | Run `./scripts/db-migrate-incremental.sh` against the VPS Postgres (§8); restart app stack. |
+| `match-engine start` → `match not found for protocol match id` | `matches` row missing — `POST /rooms` persistence failed earlier, or `MATCH_PERSISTENCE_URL` unset / worker down. Fix persistence first (§10.1). |
 | Wrong programId on `/health`                                           | Fix `SYNDICATE_PROGRAM_ID` in `app.env`; `$COMPOSE_APP up -d`                                                                                                                                                                 |
 | Worker panics: `missing PYTH_API_KEY or PYTH_API_KEY_FILE`             | Vestigial boot requirement — set any non-empty `PYTH_API_KEY` and `PYTH_RECEIVER_STACK=legacy` in `app.env` (§4). Not used for v1 settlement.                                                                                 |
 | Settlement always `VOID` / `signed price unavailable`                  | signed-price-server down or book stale: `curl 127.0.0.1:18088/health` (`"ok": true`); `docker logs` the `signed-price-server` service. settlement-chain reaches it at the internal DNS `http://signed-price-server:8080` (do not change to `127.0.0.1`). |

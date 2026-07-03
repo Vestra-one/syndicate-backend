@@ -1,26 +1,23 @@
-//! Funds-exit × terminal-state matrix (Phase 09).
+//! Funds-exit × terminal-state matrix (v2).
 //!
 //! The pre-audit capital-safety gate: for EVERY reachable terminal state, after all
 //! claims / refunds / fee-withdrawals the match vault token balance must drain to
-//! **exactly zero**. Each row drives a distinct lifecycle path on the real program `.so`
-//! (loaded by the harness) and asserts `h.vault_balance() == 0` at the end.
+//! **exactly zero** — including unconfirmed candidates left behind at lock.
 //!
 //! Status constants (borsh enum order): Filling=0 Sealing=1 Live=2 Settled=3 Void=4.
-//! VoidKind: None=0 FillingVoid=1 UnderMinSealed=2 Emergency=3.
+//! VoidKind (v2): None=0 FillingVoid=1 Emergency=2.
 
 mod common;
 
 use common::{MatchConfig, MatchHarness, SeatPayout};
 
 const FILLING: u8 = 0;
-const SEALING: u8 = 1;
 const LIVE: u8 = 2;
 const SETTLED: u8 = 3;
 const VOID: u8 = 4;
 
 const VK_FILLING: u8 = 1;
-const VK_UNDER_MIN: u8 = 2;
-const VK_EMERGENCY: u8 = 3;
+const VK_EMERGENCY: u8 = 2;
 
 /// A deterministic, valid settlement price (1e18 wad, exponent -18) for Live settlement.
 const PRICE_WAD: u128 = 1_000_000_000_000_000_000;
@@ -29,7 +26,7 @@ fn commitment(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
 
-/// Seal a set of seated players (advances the clock is NOT done here).
+/// Seal a set of confirmed players (does NOT advance the clock).
 fn seal(h: &mut MatchHarness, seats: &[usize]) {
     let tlt = h.valid_timelock_target();
     for &s in seats {
@@ -45,7 +42,8 @@ fn warp_to_begin_live(h: &mut MatchHarness) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 1: Filling never reaches min by fill_deadline_ts -> void_before_start -> full refund.
+// Row 1: Filling never locks by fill_deadline_ts -> void_before_start -> full refund,
+//        including candidates (nobody was confirmed).
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_filling_void_full_refund() {
@@ -57,8 +55,9 @@ fn row_filling_void_full_refund() {
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    // Still Filling (never locked). Warp past the fill deadline.
     assert_eq!(h.match_account().status, FILLING);
+    // Refund is NOT available while still Filling.
+    assert!(h.refund(0).is_err(), "no refund during Filling");
     h.set_clock(cfg.fill_deadline_ts + 1);
     h.void_before_start().expect("void_before_start (filling)");
     let m = h.match_account();
@@ -72,104 +71,28 @@ fn row_filling_void_full_refund() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 2: Sealing < min sealed by deadline -> begin_live -> UnderMinSealed VOID.
-//   Sealers: buy_in + fee + penalty-share (remainder to earliest seal).
-//   Non-sealers: deposit - penalty (entry fee forfeited -> withdraw_fees).
-// ---------------------------------------------------------------------------------------
-#[test]
-fn row_under_min_sealed_void() {
-    // 3 players, min 3 so a single sealer is under-min. Penalty 1000bps (10%), fee 5.
-    let cfg = MatchConfig {
-        num_players: 3,
-        min_players: 3,
-        entry_fee: 5,
-        nonseal_penalty_bps: 1000,
-        ..Default::default()
-    };
-    let mut h = MatchHarness::bare(cfg);
-    h.create_match();
-    h.deposit_all();
-    h.lock_match();
-    assert_eq!(h.match_account().status, SEALING);
-
-    // Only seat 0 seals -> sealed_count(1) < min_players(3) -> UnderMinSealed void.
-    seal(&mut h, &[0]);
-    warp_to_begin_live(&mut h);
-    h.begin_live([9u8; 32]).expect("begin_live -> under-min void");
-
-    let m = h.match_account();
-    assert_eq!(m.status, VOID);
-    assert_eq!(m.void_kind, VK_UNDER_MIN);
-    assert_eq!(m.sealed_count, 1);
-    // dead_money = 2 non-sealers * (100 * 10%) = 20; forfeited_fees = 2 * 5 = 10.
-    assert_eq!(m.dead_money, 20);
-    assert_eq!(m.forfeited_fees, 10);
-
-    for s in 0..cfg.num_players {
-        h.refund(s).expect("refund");
-    }
-    // Forfeited non-sealer entry fees remain in the vault until withdrawn.
-    let treasury = h.new_treasury_token();
-    h.withdraw_fees(&treasury).expect("withdraw forfeited fees");
-    assert_eq!(h.vault_balance(), 0, "under-min void vault must drain to 0");
-}
-
-// ---------------------------------------------------------------------------------------
-// Row 2b: UnderMinSealed with ZERO sealers -> the orphaned penalty pool is withdrawable.
-// ---------------------------------------------------------------------------------------
-#[test]
-fn row_under_min_zero_sealers_void() {
-    let cfg = MatchConfig {
-        num_players: 2,
-        min_players: 2,
-        entry_fee: 3,
-        nonseal_penalty_bps: 2000, // 20%
-        ..Default::default()
-    };
-    let mut h = MatchHarness::bare(cfg);
-    h.create_match();
-    h.deposit_all();
-    h.lock_match();
-    // Nobody seals.
-    warp_to_begin_live(&mut h);
-    h.begin_live([5u8; 32]).expect("begin_live -> zero-sealer void");
-    let m = h.match_account();
-    assert_eq!(m.status, VOID);
-    assert_eq!(m.void_kind, VK_UNDER_MIN);
-    assert_eq!(m.sealed_count, 0);
-    assert_eq!(m.dead_money, 40); // 2 * (100 * 20%)
-    assert_eq!(m.forfeited_fees, 6); // 2 * 3
-
-    for s in 0..cfg.num_players {
-        h.refund(s).expect("refund"); // each gets deposit - penalty = 80
-    }
-    let treasury = h.new_treasury_token();
-    h.withdraw_fees(&treasury).expect("withdraw forfeited fees + orphaned pool");
-    assert_eq!(h.vault_balance(), 0, "zero-sealer void vault must drain to 0");
-}
-
-// ---------------------------------------------------------------------------------------
-// Row 3: Stuck Sealing past grace -> void_before_start (FillingVoid) -> full refund.
+// Row 2: Stuck Sealing past grace -> void_before_start (FillingVoid) -> full refund for
+//        confirmed seats AND the unconfirmed candidate.
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_stuck_sealing_void_full_refund() {
     let cfg = MatchConfig {
-        num_players: 3,
+        num_players: 4,
+        max_players: 3,
         entry_fee: 4,
         ..Default::default()
     };
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
-    // Some players sealed, but the operator vanished. Warp past seal_deadline + grace (60s).
+    h.lock_match(&[0, 1, 2]); // player 3 stays an unconfirmed candidate
     seal(&mut h, &[0, 1]);
     let m = h.match_account();
     h.set_clock(m.seal_deadline_ts + 61);
     h.void_before_start().expect("void_before_start (stuck sealing)");
     let m = h.match_account();
     assert_eq!(m.status, VOID);
-    assert_eq!(m.void_kind, VK_FILLING); // pre-LIVE: full refund, no penalty
+    assert_eq!(m.void_kind, VK_FILLING);
 
     for s in 0..cfg.num_players {
         h.refund(s).expect("refund");
@@ -178,63 +101,68 @@ fn row_stuck_sealing_void_full_refund() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 4: Live -> submit_settlement -> claims (incl. leftover-stack payout) + withdraw_fees.
-//   Includes a non-sealer who is dropped (deposit - penalty claimable) and rake.
+// Row 3: Live -> submit_settlement covering ALL confirmed seats (incl. a non-sealer who
+//        keeps playing) -> claims + candidate refund + withdraw_fees.
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_live_settled_claims_and_fees() {
-    // 3 players, min 2. Seats 0 & 1 seal (engine seats 0,1); seat 2 is a non-sealer.
-    // Penalty 1000bps -> dead_money = 100*10% = 10. Rake = 7.
+    // 4 candidates, 3 confirmed (players 0,1,2); player 3 unconfirmed. Seats 0 & 1 seal;
+    // seat 2 is a non-sealer but still plays (v2). Rake = 7.
     let cfg = MatchConfig {
-        num_players: 3,
+        num_players: 4,
+        max_players: 3,
         min_players: 2,
         entry_fee: 6,
         rake_bps: 500,
         rake_cap: 100,
-        nonseal_penalty_bps: 1000,
         ..Default::default()
     };
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
+    h.lock_match(&[0, 1, 2]);
     seal(&mut h, &[0, 1]);
     warp_to_begin_live(&mut h);
-    h.begin_live([3u8; 32]).expect("begin_live -> live");
+    h.begin_live().expect("begin_live -> live");
     let m = h.match_account();
     assert_eq!(m.status, LIVE);
     assert_eq!(m.sealed_count, 2);
-    assert_eq!(m.dead_money, 10); // seat 2 penalty
-    assert_eq!(m.forfeited_fees, 6); // seat 2 fee
+    assert_eq!(m.confirmed_count, 3);
+    // Non-sealer keeps its engine seat.
+    assert_eq!(h.seat_account(2).engine_seat, 2);
 
-    // Conservation for sealers: sum(payouts) == sealed_count*buy_in + dead_money - rake
-    //   = 2*100 + 10 - 7 = 203. Engine seat 0 gets 150 (incl leftover stack), seat 1 gets 53.
+    // The unconfirmed candidate can refund DURING Live (lock happened without them).
+    h.refund(3).expect("unconfirmed candidate refund during Live");
+
+    // Conservation v2: sum(payouts) == confirmed_count*buy_in - rake = 3*100 - 7 = 293.
     let rake = 7u64;
     let payouts = vec![
         SeatPayout { engine_seat: 0, amount: 150 },
-        SeatPayout { engine_seat: 1, amount: 53 },
+        SeatPayout { engine_seat: 1, amount: 90 },
+        SeatPayout { engine_seat: 2, amount: 53 },
     ];
-    h.submit_settlement(&[0, 1], rake, payouts, PRICE_WAD)
+    h.submit_settlement(rake, payouts, PRICE_WAD)
         .expect("submit_settlement");
     let m = h.match_account();
     assert_eq!(m.status, SETTLED);
-    assert_eq!(m.settled_payout, 203);
+    assert_eq!(m.settled_payout, 293);
 
-    // Sealers claim their payouts; the dropped non-sealer (seat 2) claims deposit-penalty=90.
     h.claim(0).expect("claim sealer 0");
     h.claim(1).expect("claim sealer 1");
-    h.claim(2).expect("claim non-sealer");
+    h.claim(2).expect("claim non-sealer (played)");
 
-    // Fees in vault = entry fees from all (3*6=18) wait: only sealers' fees counted in
-    // total_fees? total_fees accrues each deposit's entry_fee; non-sealer fee is forfeited
-    // (still in total_fees) plus rake. withdraw_fees(Settled) drains total_fees.
+    // total_fees = confirmed entry fees (3*6=18) + rake (7) = 25.
+    let m = h.match_account();
+    assert_eq!(m.total_fees, 25);
     let treasury = h.new_treasury_token();
     h.withdraw_fees(&treasury).expect("withdraw rake + fees");
+    assert_eq!(h.token_balance(&treasury), 25);
     assert_eq!(h.vault_balance(), 0, "settled vault must drain to 0");
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 5: Live, settlement never lands -> void_live_after_deadline (Emergency) -> full refund.
+// Row 4: Live, settlement never lands -> void_live_after_deadline (Emergency) -> full
+//        refund for everyone (confirmed + candidate).
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_live_settle_never_lands_void() {
@@ -242,16 +170,15 @@ fn row_live_settle_never_lands_void() {
         num_players: 3,
         min_players: 2,
         entry_fee: 5,
-        nonseal_penalty_bps: 1000,
         ..Default::default()
     };
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
-    seal(&mut h, &[0, 1, 2]); // all seal
+    h.lock_match(&[0, 1, 2]);
+    seal(&mut h, &[0, 1, 2]);
     warp_to_begin_live(&mut h);
-    h.begin_live([2u8; 32]).expect("begin_live -> live");
+    h.begin_live().expect("begin_live -> live");
     let m = h.match_account();
     assert_eq!(m.status, LIVE);
 
@@ -260,17 +187,16 @@ fn row_live_settle_never_lands_void() {
     h.void_live_after_deadline().expect("void_live_after_deadline");
     let m = h.match_account();
     assert_eq!(m.status, VOID);
-    assert_eq!(m.void_kind, VK_EMERGENCY); // full refund, penalties waived
+    assert_eq!(m.void_kind, VK_EMERGENCY);
 
     for s in 0..cfg.num_players {
         h.refund(s).expect("refund");
     }
-    // Emergency void waives all fees (nothing withdrawable) -> full refund already drains.
     assert_eq!(h.vault_balance(), 0, "live-deadline void vault must drain to 0");
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 6: Settled -> double-claim is rejected (idempotency); single claim still drains.
+// Row 5: Settled -> double-claim is rejected (idempotency); single claim still drains.
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_double_claim_rejected() {
@@ -282,29 +208,28 @@ fn row_double_claim_rejected() {
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
+    h.lock_match(&[0, 1]);
     seal(&mut h, &[0, 1]);
     warp_to_begin_live(&mut h);
-    h.begin_live([8u8; 32]).expect("begin_live -> live");
+    h.begin_live().expect("begin_live -> live");
 
-    // 2*100 + 0 - 0 = 200; seat 0 wins 200, seat 1 wins 0.
     let payouts = vec![
         SeatPayout { engine_seat: 0, amount: 200 },
         SeatPayout { engine_seat: 1, amount: 0 },
     ];
-    h.submit_settlement(&[0, 1], 0, payouts, PRICE_WAD)
+    h.submit_settlement(0, payouts, PRICE_WAD)
         .expect("submit_settlement");
     assert_eq!(h.match_account().status, SETTLED);
 
     h.claim(0).expect("first claim");
-    // Second claim must fail (seat PDA closed on first claim; AlreadyClaimed otherwise).
+    // Second claim must fail (seat PDA closed on first claim).
     assert!(h.claim(0).is_err(), "double-claim must be rejected");
     h.claim(1).expect("claim zero-payout seat closes it");
     assert_eq!(h.vault_balance(), 0, "settled vault must drain to 0");
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 7: Emergency void during Live -> full refund all, penalties waived.
+// Row 6: Emergency void during Live -> full refund all.
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_emergency_void_live_full_refund() {
@@ -312,16 +237,15 @@ fn row_emergency_void_live_full_refund() {
         num_players: 3,
         min_players: 2,
         entry_fee: 5,
-        nonseal_penalty_bps: 1000,
         ..Default::default()
     };
     let mut h = MatchHarness::bare(cfg);
     h.create_match();
     h.deposit_all();
-    h.lock_match();
-    seal(&mut h, &[0, 1]); // seat 2 is a non-sealer, but penalties waived on Emergency
+    h.lock_match(&[0, 1, 2]);
+    seal(&mut h, &[0, 1]); // seat 2 is a non-sealer, but voids always refund in full
     warp_to_begin_live(&mut h);
-    h.begin_live([4u8; 32]).expect("begin_live -> live");
+    h.begin_live().expect("begin_live -> live");
     assert_eq!(h.match_account().status, LIVE);
 
     h.void().expect("operator emergency void");
@@ -330,13 +254,13 @@ fn row_emergency_void_live_full_refund() {
     assert_eq!(m.void_kind, VK_EMERGENCY);
 
     for s in 0..cfg.num_players {
-        h.refund(s).expect("refund"); // each gets deposit + entry_fee (penalties waived)
+        h.refund(s).expect("refund"); // each gets deposit + entry_fee
     }
     assert_eq!(h.vault_balance(), 0, "emergency-void vault must drain to 0");
 }
 
 // ---------------------------------------------------------------------------------------
-// Row 8: Emergency void during Filling -> full refund all.
+// Row 7: Emergency void during Filling -> full refund all.
 // ---------------------------------------------------------------------------------------
 #[test]
 fn row_emergency_void_filling_full_refund() {
@@ -355,4 +279,43 @@ fn row_emergency_void_filling_full_refund() {
         h.refund(s).expect("refund");
     }
     assert_eq!(h.vault_balance(), 0, "filling emergency-void vault must drain to 0");
+}
+
+// ---------------------------------------------------------------------------------------
+// Row 8: Settled with an unconfirmed candidate -> candidate refunds AFTER Settled too.
+// ---------------------------------------------------------------------------------------
+#[test]
+fn row_settled_candidate_refund_after_settlement() {
+    let cfg = MatchConfig {
+        num_players: 3,
+        max_players: 2,
+        min_players: 2,
+        entry_fee: 2,
+        ..Default::default()
+    };
+    let mut h = MatchHarness::bare(cfg);
+    h.create_match();
+    h.deposit_all();
+    h.lock_match(&[0, 1]); // player 2 left behind
+    seal(&mut h, &[0, 1]);
+    warp_to_begin_live(&mut h);
+    h.begin_live().expect("begin_live");
+    let payouts = vec![
+        SeatPayout { engine_seat: 0, amount: 200 },
+        SeatPayout { engine_seat: 1, amount: 0 },
+    ];
+    h.submit_settlement(0, payouts, PRICE_WAD)
+        .expect("submit_settlement");
+    assert_eq!(h.match_account().status, SETTLED);
+
+    h.claim(0).expect("claim winner");
+    h.claim(1).expect("claim loser");
+    // Candidate refund still works after settlement (full deposit + fee).
+    h.refund(2).expect("candidate refund after Settled");
+
+    let treasury = h.new_treasury_token();
+    h.withdraw_fees(&treasury).expect("withdraw fees");
+    // total_fees = confirmed fees only (2*2=4); candidate's fee went back to them.
+    assert_eq!(h.token_balance(&treasury), 4);
+    assert_eq!(h.vault_balance(), 0, "vault must drain to 0 incl. candidate exit");
 }

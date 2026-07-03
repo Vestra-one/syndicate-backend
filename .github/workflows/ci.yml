@@ -5,12 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-# The determinism + conservation + parity suites (in rust-core) are the merge gate:
-# a red run here means the chain could disagree with the off-chain builder, which is a
-# foundation-level regression and must block merge.
+# The determinism + conservation + parity suites are the merge gate: a red run means the
+# chain could disagree with the off-chain builders — a foundation-level regression.
 jobs:
   rust-core:
-    name: Rust core (determinism + conservation + parity gate)
+    name: Rust workspace (determinism + conservation gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,32 +20,22 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test (workspace) — includes golden vectors, 100k conservation property, e2e parity
+      - name: Test (workspace)
         run: cargo test --workspace
 
-  ts-edge:
-    name: TypeScript edge/read-path
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Test (type-stripped, zero-dep)
-        run: node --experimental-strip-types --test $(find services -name '*.test.ts' | sort)
-
   anchor-program:
-    name: Anchor program (build + litesvm parity)
+    name: Anchor program (build + litesvm + chain byte-parity)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Solana + Anchor
+      - name: Install Solana
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
-          cargo install --git https://github.com/coral-xyz/anchor avm --locked
-          avm install 0.32.1 && avm use 0.32.1
-      - name: Anchor test — program must reproduce golden/ vectors
+      - name: Build program (platform tools v1.53)
         working-directory: services/programs
-        run: cargo build-sbf && cargo test --manifest-path litesvm-tests/Cargo.toml -- --nocapture
+        run: cargo build-sbf --tools-version v1.53 -- -p syndicate-program
+      - name: litesvm suite (lifecycle, funds-exit matrix, chain parity)
+        working-directory: services/programs/litesvm-tests
+        run: cargo test

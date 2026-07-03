@@ -32,9 +32,10 @@ async fn apply_schema(url: &str) {
     }
     use std::process::Command;
     let status = Command::new("bash")
-        .args([
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/db-migrate-local.sh"),
-        ])
+        .args([concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/db-migrate-local.sh"
+        )])
         .env("DATABASE_URL", url)
         .status()
         .expect("spawn db-migrate-local.sh");
@@ -60,8 +61,8 @@ async fn insert_match_round_trips_config_and_match_row() {
         .insert_match(InsertMatchParams {
             match_key: match_key.clone(),
             onchain_match_id,
-            config_hash_hex:
-                "f45b21238906ada52fd0e7486c123843359713860161d9afdeacba821343f93d".into(),
+            config_hash_hex: "f45b21238906ada52fd0e7486c123843359713860161d9afdeacba821343f93d"
+                .into(),
             fill_deadline,
             price_feed_symbol: "BTC/USD".into(),
             oracle_token_hex: "0xa7BaE7da3E4950700BE9f107EB186e89a474d180".into(),
@@ -86,8 +87,8 @@ async fn insert_match_round_trips_config_and_match_row() {
         .insert_match(InsertMatchParams {
             match_key,
             onchain_match_id,
-            config_hash_hex:
-                "f45b21238906ada52fd0e7486c123843359713860161d9afdeacba821343f93d".into(),
+            config_hash_hex: "f45b21238906ada52fd0e7486c123843359713860161d9afdeacba821343f93d"
+                .into(),
             fill_deadline,
             price_feed_symbol: "BTC/USD".into(),
             oracle_token_hex: "0xa7BaE7da3E4950700BE9f107EB186e89a474d180".into(),

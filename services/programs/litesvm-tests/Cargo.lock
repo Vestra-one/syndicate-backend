@@ -4649,6 +4649,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2047c6ded9c721764247e62cd3b03c09ffc529b2ba5b10ec482ae507a4a70160"
 
 [[package]]
+name = "syndicate-chain"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "borsh 0.10.4",
+ "bs58",
+ "serde",
+ "sha2 0.10.9",
+ "sha3",
+ "solana-sdk",
+]
+
+[[package]]
 name = "syndicate-engine-core"
 version = "0.1.0"
 dependencies = [
@@ -4671,6 +4684,7 @@ dependencies = [
  "solana-keccak-hasher",
  "solana-sdk",
  "spl-token",
+ "syndicate-chain",
  "syndicate-engine-core",
  "syndicate-shared",
 ]
@@ -4678,6 +4692,9 @@ dependencies = [
 [[package]]
 name = "syndicate-shared"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "synstructure"

@@ -41,6 +41,7 @@ pub fn verify_ed25519(
         .map_err(|_| VerifyError::InvalidSignature)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn verify_action_intent(
     wallet: &str,
     signature_b64: &str,

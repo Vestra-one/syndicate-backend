@@ -1,0 +1,25 @@
+# Devnet overrides: loopback debug port binds + relaxed CORS.
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env up -d
+services:
+  game-server:
+    ports:
+      - "127.0.0.1:18080:8080"
+    environment:
+      APP_ENV: devnet
+      LOG_LEVEL: debug
+
+  chain-worker:
+    ports:
+      - "127.0.0.1:18084:8084"
+    environment:
+      APP_ENV: devnet
+      LOG_LEVEL: debug
+      # Deterministic timelock for reproducible e2e: the driver seals a 24-byte
+      # MockScheme ciphertext (target_round ‖ price_wad) instead of a real drand tlock,
+      # so settlement decrypts without waiting on a live beacon round. All on-chain
+      # custody / settlement / conservation logic still runs for real on devnet.
+      TIMELOCK_OPEN_MODE: mock
+
+  signed-price-server:
+    ports:
+      - "127.0.0.1:18088:8080"
