@@ -33,19 +33,18 @@ export default defineConfig(({ mode }) => {
   },
   server: {
     proxy: {
-      '/api-proxy':         proxyEntry('/api-proxy',         env.VITE_API_URL          ?? 'https://api.devnet.satoshitable.fun'),
-      '/config-proxy':      proxyEntry('/config-proxy',      env.VITE_CONFIG_URL       ?? 'https://config.devnet.satoshitable.fun'),
-      '/price-proxy':       proxyEntry('/price-proxy',       env.VITE_PRICE_URL        ?? 'https://price.devnet.satoshitable.fun'),
-      '/matchmaking-proxy': proxyEntry('/matchmaking-proxy', env.VITE_MATCHMAKING_URL  ?? 'https://matchmaking.devnet.satoshitable.fun'),
+      // v2: one REST surface (VITE_API_URL already ends in /v1) + one WS surface.
+      '/api-proxy':   proxyEntry('/api-proxy',   env.VITE_API_URL   ?? 'https://api.devnet.satoshitable.fun/v1'),
+      '/price-proxy': proxyEntry('/price-proxy', env.VITE_PRICE_URL ?? 'https://price.devnet.satoshitable.fun'),
       // WebSocket proxies — browser WS API cannot send Authorization headers, so we proxy
       // through Vite which injects Basic Auth server-side. Target must be https://, Vite
       // handles the ws→wss upgrade. secure:false because devnet TLS cert doesn't cover subdomains.
-      '/gateway-proxy': {
-        target: 'https://gateway.devnet.satoshitable.fun',
+      '/ws-proxy': {
+        target: 'https://api.devnet.satoshitable.fun',
         ws: true,
         changeOrigin: true,
         secure: false,
-        rewrite: (path: string) => path.replace(/^\/gateway-proxy/, ''),
+        rewrite: (path: string) => path.replace(/^\/ws-proxy/, '/v1/ws'),
         headers: proxyHeaders,
       },
       '/price-ws-proxy': {

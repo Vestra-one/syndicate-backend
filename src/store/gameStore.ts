@@ -5,15 +5,25 @@ import type {
   DefaultAction,
   FixedPrice,
   LiveGame,
+  MatchPhase,
   MatchStateView,
   PublicEvent,
-  RoomListing,
+  SeatView,
   SettlementView,
   TableTerms,
   UpcomingGame,
   VoidReason,
 } from '@/lib/protocol'
 import { DRAND, PAST_FILLING_PHASES } from '@/lib/protocol'
+import type { ServerFrame, WsMatchState, WsAction } from '@/lib/realtime/wsTypes'
+import {
+  actionIntentMessage,
+  defaultPolicyMessage,
+  predictionCommitmentMessage,
+  ciphertextCommitment,
+  bytesToHex,
+} from '@/lib/intent'
+import bs58 from 'bs58'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import type { PriceRange } from '@/lib/priceRanges'
 import { createAdapters, type Adapters } from '@/lib/adapters'
@@ -104,7 +114,6 @@ interface GameState {
   seated: boolean // deposit confirmed → seat taken (gates the lobby)
 
   // Play Now matchmaking
-  rooms: RoomListing[] // open tables discovered over the gateway lobby
   playResolving: boolean // true while deciding join-vs-create
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
@@ -256,6 +265,23 @@ let adapters: Adapters | null = null
 let gateway: Gateway | null = null
 let unsub: (() => void) | null = null
 
+/** Action-chain state for signed betting (§8), reset per match. `head` seeds `prev_head`
+ *  for the next `act`; `nonce` increments per action; `engineSeat` is this wallet's seat. */
+let actionHead: Uint8Array = new Uint8Array(32)
+let actionNonce = 0
+let myEngineSeat: number | null = null
+function resetActionChain() {
+  actionHead = new Uint8Array(32)
+  actionNonce = 0
+  myEngineSeat = null
+}
+
+/** Subscribe the open socket to a match channel — server replies with a snapshot then the
+ *  ordered event stream (gap-free, dedup by seq). Pass `lastSeq` to fetch only the delta. */
+function subscribeMatch(matchId: string, lastSeq = 0) {
+  gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: lastSeq })
+}
+
 /** REST context for the CREATE flow: server config (for building the intent), the chosen
  *  feed, and the reserved intent once `/v1/rooms/intents` has returned it. */
 let createCtx: { config: ApiConfig; feed: string; intent: CreateIntentResponse | null } | null = null
@@ -338,7 +364,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   reviewing: false,
   seated: false,
 
-  rooms: [],
   playResolving: false,
   playMode: null,
   playError: null,
@@ -388,10 +413,20 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setDashboardSort: (key) => set({ dashboardSort: key }),
 
-  /** Pick a table from the dashboard → connect to it and show the table view. */
-  enterTable: async (_matchId) => {
-    set({ view: 'table' })
+  /** Spectate a table from the dashboard: open the WS, subscribe to its match channel,
+   *  and seed terms from REST detail for an instant render (§6). No auth needed to watch. */
+  enterTable: async (matchId) => {
+    set({ view: 'table', match: null, feed: [], priceHistory: [], settlement: null, voided: null })
+    resetActionChain()
+    if (!adapters) adapters = createAdapters()
     await get().connect()
+    try {
+      const detail = await api.getMatch(matchId)
+      set({ terms: matchDetailToTerms(detail) })
+    } catch {
+      /* the WS snapshot will populate the view */
+    }
+    subscribeMatch(matchId)
   },
 
   /** Leave the current table and return to the live-games dashboard. */
@@ -527,26 +562,26 @@ export const useGameStore = create<GameState>((set, get) => ({
     return { terms: { ...s.terms, fillWindowSec } }
   }),
 
+  /** Open the v2 WebSocket (idempotent). Spectate needs no wallet; if one is connected the
+   *  transport answers the auth challenge so the same socket can also act/seal (§12). */
   connect: async () => {
     if (gateway) return
     set({ status: 'connecting' })
     if (!adapters) adapters = createAdapters()
-    // Capture the instance locally — `gateway` (module-global) can be reassigned
-    // by a StrictMode unmount/remount across the awaits below; we must act on the
-    // instance we created, never whatever global points at after the await.
+    // Capture the instance locally — `gateway` (module-global) can be reassigned by a
+    // StrictMode unmount/remount across the await; act on the instance we created.
     const gw = createGateway(adapters)
     gateway = gw
-
-    unsub = gw.subscribe((msg) => handleServerMessage(msg, set, get))
-
+    unsub = gw.subscribe((frame) => handleServerFrame(frame, set, get))
     try {
-      await adapters.wallet.connect()
-      set({ walletAddress: adapters.wallet.address() })
-      await gw.connect() // resolves once authenticated
+      await gw.connect() // resolves on socket open; auto-answers a challenge if a wallet exists
       set({ status: 'live' })
-      void refreshBalance(set)
+      const addr = adapters.wallet.address()
+      if (addr) {
+        set({ walletAddress: addr })
+        void refreshBalance(set)
+      }
     } catch (err) {
-      // geo-blocked / bad signature / socket error (§9)
       console.error('gateway connect failed:', err)
       set({ status: 'offline' })
     }
@@ -569,7 +604,6 @@ export const useGameStore = create<GameState>((set, get) => ({
       settlement: null,
       voided: null,
       seated: false,
-      rooms: [],
       playMode: null,
       playResolving: false,
       playError: null,
@@ -636,6 +670,10 @@ export const useGameStore = create<GameState>((set, get) => ({
           void pollCandidate(matchId, adapters!.wallet.address() ?? '', set)
         })
         .catch((e) => console.warn('[joinTable] submitDeposit failed:', e))
+      // Open the WS + subscribe so the waiting room / live play get seat/phase/turn pushes.
+      resetActionChain()
+      await get().connect()
+      subscribeMatch(matchId)
       void refreshBalance(set)
     } catch (err) {
       console.error('deposit failed:', err)
@@ -725,7 +763,12 @@ export const useGameStore = create<GameState>((set, get) => ({
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
         fillDeadline: Date.now() + cp.fill_window_sec * 1000,
       }))
-      void matchUuid // reserved for the phase-4 WS subscribe / detail poll
+      // Open the WS + subscribe to the new match so the waiting room gets live seat/phase pushes.
+      if (matchUuid) {
+        resetActionChain()
+        await get().connect()
+        subscribeMatch(matchUuid)
+      }
       void refreshBalance(set)
     } catch (err) {
       console.error('create failed:', err)
@@ -744,51 +787,118 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   sealPrediction: async (price) => {
     const { terms, match, sealStatus } = get()
-    if (!adapters || !gateway || !terms || !match) return
-    if (sealStatus !== 'unsealed') return // seal-once
+    if (!adapters || !terms || !match || sealStatus !== 'unsealed') return // seal-once
+    const onchainMatchId = terms.onchainMatchId
+    const wallet = adapters.wallet.address()
+    const targetRound = terms.timelockTargetRound
+    const seatIndex = myEngineSeat ?? match.yourSeat
+    if (!onchainMatchId || !wallet || !targetRound || seatIndex == null) {
+      console.warn('[seal] missing context', { onchainMatchId, targetRound, seatIndex })
+      set({ playError: 'Sealing is not ready yet — wait for the seal window to open.' })
+      return
+    }
     set({ sealStatus: 'sealing' })
     try {
-      const targetRound = terms.timelockTargetRound
-      const ciphertext = await adapters.tlock.seal(price, targetRound, DRAND.chainHash, DRAND.api)
-      const seatIndex = match.yourSeat ?? 0
-      // Commitment and blinding are placeholder-generated here; tlock-js integration (§6)
-      // will produce the real H(prediction||blinding) + 32-byte blinding factor.
-      const randHex = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join('')
-      const blindingHex = randHex()
-      const commitmentHex = randHex() // TODO: replace with H(price_i128_le || blinding)
-      const signature = await adapters.wallet.signMessageBase64(`${match.matchId}:${commitmentHex}`)
-      gateway.send({
-        type: 'sealPrediction',
-        matchId: match.matchId,
+      // 1. Time-lock encrypt the WAD price, derive ciphertext_b64 + commitment = sha256(ct).
+      const decimals = terms.decimals ?? 2
+      const priceWad = BigInt(Math.round(price)) * 10n ** BigInt(18 - decimals)
+      const ciphertext = await adapters.tlock.seal(priceWad, targetRound, DRAND.chainHash, DRAND.api)
+      const ciphertextB64 = btoa(String.fromCharCode(...ciphertext))
+      const commitment = await ciphertextCommitment(ciphertext)
+      const commitmentHex = bytesToHex(commitment)
+
+      // 2. Register the commitment on-chain (the strong seal proof).
+      let sealTxSig: string
+      try {
+        sealTxSig = await adapters.chain.registerPredictionCommitment(onchainMatchId, commitmentHex, targetRound)
+      } catch (e) {
+        console.error('[seal] on-chain register failed:', e)
+        set({ sealStatus: 'unsealed', playError: 'Could not register your sealed prediction on-chain.' })
+        return
+      }
+
+      // 3. Sign the seal-intent message and submit the ciphertext to the backend (§7 / App. B).
+      const msg = predictionCommitmentMessage({
+        matchId: BigInt(onchainMatchId),
+        onchainMatchId: BigInt(onchainMatchId),
         seatIndex,
-        ciphertext,
-        commitmentHex,
-        targetRound,
-        blindingHex,
-        signature,
+        seatPubkey: bs58.decode(wallet),
+        timelockTarget: targetRound,
+        commitment,
       })
+      const signature = await adapters.wallet.signBytesBase64(msg)
+      const body = { ciphertext_b64: ciphertextB64, commitment_hex: commitmentHex, timelock_target: targetRound, signature, seal_tx_sig: sealTxSig }
+      if (gateway?.isOpen()) {
+        gateway.send({ t: 'seal', match_id: match.matchId, ...body })
+      } else {
+        await api.submitSeal(match.matchId, body)
+      }
       // The plaintext stays on the client for the distance-to-conviction chart.
       set({ sealStatus: 'sealed', yourPrediction: price })
     } catch (err) {
       console.error('seal failed:', err)
-      set({ sealStatus: 'unsealed' })
+      set({ sealStatus: 'unsealed', playError: 'Sealing failed — try again before the window closes.' })
     }
   },
 
   act: async (action) => {
-    const { match, yourTurn } = get()
-    if (!adapters || !gateway || !match || !yourTurn) return
-    // Each action is a SIGNED intent (replay-safe log, §5).
-    const intent = JSON.stringify({ matchId: match.matchId, action })
-    const signature = await adapters.wallet.signMessageBase64(intent)
-    gateway.send({ type: 'act', matchId: match.matchId, action, signature })
-    set({ yourTurn: null }) // optimistic; server's next matchState is authoritative
+    const { match, yourTurn, terms } = get()
+    if (!adapters || !gateway || !match || !yourTurn || !terms?.onchainMatchId) return
+    const wallet = adapters.wallet.address()
+    const seatIndex = myEngineSeat ?? match.yourSeat
+    if (!wallet || seatIndex == null) return
+    // Signed action intent (§8): both u64 slots carry onchain_match_id; nonce increments per
+    // seat; prev_head is the current action-chain head. Sign the byte-exact message.
+    const { tag, amount, wire } = bettingActionToWire(action)
+    const nonce = ++actionNonce
+    const prevHead = actionHead
+    try {
+      const msg = actionIntentMessage({
+        matchId: BigInt(terms.onchainMatchId),
+        onchainMatchId: BigInt(terms.onchainMatchId),
+        seatIndex,
+        seatPubkey: bs58.decode(wallet),
+        nonce,
+        prevHead,
+        actionTag: tag,
+        amount,
+      })
+      const signature = await adapters.wallet.signBytesBase64(msg)
+      gateway.send({
+        t: 'act',
+        match_id: match.matchId,
+        seat_index: seatIndex,
+        nonce,
+        prev_head_hex: bytesToHex(prevHead),
+        action: wire,
+        signature,
+      })
+      set({ yourTurn: null }) // optimistic; the broadcast `action` frame is authoritative
+    } catch (err) {
+      actionNonce-- // signing was cancelled/failed — free the nonce for a retry
+      console.error('act failed:', err)
+    }
   },
 
   setDefault: (def) => {
-    const { match } = get()
+    const { match, terms } = get()
     set({ defaultAction: def })
-    if (gateway && match) gateway.send({ type: 'setDefault', matchId: match.matchId, default: def })
+    if (!gateway || !match || !adapters || !terms?.onchainMatchId) return
+    const wallet = adapters.wallet.address()
+    const seatIndex = myEngineSeat ?? match.yourSeat
+    if (!wallet || seatIndex == null) return
+    const policyTag = def === 'check_call_any' ? 1 : 0
+    const msg = defaultPolicyMessage({
+      matchId: BigInt(terms.onchainMatchId),
+      onchainMatchId: BigInt(terms.onchainMatchId),
+      seatIndex,
+      seatPubkey: bs58.decode(wallet),
+      policyTag,
+    })
+    adapters.wallet
+      .signBytesBase64(msg)
+      .then((signature) => gateway?.send({ t: 'set_default', match_id: match.matchId, seat_index: seatIndex, policy: def, signature }))
+      .catch((e) => console.warn('[setDefault] sign failed:', e))
   },
 
   claim: async () => {
@@ -872,99 +982,189 @@ async function pollCandidate(matchId: string, wallet: string, set: SetState, tri
 
 type SetState = (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void
 
-function handleServerMessage(
-  msg: Parameters<Parameters<Gateway['subscribe']>[0]>[0],
-  set: SetState,
-  get: () => GameState,
-) {
-  switch (msg.type) {
+/** Map a v2 WS phase string to the client `MatchPhase` union. */
+const WS_PHASE: Record<string, MatchPhase> = {
+  filling: 'FILLING',
+  sealing: 'SEALING',
+  sealing_closed: 'SEALING',
+  live: 'LIVE',
+  settlement_pending: 'SETTLEMENT_WINDOW',
+  settled: 'SETTLED',
+  voided: 'VOID',
+}
+function mapPhase(p: string): MatchPhase {
+  return WS_PHASE[p.toLowerCase()] ?? 'FILLING'
+}
+
+/** Map a v2 snapshot `state` to the client's `MatchStateView` (what the HUD renders). */
+function snapshotToMatchState(state: WsMatchState, myWallet: string | null): MatchStateView {
+  const seats: SeatView[] = state.seats.map((s) => ({
+    seat: s.seat_index,
+    wallet: s.wallet,
+    stack: s.stack ?? 0,
+    committedThisStreet: s.committed ?? 0,
+    totalContribution: s.total_contribution ?? 0,
+    folded: s.folded ?? false,
+    allIn: s.all_in ?? false,
+  }))
+  const mine = myWallet ? state.seats.find((s) => s.wallet === myWallet) : undefined
+  return {
+    matchId: state.match_id,
+    phase: mapPhase(state.phase),
+    round: state.round ?? 1,
+    pot: state.pot ?? 0,
+    currentBet: state.current_bet ?? 0,
+    buttonSeat: state.button ?? 0,
+    toActSeat: state.to_act ?? null,
+    seats,
+    feedPrice: 0, // live price arrives via `action` frames / the price WS, not the snapshot
+    yourSeat: mine?.seat_index,
+    yourStack: mine?.stack ?? undefined,
+    yourExposure: mine?.total_contribution ?? undefined,
+  }
+}
+
+/** Translate a v2 engine event (from `action`/`event` frames) into a public feed entry. */
+function wsEventToFeed(ev: { type: string; body: Record<string, unknown>; seq?: number }, matchId: string, pot: number, feedPrice: number): PublicEvent | null {
+  const seat = Number(ev.body.seat ?? ev.body.player_id ?? 0)
+  switch (ev.type) {
+    case 'action': {
+      const raw = String(ev.body.action ?? '') // e.g. "Fold", "BetTo(120)", "Call"
+      const m = /^(\w+)(?:\((\d+)\))?/.exec(raw)
+      const kind = (m?.[1] ?? '').toLowerCase()
+      const amount = m?.[2] ? Number(m[2]) : 0
+      if (kind === 'fold') return { kind: 'fold', matchId, seat, ts: Date.now() }
+      return { kind: 'action', matchId, seat, action: kind, amount, feedPrice, pot, ts: Date.now() }
+    }
+    case 'street_closed':
+      return { kind: 'round', matchId, round: Number(ev.body.round ?? 0), ts: Date.now() }
+    default:
+      return null
+  }
+}
+
+/** Map a client `BettingAction` to its signed-intent tag/amount + the WS `action` payload. */
+function bettingActionToWire(a: BettingAction): { tag: number; amount: number; wire: WsAction } {
+  switch (a.type) {
+    case 'fold': return { tag: 0, amount: 0, wire: 'fold' }
+    case 'check': return { tag: 1, amount: 0, wire: 'check' }
+    case 'call': return { tag: 2, amount: 0, wire: 'call' }
+    case 'betTo': return { tag: 3, amount: a.amount, wire: { kind: 'bet_to', amount: a.amount } }
+    case 'raiseTo': return { tag: 4, amount: a.amount, wire: { kind: 'raise_to', amount: a.amount } }
+    case 'allIn': return { tag: 5, amount: 0, wire: 'all_in' }
+  }
+}
+
+function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameState) {
+  switch (frame.t) {
     case 'authenticated':
-      set({ walletAddress: msg.wallet, status: 'live' })
+      set({ walletAddress: frame.wallet, status: 'live' })
       break
-    case 'tableTerms':
-      // Merge: keep any on-chain ids we already resolved (create path) if the
-      // gateway's terms omit them.
+
+    case 'snapshot': {
+      const myWallet = adapters?.wallet.address() ?? get().walletAddress
+      const view = snapshotToMatchState(frame.state, myWallet)
+      myEngineSeat = view.yourSeat ?? myEngineSeat
+      // Seed the action-chain head + nonce from the snapshot so the first `act` chains correctly.
+      try { actionHead = hexToBytes32(frame.state.head) } catch { /* keep zero head */ }
+      actionNonce = Math.max(actionNonce, frame.state.last_seq)
+      const t = frame.state.timing
       set((s) => ({
-        terms: {
-          ...msg.terms,
-          onchainMatchId: msg.terms.onchainMatchId ?? s.terms?.onchainMatchId,
-          matchPda: msg.terms.matchPda ?? s.terms?.matchPda,
-        },
+        match: view,
+        terms: s.terms
+          ? { ...s.terms, onchainMatchId: String(frame.state.onchain_match_id), timelockTargetRound: t.timelock_target ?? s.terms.timelockTargetRound }
+          : s.terms,
+        fillDeadline: t.fill_deadline != null ? toEpochMs(t.fill_deadline) : s.fillDeadline,
+        roundStartedAt: t.live_start != null ? toEpochMs(t.live_start) : s.roundStartedAt,
       }))
       break
-    case 'matchState':
-      ingestMatchState(msg.state, set, get)
+    }
+
+    case 'phase': {
+      const phase = mapPhase(frame.phase)
+      set((s) => ({
+        match: s.match ? { ...s.match, phase } : s.match,
+        terms: s.terms && frame.timelock_target != null ? { ...s.terms, timelockTargetRound: frame.timelock_target } : s.terms,
+        fillDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.fillDeadline,
+        roundStartedAt: frame.live_start != null ? toEpochMs(frame.live_start) : s.roundStartedAt,
+      }))
       break
-    case 'yourTurn':
-      set({ yourTurn: { toCall: msg.toCall, minRaiseTo: msg.minRaiseTo, deadline: msg.yourTurnDeadline ?? Date.now() + 30_000 } })
+    }
+
+    case 'seat_update':
+      set({ lobbySeated: frame.confirmed })
       break
-    case 'event':
-      set((s) => ({ feed: [...s.feed, msg.event].slice(-MAX_FEED) }))
+
+    case 'seal_status':
+      if (frame.closed) set({ sealStatus: get().sealStatus === 'sealed' ? 'sealed' : 'unsealed' })
       break
-    case 'lobbyList':
-      // Full snapshot of open rooms.
-      set({ rooms: msg.rooms })
+
+    case 'your_turn':
+      myEngineSeat = frame.seat
+      set({ yourTurn: { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms } })
       break
-    case 'roomsUpdated':
-      // Incremental upsert; a 'started' room is no longer joinable → drop it.
-      set((s) => ({ rooms: applyRoomsUpdate(s.rooms, msg.update) }))
+
+    case 'action': {
+      // Advance the action-chain head + nonce so the next signed `act` uses the right prev_head.
+      try { actionHead = hexToBytes32(frame.head_hex) } catch { /* keep */ }
+      actionNonce = Math.max(actionNonce, frame.seq)
+      const decimals = get().terms?.decimals ?? 2
+      const priceNum = frame.feed_price != null ? wadStringToFixed(frame.feed_price, frame.feed_price_expo, decimals) : 0
+      const feedItems = frame.events
+        .map((e) => wsEventToFeed(e, frame.match_id, frame.pot, priceNum))
+        .filter((x): x is PublicEvent => x !== null)
+      const now = Date.now()
+      set((s) => ({
+        feed: [...s.feed, ...feedItems].slice(-MAX_FEED),
+        match: s.match
+          ? { ...s.match, pot: frame.pot, currentBet: frame.current_bet, toActSeat: frame.to_act ?? null, round: frame.round, feedPrice: priceNum }
+          : s.match,
+        priceHistory: priceNum > 0 ? [...s.priceHistory, { price: priceNum, ts: now }].slice(-MAX_HISTORY) : s.priceHistory,
+        yourTurn: frame.to_act != null && frame.to_act === myEngineSeat ? s.yourTurn : null,
+      }))
       break
+    }
+
     case 'settled':
-      set({ settlement: msg.result, yourTurn: null })
+      set({
+        settlement: {
+          matchId: frame.match_id,
+          settlementPrice: 0,
+          awards: frame.payouts.map((p) => ({ seat: p.seat, amount: 0 })),
+          uncalledReturns: [],
+          rakeCollected: 0,
+          revealedPredictions: [],
+        },
+        yourTurn: null,
+      })
       break
-    case 'void':
-      set({ voided: { reason: msg.reason }, yourTurn: null })
+
+    case 'voided':
+      set({ voided: { reason: (frame.kind ?? 'Void') as VoidReason }, yourTurn: null })
       break
+
     case 'error':
-      console.error('gateway error:', msg.reason)
+      console.warn('[ws] error frame:', frame.code, frame.msg)
       break
+
     default:
-      break // queueStatus/profile/leaderboard handled by their own surfaces later
+      break // lobby_delta / default_set / sealed / pong — no store action needed
   }
 }
 
-/** Apply an incremental roomsUpdated to the open-rooms list. */
-function applyRoomsUpdate(
-  rooms: RoomListing[],
-  u: import('@/lib/protocol').RoomsUpdate,
-): RoomListing[] {
-  if (u.kind === 'started') return rooms.filter((r) => r.matchId !== u.matchId)
-  const existing = rooms.find((r) => r.matchId === u.matchId)
-  const merged: RoomListing = {
-    roomCode: u.roomCode ?? existing?.roomCode ?? '',
-    matchId: u.matchId,
-    onchainMatchId: existing?.onchainMatchId,
-    feedId: u.feedId ?? existing?.feedId ?? '',
-    tierId: u.tierId ?? existing?.tierId ?? '',
-    configHash: u.configHash ?? existing?.configHash,
-    buyIn: u.buyIn ?? existing?.buyIn,
-    seated: u.seated,
-    minPlayers: existing?.minPlayers ?? 0,
-    maxPlayers: u.maxPlayers ?? existing?.maxPlayers ?? 0,
-    fillDeadline: u.fillDeadline ?? existing?.fillDeadline ?? 0,
-  }
-  return [...rooms.filter((r) => r.matchId !== u.matchId), merged]
+/** Parse a 32-byte hex string into bytes (throws if malformed). */
+function hexToBytes32(hex: string): Uint8Array {
+  const clean = hex.replace(/^0x/, '')
+  if (clean.length !== 64) throw new Error('expected 32-byte hex')
+  const out = new Uint8Array(32)
+  for (let i = 0; i < 32; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16)
+  return out
 }
 
-
-
-function ingestMatchState(state: MatchStateView, set: SetState, get: () => GameState) {
-  const terms = get().terms
-  // Convert the protocol's fixed-point feed price to a float for the chart.
-  const decimals = terms?.decimals ?? 2
-  const point: PricePoint = { price: state.feedPrice / 10 ** decimals, ts: Date.now() }
-  const now = Date.now()
-  // A new round (or the match's first LIVE state) restarts the price-board's
-  // x-axis — the client-observed instant is close enough for a chart axis.
-  const prevRound = get().match?.round
-  const isNewRound = prevRound == null || state.round !== prevRound
-
-  set((s) => ({
-    match: state,
-    priceHistory: [...s.priceHistory, point].slice(-MAX_HISTORY),
-    roundStartedAt: isNewRound ? now : s.roundStartedAt,
-  }))
-  // No auto-deposit — real custody always requires the explicit lobby deposit (§7).
+/** Convert a WAD decimal price string ("64123.5") at `expo` to the UI's fixed-point (decimals dp). */
+function wadStringToFixed(price: string, _expo: number, decimals: number): number {
+  const n = Number(price)
+  return Number.isFinite(n) ? Math.round(n * 10 ** decimals) : 0
 }
 
 // The public devnet RPC (api.devnet.solana.com) rate-limits aggressively; refreshBalance

@@ -27,7 +27,9 @@ import { AnchorProvider, Program, BN } from '@coral-xyz/anchor'
 // Import the provider-level Wallet interface (not the NodeWallet class exported at the top level)
 import type { Wallet as AnchorWallet } from '@coral-xyz/anchor/dist/cjs/provider'
 import type { MessageSignerWalletAdapter } from '@solana/wallet-adapter-base'
+import { Buffer } from 'buffer'
 import { walletBridge } from '@/lib/walletBridge'
+import { i128le } from '@/lib/intent'
 import type {
   Adapters,
   ChainClient,
@@ -296,15 +298,23 @@ function createLiveWallet(): Wallet {
     },
 
     async signMessageBase64(message: string): Promise<string> {
-      // MessageSignerWalletAdapter adds signMessage; cast through unknown so we don't
-      // need to import the entire union type just for this one property.
-      const adapter = walletBridge.adapter as unknown as MessageSignerWalletAdapter | null
-      if (!adapter?.signMessage) throw new Error('[live] wallet does not support signMessage')
-      const bytes = new TextEncoder().encode(message)
-      const sig = await adapter.signMessage(bytes)
-      return btoa(String.fromCharCode(...sig))
+      return signBytesBase64(new TextEncoder().encode(message))
+    },
+
+    async signBytesBase64(bytes: Uint8Array): Promise<string> {
+      return signBytesBase64(bytes)
     },
   }
+}
+
+/** ed25519-sign raw bytes with the connected wallet → base64 signature. */
+async function signBytesBase64(bytes: Uint8Array): Promise<string> {
+  // MessageSignerWalletAdapter adds signMessage; cast through unknown so we don't
+  // need to import the entire union type just for this one property.
+  const adapter = walletBridge.adapter as unknown as MessageSignerWalletAdapter | null
+  if (!adapter?.signMessage) throw new Error('[live] wallet does not support signMessage')
+  const sig = await adapter.signMessage(bytes)
+  return btoa(String.fromCharCode(...sig))
 }
 
 // ---------------------------------------------------------------------------
@@ -313,12 +323,18 @@ function createLiveWallet(): Wallet {
 
 function createLiveTlock(): Tlock {
   return {
-    async seal(_price, _targetRound, _chainHash, _api): Promise<string> {
-      // TODO: integrate tlock-js (https://www.npmjs.com/package/tlock-js)
-      // import { timelockEncrypt } from 'tlock-js'
-      // const plaintext = i128LeBytes(price)  // 16-byte LE fixed-point
-      // return base64(await timelockEncrypt(chainHash, targetRound, plaintext, api))
-      throw new Error('[live] tlock sealing not yet integrated — install tlock-js')
+    async seal(priceWad, targetRound, chainHash, api): Promise<Uint8Array> {
+      // Dynamic import: tlock-js pulls a heavy BLS bundle — load it only when sealing so it
+      // code-splits out of the main app chunk. (Buffer/i128le are already in the main bundle.)
+      const { timelockEncrypt, HttpChainClient, HttpCachingChain } = await import('tlock-js')
+      const chain = new HttpCachingChain(`${api}/${chainHash}`)
+      const client = new HttpChainClient(chain)
+      // Plaintext is the i128-LE WAD price (16 bytes). Real drand tlock gates the reveal on
+      // the round itself (unlike the mock scheme, no round bytes go in the plaintext).
+      const armored = await timelockEncrypt(targetRound, Buffer.from(i128le(priceWad)), client)
+      // The stored/committed ciphertext bytes are the UTF-8 bytes of the age-armored string;
+      // the settlement worker (drand tlock) decrypts these same bytes.
+      return new TextEncoder().encode(armored)
     },
   }
 }
@@ -645,6 +661,30 @@ function createLiveChain(): ChainClient {
       const sig = await sender.sendTransaction(tx, conn)
       await conn.confirmTransaction(sig, 'finalized')
       return sig
+    },
+
+    /**
+     * Seal: register the on-chain prediction commitment during SEALING (§7). Accounts
+     * (per ix.rs): player(signer), match_account(w), seat(w). Args: { commitment[32],
+     * timelock_target:u64 }. `commitment = sha256(tlock_ciphertext)`.
+     */
+    async registerPredictionCommitment(onchainMatchId: string, commitmentHex: string, timelockTarget: number): Promise<string> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+      const conn = getConnection()
+      const player = adapter.publicKey
+      const matchAcct = matchPda(onchainMatchId)
+      const seat = seatPda(matchAcct, player)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const ix = await program.methods
+        .registerPredictionCommitment({ commitment: hexToBytes(commitmentHex, 32), timelockTarget: new BN(timelockTarget) })
+        .accounts({ player, matchAccount: matchAcct, seat })
+        .instruction()
+
+      const tx = new Transaction().add(ix)
+      return simulateSignAndSend(conn, tx, player)
     },
 
     // -------------------------------------------------------------------

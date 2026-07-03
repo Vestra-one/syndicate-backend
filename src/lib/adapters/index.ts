@@ -4,7 +4,7 @@
  * The store and UI depend ONLY on these interfaces.  There is a single live
  * implementation (./live) wired to real wallets, drand, and Solana.
  */
-import type { Chips, FixedPrice } from '@/lib/protocol'
+import type { Chips } from '@/lib/protocol'
 import { createLiveAdapters } from './live'
 
 /** ed25519 signer — the player's identity and intent authority. */
@@ -13,14 +13,21 @@ export interface Wallet {
   address(): string | null
   /** Prompt connection (wallet adapter modal, etc.). Resolves with the address. */
   connect(): Promise<string>
-  /** ed25519 sign of utf8(message), returned base64. */
+  /** ed25519 sign of utf8(message), returned base64 (auth nonces, plain messages). */
   signMessageBase64(message: string): Promise<string>
+  /** ed25519 sign of RAW bytes, returned base64 — for byte-exact intent messages (§8). */
+  signBytesBase64(bytes: Uint8Array): Promise<string>
 }
 
 /** drand time-lock sealer. The plaintext prediction NEVER leaves the client. */
 export interface Tlock {
-  /** Encrypt a fixed-point price toward a drand round -> base64 ciphertext. */
-  seal(price: FixedPrice, targetRound: number, chainHash: string, api: string): Promise<string>
+  /**
+   * Time-lock encrypt an i128 WAD price (exponent −18, so pass a bigint — WAD values
+   * overflow JS safe ints) toward a drand round → the raw ciphertext bytes. The caller
+   * derives `ciphertext_b64` + `commitment = sha256(bytes)`; the plaintext never leaves
+   * the client (§7).
+   */
+  seal(priceWad: bigint, targetRound: number, chainHash: string, api: string): Promise<Uint8Array>
 }
 
 /**
@@ -110,6 +117,11 @@ export interface ChainClient {
   claim(matchId: string): Promise<string>
   /** reclaim deposit + entry fee after VOID. */
   refund(matchId: string): Promise<string>
+  /**
+   * Register the on-chain prediction commitment during SEALING (§7): `commitment =
+   * sha256(tlock_ciphertext)`. Player-signed; the seat must be confirmed. Resolves on finality.
+   */
+  registerPredictionCommitment(onchainMatchId: string, commitmentHex: string, timelockTarget: number): Promise<string>
 
   /** Read a match's on-chain status + timing directly. Works with no active gateway/match state. */
   getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null>

@@ -1,40 +1,38 @@
 /**
- * The realtime gateway: the one socket the client speaks to (§1, §3, §5).
+ * The realtime gateway: the one socket the client speaks to (§9, §12).
  *
- * Transport-agnostic — the store depends only on this interface. `connect()`
- * performs the nonce-challenge auth handshake internally (signing with the
- * Wallet adapter) and resolves once authenticated. After that, gameplay flows
- * as `ServerMessage`s to subscribers and `ClientMessage`s via `send`.
- *
- * A real WebSocket to the Satoshi's Table gateway (no mock/demo transport).
+ * Transport-agnostic — the store depends only on this interface. `connect()` opens the
+ * socket and (if a wallet is connected) answers the auth challenge; it resolves once the
+ * socket is open (spectating needs no auth). After that, `subscribe` receives v2
+ * `ServerFrame`s and `send` posts v2 `ClientFrame`s.
  */
-import type { ClientMessage, ServerMessage } from '@/lib/protocol'
 import type { Adapters } from '@/lib/adapters'
+import type { ClientFrame, ServerFrame } from './wsTypes'
 import { createWsGateway } from './wsGateway'
 
-export type GatewayListener = (msg: ServerMessage) => void
+export type GatewayListener = (frame: ServerFrame) => void
 
 export interface Gateway {
-  /** Connect + authenticate (§3). Resolves once authenticated; rejects on auth/geo error. */
+  /** Open the socket; answers the nonce challenge if a wallet is connected. Resolves on open. */
   connect(): Promise<void>
   disconnect(): void
   subscribe(listener: GatewayListener): () => void
-  /** Send a post-auth client message (act / sealPrediction / setDefault / subscribe). */
-  send(msg: ClientMessage): void
-  /** True if the underlying socket is actually open — lets callers reuse an already-authenticated session instead of re-running the (wallet-signed) auth handshake. */
+  /** Send a v2 client frame (subscribe / act / seal / set_default / ping). */
+  send(frame: ClientFrame): void
+  /** True if the underlying socket is open — lets callers reuse a live session. */
   isOpen(): boolean
 }
 
-/** Open a real WebSocket gateway. Requires VITE_GATEWAY_WS_URL. */
+/** Open a real v2 WebSocket gateway. Requires VITE_WS_URL (or the dev WS proxy). */
 export function createGateway(adapters: Adapters): Gateway {
   const devUser = import.meta.env.VITE_DEVNET_USER as string | undefined
-  // In local dev with Basic Auth, use the Vite WS proxy so the auth header is injected server-side.
-  // The browser WebSocket API has no way to send Authorization headers directly.
+  // In local dev with Basic Auth, use the Vite WS proxy so the auth header is injected
+  // server-side (the browser WebSocket API cannot set Authorization headers directly).
   const url = devUser
-    ? `${window.location.origin.replace(/^http/, 'ws')}/gateway-proxy`
-    : import.meta.env.VITE_GATEWAY_WS_URL as string | undefined
+    ? `${window.location.origin.replace(/^http/, 'ws')}/ws-proxy`
+    : (import.meta.env.VITE_WS_URL as string | undefined)
   if (!url) {
-    throw new Error('VITE_GATEWAY_WS_URL is not set — configure the gateway URL in .env')
+    throw new Error('VITE_WS_URL is not set — configure the v2 WebSocket URL in .env')
   }
   return createWsGateway(url, adapters)
 }

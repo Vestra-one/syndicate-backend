@@ -1,53 +1,91 @@
 /**
- * Real WebSocket gateway. Implements the §3 nonce-challenge auth handshake
- * (this part of the protocol is [live] today) and then forwards gameplay
- * messages verbatim. Game-message shapes are [contract] and may still firm up.
+ * v2 WebSocket transport (`wss://…/v1/ws`). Server frames are `{ v, t, server_time_ms, … }`;
+ * client frames are `{ t, … }`. Auth is the in-band `challenge → auth → authenticated`
+ * handshake (§2) — spectating needs none, so `connect()` resolves as soon as the socket is
+ * open and only signs a challenge if the wallet is connected. Heartbeats: `ping`/`pong` @30s.
  */
-import type { ServerMessage } from '@/lib/protocol'
 import type { Adapters } from '@/lib/adapters'
 import type { Gateway, GatewayListener } from './gateway'
+import type { ClientFrame, ServerFrame } from './wsTypes'
+
+const HEARTBEAT_MS = 30_000
 
 export function createWsGateway(url: string, adapters: Adapters): Gateway {
   const listeners = new Set<GatewayListener>()
   let ws: WebSocket | null = null
+  let heartbeat: ReturnType<typeof setInterval> | null = null
 
-  const emit = (msg: ServerMessage) => listeners.forEach((l) => l(msg))
+  const emit = (frame: ServerFrame) => listeners.forEach((l) => l(frame))
+
+  const stopHeartbeat = () => {
+    if (heartbeat) {
+      clearInterval(heartbeat)
+      heartbeat = null
+    }
+  }
 
   return {
     connect() {
       return new Promise<void>((resolve, reject) => {
+        let settled = false
         const sock = new WebSocket(url)
         ws = sock
-        sock.onmessage = async (raw) => {
-          const msg = JSON.parse(raw.data) as ServerMessage
-          switch (msg.type) {
-            case 'challenge': {
-              // ed25519 sign of the raw nonce string, base64 (§3).
-              const address = adapters.wallet.address() ?? (await adapters.wallet.connect())
-              const signature = await adapters.wallet.signMessageBase64(msg.nonce)
-              sock.send(JSON.stringify({ type: 'auth', wallet: address, signature }))
-              break
-            }
-            case 'authenticated':
-              resolve()
-              emit(msg)
-              break
-            case 'error':
-              // geo-blocked / bad signature / nonce expired / wallet mismatch (§9)
-              reject(new Error(msg.reason))
-              emit(msg)
-              break
-            default:
-              emit(msg) // gameplay / feed / discovery, after auth
+
+        sock.onopen = () => {
+          heartbeat = setInterval(() => {
+            if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'ping' } satisfies ClientFrame))
+          }, HEARTBEAT_MS)
+          // Spectating needs no auth — the socket is usable now. If the server issues a
+          // `challenge` we answer it below; if we're never challenged, we still resolve.
+          if (!settled) {
+            settled = true
+            resolve()
           }
         }
-        sock.onerror = () => reject(new Error('socket error'))
-        // If the socket drops after auth (no in-flight connect() promise to reject),
-        // null it out so isOpen() correctly reports the session as dead.
-        sock.onclose = () => { if (ws === sock) ws = null }
+
+        sock.onmessage = async (raw) => {
+          let frame: ServerFrame
+          try {
+            frame = JSON.parse(raw.data) as ServerFrame
+          } catch {
+            return // ignore non-JSON
+          }
+          switch (frame.t) {
+            case 'challenge': {
+              // Answer the nonce challenge if a wallet is available (players); spectators skip.
+              const address = adapters.wallet.address()
+              if (!address) break
+              try {
+                const signature = await adapters.wallet.signMessageBase64(frame.nonce)
+                sock.send(JSON.stringify({ t: 'auth', wallet: address, signature } satisfies ClientFrame))
+              } catch (err) {
+                console.warn('[ws] auth sign failed:', err)
+              }
+              break
+            }
+            case 'error':
+              // Surface but don't tear down — most errors are per-subscription (lagged, not_found).
+              emit(frame)
+              break
+            default:
+              emit(frame)
+          }
+        }
+
+        sock.onerror = () => {
+          if (!settled) {
+            settled = true
+            reject(new Error('socket error'))
+          }
+        }
+        sock.onclose = () => {
+          stopHeartbeat()
+          if (ws === sock) ws = null
+        }
       })
     },
     disconnect() {
+      stopHeartbeat()
       ws?.close()
       ws = null
       listeners.clear()
@@ -56,8 +94,8 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    send(msg) {
-      ws?.send(JSON.stringify(msg))
+    send(frame: ClientFrame) {
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame))
     },
     isOpen() {
       return ws?.readyState === WebSocket.OPEN

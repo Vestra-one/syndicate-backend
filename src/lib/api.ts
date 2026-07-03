@@ -422,6 +422,16 @@ export const api = {
       `/matches/${encodeURIComponent(matchId)}/candidates/${encodeURIComponent(wallet)}`,
     ),
 
+  // — sealing (Bearer) — REST fallback for the WS `seal` frame (§7) —
+  submitSeal: (
+    matchId: string,
+    body: { ciphertext_b64: string; commitment_hex: string; timelock_target: number; signature: string; seal_tx_sig?: string },
+  ) => postJson<{ v: number; server_time_ms: number; sealed: boolean; seat_index: number }>(
+    `/matches/${encodeURIComponent(matchId)}/seal`,
+    body,
+    true,
+  ),
+
   // — detail / lists —
   getMatch: (matchId: string) => request<MatchDetail>(`/matches/${encodeURIComponent(matchId)}`),
   getLobby: (opts: { feed?: string; buyInMin?: number; buyInMax?: number; cursor?: string; limit?: number } = {}) =>
