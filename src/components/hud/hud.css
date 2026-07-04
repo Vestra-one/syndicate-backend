@@ -414,9 +414,19 @@
   background: rgba(202, 162, 63, 0.28);
   box-shadow: var(--glow-warm);
 }
+/* Instant tactile press — fires on pointer-down, before any async seal work resolves. */
+.seal-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+  background: rgba(202, 162, 63, 0.34);
+}
 .seal-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* While sealing the button is disabled but should read as "working", not "blocked". */
+.seal-panel--sealing .seal-btn:disabled {
+  opacity: 0.85;
+  cursor: progress;
 }
 
 /* ---- Exposure (shown before every commit, §10.1) ---- */
@@ -467,6 +477,15 @@
 .pk-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* The action being signed+sent stays legible and pulses while its siblings dim. */
+.pk-btn--busy:disabled {
+  opacity: 0.9;
+  cursor: progress;
+  animation: pk-btn-busy 1s var(--ease) infinite;
+}
+@keyframes pk-btn-busy {
+  50% { opacity: 0.55; }
 }
 .pk-fold {
   color: var(--down);
@@ -3101,6 +3120,38 @@
   height: 15px;
   border-width: 2px;
   margin: 0;
+}
+
+/* ---- Winnings to collect — a celebratory variant of the reclaim card ---- */
+.dash-section-dot--win {
+  background: var(--gold-bright);
+  opacity: 1;
+  box-shadow: 0 0 0 0 rgba(215, 166, 87, 0.55);
+  animation: dash-live-pulse 2.4s ease infinite;
+}
+.claim-card {
+  border-color: rgba(215, 166, 87, 0.38);
+  background:
+    linear-gradient(180deg, rgba(215, 166, 87, 0.08), rgba(215, 166, 87, 0) 60%);
+}
+.claim-card--done {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  border-color: rgba(62, 207, 142, 0.32);
+}
+.claim-won {
+  color: var(--gold-bright);
+  font-weight: 700;
+}
+.claim-btn {
+  color: #12100b;
+  background: linear-gradient(180deg, var(--gold-bright), #c79a4e);
+  border-color: rgba(215, 166, 87, 0.6);
+  font-weight: 700;
+}
+.claim-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 
 /* ---- Resolution ceremony ---- */

@@ -357,7 +357,7 @@ export function createPriceBoard(): PriceBoardHandle {
   // ================= minimal live chart: one header line, then all the rest is graph =================
   // A single compact header row (symbol + price + change, tabs, market-open) and
   // a thin bottom margin for the time axis — everything else goes to the plot.
-  const PAD = { l: 26, r: 104, t: 72, b: 132 }
+  const PAD = { l: 26, r: 104, t: 72, b: 46 }
   const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
   // a serif display face for the engraved-looking labels (symbol, your-call),
   // so they read as part of the table's gilt lettering rather than a dashboard.
@@ -368,11 +368,6 @@ export function createPriceBoard(): PriceBoardHandle {
       : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
   // Fallback round length if the table's terms don't say (shouldn't happen once wired).
   const DEFAULT_ROUND_MS = 10 * 60_000
-  // The Bitcoin genesis block's coinbase date — the same "03 JAN 2009" the felt
-  // rail already engraves as its newspaper-headline Easter egg — paired with
-  // today's live date on the footer plaque, so the two readings are always a
-  // meaningful "then vs now" rather than the tab's own (often same-day) window.
-  const GENESIS_TS = Date.UTC(2009, 0, 3)
 
   // ---- timeframe tab row: a trailing-window size over the cabinet's own live
   // ticks (see readData/update) — inert while a round or the pre-match wait is
@@ -422,10 +417,6 @@ export function createPriceBoard(): PriceBoardHandle {
     const totalSec = Math.max(0, Math.round(ms / 1000))
     return totalSec < 90 ? `${totalSec}s` : `${Math.round(totalSec / 60)}m`
   }
-  /** "MAR 14, 2024" — the footer plaque's engraved date pair. */
-  const fmtFooterDate = (ts: number) =>
-    new Date(ts).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase()
-
   // canvas rounded-rect path
   const rr = (x: number, y: number, w: number, h: number, r: number) => {
     const k = Math.min(r, h / 2, w / 2)
@@ -534,68 +525,6 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.textBaseline = 'middle'
       cx.textAlign = 'left'
       cx.fillText(text, gx1 + 18, y + 1)
-    }
-
-    // ---- footer plaque: a recessed, bordered brass-and-glass panel below the
-    // axis — an engraved "opened / updated" date pair split by a centre divider,
-    // then a centred live-feed tagline with a status dot beneath it, sitting
-    // right above the wood plinth. Always drawn (even before the feed warms up)
-    // so this chrome never reads as a bare gap above the plinth. ----
-    const drawFooterPlaque = (nowTs: number) => {
-      const panelY0 = gy1 + 38
-      const panelH = 46
-      const panelY1 = panelY0 + panelH
-      const midX = (gx0 + gx1) / 2
-
-      // recessed glass with a visible gilt border, rounded like the screen
-      // itself — a soft vertical gradient (lighter at the top edge, darker at
-      // the foot) sells the "recessed panel" depth that a flat fill can't.
-      const panelFill = cx.createLinearGradient(0, panelY0, 0, panelY1)
-      panelFill.addColorStop(0, 'rgba(233,196,140,0.09)')
-      panelFill.addColorStop(0.18, 'rgba(40,30,18,0.55)')
-      panelFill.addColorStop(1, 'rgba(10,7,4,0.7)')
-      cx.fillStyle = panelFill
-      rr(gx0, panelY0, gx1 - gx0, panelH, 10)
-      cx.fill()
-      cx.strokeStyle = 'rgba(233,196,140,0.55)'
-      cx.lineWidth = 1.25
-      rr(gx0, panelY0, gx1 - gx0, panelH, 10)
-      cx.stroke()
-
-      // centre divider between the two readings
-      cx.strokeStyle = 'rgba(233,196,140,0.4)'
-      cx.beginPath()
-      cx.moveTo(midX, panelY0 + 9)
-      cx.lineTo(midX, panelY1 - 9)
-      cx.stroke()
-
-      cx.font = `600 17px ${SANS}`
-      cx.fillStyle = ink
-      cx.textBaseline = 'middle'
-      const rowY = panelY0 + panelH / 2 + 1
-      cx.textAlign = 'right'
-      cx.fillText(fmtFooterDate(GENESIS_TS), midX - 22, rowY)
-      cx.textAlign = 'left'
-      cx.fillText(fmtFooterDate(nowTs), midX + 22, rowY)
-
-      // live-feed tagline + status dot, centred beneath the plaque
-      const tagY = panelY1 + 26
-      cx.font = `600 13px ${SANS}`
-      cx.textAlign = 'center'
-      cx.textBaseline = 'middle'
-      cx.fillStyle = 'rgba(224,200,158,0.8)'
-      const tag = 'PRICES UPDATE REAL-TIME'
-      const tagW = cx.measureText(tag).width
-      tracked(tag, midX, tagY, '1px')
-      const dotColor = connStatus === 'live' ? '#4fd18b' : connStatus === 'offline' ? '#d4644a' : '#e7b24d'
-      cx.save()
-      cx.shadowColor = dotColor
-      cx.shadowBlur = 8
-      cx.fillStyle = dotColor
-      cx.beginPath()
-      cx.arc(midX + tagW / 2 + 18, tagY, 4.5, 0, Math.PI * 2)
-      cx.fill()
-      cx.restore()
     }
 
     // ---- header: one compact row — symbol + hero price + change chip on the
@@ -710,7 +639,6 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.textAlign = 'center'
       cx.textBaseline = 'middle'
       cx.fillText('waiting for first tick', midX, midY + 42)
-      drawFooterPlaque(clock)
       screenTex.needsUpdate = true
       return
     }
@@ -909,7 +837,6 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.fill()
     edgePill(fmtPrice(price), ly, accent, '#1a1206')
 
-    drawFooterPlaque(clock)
     screenTex.needsUpdate = true
   }
 

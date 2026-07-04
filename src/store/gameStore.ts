@@ -129,6 +129,9 @@ interface GameState {
   createLimits: CreateLimits | null
   /** Epoch-ms the current round began — anchors the price-board chart's x-axis to the round. */
   roundStartedAt: number | null
+  /** Per-street windows (epoch-ms) from the server's street schedule — streets advance on
+   *  this clock, not on betting, so the HUD counts it down instead of looking frozen. */
+  streetSchedule: StreetWindow[] | null
 
   // self-centric, derived from the feed
   sealStatus: SealStatus
@@ -207,6 +210,14 @@ interface GameState {
   refund: () => Promise<string | null>
   setReviewing: (v: boolean) => void
   playAgain: () => Promise<void>
+}
+
+/** One street's scheduled window, epoch-ms. `close` ends betting; `end` includes observation. */
+export interface StreetWindow {
+  street: number
+  open: number
+  close: number
+  end: number
 }
 
 /** Creator-selectable ranges for a new table. */
@@ -339,6 +350,37 @@ function resetActionChain() {
  *  ordered event stream (gap-free, dedup by seq). Pass `lastSeq` to fetch only the delta. */
 function subscribeMatch(matchId: string, lastSeq = 0) {
   gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: lastSeq })
+  startMatchPoll()
+}
+
+// The devnet gateway journals engine events but has been observed broadcasting NONE of
+// them — street closes, settlement, even phase moves reach a subscribed client as pure
+// silence while the match runs on. Poll the REST detail as a safety net while a table is
+// open, so the HUD self-heals instead of showing "LIVE" forever after the match settled.
+const MATCH_POLL_MS = 10_000
+let matchPoll: ReturnType<typeof setInterval> | null = null
+function startMatchPoll() {
+  stopMatchPoll()
+  matchPoll = setInterval(() => {
+    const s = useGameStore.getState()
+    if (s.view !== 'table' || s.settlement || s.voided) return stopMatchPoll()
+    // Watchdog: the transport has no auto-reconnect, so a dropped socket silently eats
+    // every broadcast (your_turn included). Rebuild + resubscribe the moment it's noticed.
+    if (gateway && !gateway.isOpen()) {
+      console.warn('[ws] socket dead — reconnecting and resubscribing')
+      void s.connect().then(() => {
+        const matchId = useGameStore.getState().match?.matchId ?? joinMatchId
+        if (matchId) gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: 0 })
+      })
+    }
+    void refreshMatchSeats(useGameStore.setState as SetState, useGameStore.getState)
+  }, MATCH_POLL_MS)
+}
+function stopMatchPoll() {
+  if (matchPoll) {
+    clearInterval(matchPoll)
+    matchPoll = null
+  }
 }
 
 /** REST context for the CREATE flow: server config (for building the intent), the chosen
@@ -493,6 +535,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   fillDeadline: null,
   createLimits: null,
   roundStartedAt: null,
+  streetSchedule: null,
 
   sealStatus: 'unsealed',
   yourPrediction: null,
@@ -632,7 +675,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   /** Spectate a table from the dashboard: open the WS, subscribe to its match channel,
    *  and seed terms from REST detail for an instant render (§6). No auth needed to watch. */
   enterTable: async (matchId) => {
-    set({ view: 'table', match: null, feed: [], priceHistory: [], settlement: null, voided: null })
+    set({ view: 'table', match: null, feed: [], priceHistory: [], settlement: null, voided: null, streetSchedule: null })
     resetActionChain()
     if (!adapters) adapters = createAdapters()
     await get().connect()
@@ -807,7 +850,17 @@ export const useGameStore = create<GameState>((set, get) => ({
   /** Open the v2 WebSocket (idempotent). Spectate needs no wallet; if one is connected the
    *  transport answers the auth challenge so the same socket can also act/seal (§12). */
   connect: async () => {
-    if (gateway) return
+    if (gateway?.isOpen()) return
+    if (gateway) {
+      // A gateway exists but its socket is dead (server closed it, idle drop, HMR orphan).
+      // The old early-return here left the app "connected" to nothing — every broadcast,
+      // your_turn included, went nowhere while the UI just looked quiet. Rebuild instead.
+      console.warn('[ws] stale socket — rebuilding connection')
+      unsub?.()
+      gateway.disconnect()
+      gateway = null
+      unsub = null
+    }
     set({ status: 'connecting' })
     if (!adapters) adapters = createAdapters()
     // Capture the instance locally — `gateway` (module-global) can be reassigned by a
@@ -830,6 +883,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   disconnect: () => {
+    stopMatchPoll()
     unsub?.()
     gateway?.disconnect()
     gateway = null
@@ -857,6 +911,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       lobbySeated: null,
       fillDeadline: null,
       createLimits: null,
+      streetSchedule: null,
     })
   },
 
@@ -1046,9 +1101,12 @@ export const useGameStore = create<GameState>((set, get) => ({
         queuedPrediction: price,
         // Pre-lock (WaitingRoom) this is expected and the room shows the "locked in" state.
         // But if the seal window is already open, silence reads as a dead button — say so,
-        // and pull the missing round/seat from REST so the queued call can auto-fire.
+        // and pull the missing round/seat from REST so the queued call can auto-fire. The
+        // usual cause here is the server not having assigned the drand round yet (targetRound 0).
         playError: windowOpen
-          ? 'Preparing the seal window — your prediction is saved and will seal in a moment.'
+          ? (!targetRound
+              ? 'Waiting for the server to assign the seal round — your prediction is saved and will seal automatically once it does.'
+              : 'Preparing the seal window — your prediction is saved and will seal in a moment.')
           : get().playError,
       })
       if (windowOpen && sealContextTries < 4) {
@@ -1202,6 +1260,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({
       match: null,
       yourTurn: null,
+      actPending: null,
       sealStatus: 'unsealed',
       yourPrediction: null,
       queuedPrediction: null,
@@ -1216,6 +1275,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       priceHistory: [],
       fillDeadline: null,
       roundStartedAt: null,
+      streetSchedule: null,
     })
     await get().createGame()
   },
@@ -1224,6 +1284,14 @@ export const useGameStore = create<GameState>((set, get) => ({
 /** On-chain deadlines are unix seconds; the UI counts down in epoch-ms. Pass through values already in ms. */
 function toEpochMs(deadline: number): number {
   return deadline > 1e12 ? deadline : deadline * 1000
+}
+
+/** Normalize the server street schedule to epoch-ms windows; null when absent/empty. */
+function normalizeSchedule(
+  sched: { street: number; open: number; close: number; end: number }[] | null | undefined,
+): StreetWindow[] | null {
+  if (!sched || sched.length === 0) return null
+  return sched.map((e) => ({ street: e.street, open: toEpochMs(e.open), close: toEpochMs(e.close), end: toEpochMs(e.end) }))
 }
 
 /**
@@ -1358,6 +1426,7 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
           : s.terms,
         fillDeadline: t.fill_deadline != null ? toEpochMs(t.fill_deadline) : s.fillDeadline,
         roundStartedAt: t.live_start != null ? toEpochMs(t.live_start) : s.roundStartedAt,
+        streetSchedule: normalizeSchedule(t.street_schedule) ?? s.streetSchedule,
         sealClosed: s.sealClosed || frame.state.phase === 'sealing_closed',
       }))
       // Reconnected mid-seal-window: recover the engine seat + our sealed flag, and fire
@@ -1389,6 +1458,23 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       set({ lobbySeated: frame.confirmed })
       break
 
+    case 'event': {
+      // Standalone engine events. Timer-driven street transitions land HERE, not inside an
+      // `action` broadcast — when a street closes with nobody acting there is no action frame
+      // to carry the new round, so ignoring these froze the round counter until the next bet.
+      const m = get().match
+      const item = wsEventToFeed(
+        { type: frame.type, body: frame.body, seq: frame.seq },
+        frame.match_id,
+        m?.pot ?? 0,
+        m?.feedPrice ?? 0,
+      )
+      if (item) set((s) => ({ feed: [...s.feed, item].slice(-MAX_FEED) }))
+      // Resync round/pot/current_bet/to_act (+ per-seat stacks) from REST — event-paced, cheap.
+      void refreshMatchSeats(set, get)
+      break
+    }
+
     case 'seal_status': {
       // `sealed`/`just_sealed` list engine seats — recognising our own covers the reload
       // case where the latch was lost (the plaintext is gone, but re-sealing would 409).
@@ -1409,13 +1495,32 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       break
     }
 
-    case 'your_turn':
-      myEngineSeat = frame.seat
-      set({ yourTurn: { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms }, actPending: null })
+    case 'your_turn': {
+      // Turn frames arrive on the shared match channel, so every subscriber sees them —
+      // including the OTHER player. Never adopt frame.seat as our identity (that made both
+      // browsers open the action panel and sign acts with the wrong seat_index); only open
+      // the panel if the seat verifiably matches our wallet-resolved engine seat.
+      const turn = { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms }
+      const mySeat = myEngineSeat ?? get().match?.yourSeat ?? null
+      // TEMP DIAGNOSTIC — confirms whether turn frames arrive and how the seat resolves.
+      console.log('[ws] your_turn — frame.seat', frame.seat, 'mySeat', mySeat, 'deadline in', Math.round((frame.deadline_ms - Date.now()) / 1000), 's')
+      // Whoever it's for, the frame names the acting seat — keep the banner/pods honest.
+      set((s) => ({ match: s.match ? { ...s.match, toActSeat: frame.seat } : s.match }))
+      if (mySeat == null) {
+        // Seat unknown (e.g. reconnected mid-hand) — resolve it from REST, then decide.
+        void refreshMatchSeats(set, get).then(() => {
+          if (myEngineSeat === frame.seat && Date.now() < frame.deadline_ms) {
+            set({ yourTurn: turn, actPending: null })
+          }
+        })
+        break
+      }
+      set({ yourTurn: frame.seat === mySeat ? turn : null, actPending: null })
       // Make sure our own stack/committed are populated before the action panel opens — the
       // turn frame carries to_call/min_raise_to but no stacks.
       void refreshMatchSeats(set, get)
       break
+    }
 
     case 'action': {
       // Advance the action-chain head + nonce so the next signed `act` uses the right prev_head.
@@ -1483,6 +1588,13 @@ async function ensureSealContext(set: SetState, get: () => GameState): Promise<v
     const detail = await api.getMatch(matchId)
     const mine = wallet ? detail.seats.find((x) => x.wallet === wallet) : undefined
     if (mine) myEngineSeat = mine.seat_index
+    // The drand target round is the SERVER's to assign after lock — it must land in the
+    // on-chain-validated window (seal_deadline + total_betting + begin_live_window, ±20s),
+    // which the client can't reconstruct. So trust `timing.timelock_target` only; if it's
+    // still null the seat can't seal yet (see the `!targetRound` guard in sealPrediction).
+    if (detail.timing.timelock_target == null) {
+      console.warn('[seal] server has not assigned timelock_target yet', detail.timing)
+    }
     set((s) => ({
       sealStatus: mine?.sealed && s.sealStatus !== 'sealed' ? 'sealed' : s.sealStatus,
       terms:
@@ -1515,7 +1627,47 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
   const wallet = adapters?.wallet.address() ?? get().walletAddress
   try {
     const detail = await api.getMatch(matchId)
-    if (detail.seats.length === 0) return // still pre-lock — nothing to merge yet
+    const phase = mapPhase(detail.phase)
+    const prevPhase = get().match?.phase
+
+    // Terminal phases are supposed to arrive as WS `settled`/`voided` frames, but the
+    // gateway can stay silent — recover them from the detail so the resolution shows.
+    if (phase === 'SETTLED' && !get().settlement) {
+      const decimals = get().terms?.decimals ?? 2
+      const reveal = detail.reveal as {
+        settlement_price_wad?: string | null
+        predictions?: { engine_seat: number; prediction_wad: string }[] | null
+        rake?: number | null
+      } | null
+      set({
+        settlement: {
+          matchId: detail.match_id,
+          settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
+          awards: [],
+          uncalledReturns: [],
+          rakeCollected: reveal?.rake ?? 0,
+          revealedPredictions: (reveal?.predictions ?? []).map((p) => ({
+            seat: p.engine_seat,
+            prediction: wadToFixed(p.prediction_wad, decimals),
+          })),
+        },
+        yourTurn: null,
+        actPending: null,
+      })
+      stopMatchPoll()
+    } else if (phase === 'VOID' && !get().voided) {
+      set({ voided: { reason: (detail.void_kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })
+      stopMatchPoll()
+    } else if (phase === 'SEALING' && prevPhase === 'FILLING') {
+      // Missed lock broadcast — recover the engine seat / drand round and fire any queued seal.
+      void ensureSealContext(set, get)
+    }
+
+    if (detail.seats.length === 0) {
+      // Still pre-lock — no seats to merge, but keep the phase honest.
+      set((s) => (s.match ? { match: { ...s.match, phase } } : {}))
+      return
+    }
     const seats: SeatView[] = detail.seats.map((s) => ({
       seat: s.seat_index,
       wallet: s.wallet,
@@ -1532,9 +1684,18 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
     set((s) =>
       s.match
         ? {
+            streetSchedule: normalizeSchedule(detail.timing.street_schedule) ?? s.streetSchedule,
             match: {
               ...s.match,
               seats,
+              // The detail is the same authoritative view the snapshot mirrors — sync the
+              // table-level state too, so a missed WS frame (timer-driven street close,
+              // reconnect gap) self-heals on the next pull instead of freezing the round.
+              phase,
+              round: detail.round ?? s.match.round,
+              pot: detail.pot ?? s.match.pot,
+              currentBet: detail.current_bet ?? s.match.currentBet,
+              toActSeat: detail.to_act ?? null,
               yourSeat: mine?.seat_index ?? s.match.yourSeat,
               yourStack: mine?.stack ?? s.match.yourStack,
               yourExposure: mine?.total_contribution ?? s.match.yourExposure,
@@ -1560,6 +1721,15 @@ function hexToBytes32(hex: string): Uint8Array {
 function wadStringToFixed(price: string, _expo: number, decimals: number): number {
   const n = Number(price)
   return Number.isFinite(n) ? Math.round(n * 10 ** decimals) : 0
+}
+
+/** Convert a raw integer WAD string ("63056845000000000000000" = 63056.845e18) to fixed-point. */
+function wadToFixed(wad: string, decimals: number): number {
+  try {
+    return Number(BigInt(wad) / 10n ** BigInt(18 - decimals))
+  } catch {
+    return 0
+  }
 }
 
 // The public devnet RPC (api.devnet.solana.com) rate-limits aggressively; refreshBalance

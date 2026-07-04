@@ -1,6 +1,7 @@
 import { useGameStore } from '@/store/gameStore'
-import { formatChips } from '@/lib/format'
+import { formatChips, formatCountdown } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
+import { useNow } from '@/lib/useNow'
 import type { MatchPhase } from '@/lib/protocol'
 import { useWaiting } from './WaitingRoom'
 
@@ -21,7 +22,9 @@ const PHASE_COPY: Record<MatchPhase, string> = {
 export function RoundStatus() {
   const match = useGameStore((s) => s.match)
   const terms = useGameStore((s) => s.terms)
+  const schedule = useGameStore((s) => s.streetSchedule)
   const { active: waiting } = useWaiting()
+  const now = useNow(500)
 
   // Pre-game: the full-surface waiting console (WaitingRoom) owns this state; the
   // footer is suppressed by the HUD while filling, so there's nothing to show here.
@@ -39,7 +42,15 @@ export function RoundStatus() {
   const live = match.phase === 'LIVE'
   const roundCount = terms?.roundCount ?? match.round
   const token = terms?.chipsToken ?? 'USDC'
-  const label = live ? `Round ${match.round} of ${roundCount}` : PHASE_COPY[match.phase]
+  // Streets advance purely on the schedule fixed at lock, so the schedule is the honest
+  // round clock — the server's `round` field can lag it (observed frozen at 1 on devnet
+  // while its own schedule was in street 3), and no WS frame marks the transition.
+  const scheduleRound =
+    live && schedule?.length
+      ? ((schedule.find((e) => now < e.end) ?? schedule[schedule.length - 1]).street + 1)
+      : 0
+  const round = Math.max(match.round, scheduleRound)
+  const label = live ? `Round ${round} of ${roundCount}` : PHASE_COPY[match.phase]
 
   // Whose move it is, phrased from your side of the felt.
   const toAct =
@@ -49,6 +60,18 @@ export function RoundStatus() {
         : `${seatAlias(match.toActSeat, match.yourSeat)} to act`
       : null
 
+  // Streets advance on the server's street schedule, not on betting — so a matched pot
+  // with nobody to act is a WAIT, not a stall. Count the window down so it reads that way.
+  let clock: string | null = null
+  if (live && schedule) {
+    const cur = schedule.find((e) => now < e.end)
+    if (cur) {
+      clock = now < cur.close
+        ? `betting closes in ${formatCountdown(cur.close - now)}`
+        : `observing price — round ends in ${formatCountdown(cur.end - now)}`
+    }
+  }
+
   return (
     <div>
       <div className={`round panel round--${match.phase.toLowerCase()}`}>
@@ -57,13 +80,14 @@ export function RoundStatus() {
           {live && roundCount > 1 && (
             <span className="round-pips" aria-label={label}>
               {Array.from({ length: roundCount }, (_, i) => (
-                <i key={i} className={i < match.round ? 'round-pip round-pip--done' : 'round-pip'} />
+                <i key={i} className={i < round ? 'round-pip round-pip--done' : 'round-pip'} />
               ))}
             </span>
           )}
         </div>
         <div className="round-label">{label}</div>
         {toAct && <div className="round-toact eyebrow">{toAct}</div>}
+        {clock && <div className="round-toact eyebrow mono">{clock}</div>}
         <div className="round-prices mono">
           <span>pot {formatChips(match.pot)} {token}</span>
           <span>bet {formatChips(match.currentBet)} {token}</span>

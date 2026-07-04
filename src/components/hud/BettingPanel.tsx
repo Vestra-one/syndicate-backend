@@ -114,6 +114,20 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
   const finite = Number.isFinite(value) && value > 0
   const sealing = sealStatus === 'sealing'
 
+  // Instant click feedback: `sealStatus` only flips to 'sealing' after the async guard
+  // passes (round ready, wallet prompt, …), which can lag a click or never happen if the
+  // call just queues. A local `busy` flag set synchronously on click makes the button
+  // respond immediately; the store's own state takes over as soon as it moves.
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!busy) return
+    // Store took over (sealing/sealed) or surfaced a message — let those drive the UI now.
+    if (sealStatus !== 'unsealed' || sealError) { setBusy(false); return }
+    const t = setTimeout(() => setBusy(false), 6000) // safety release if nothing moved
+    return () => clearTimeout(t)
+  }, [busy, sealStatus, sealError])
+  const working = busy || sealing
+
   // Validation: sane bounds around spot so an absurd call can't be sealed by mistake.
   const outOfBounds =
     finite && lastPrice != null && Math.abs(value - lastPrice) > lastPrice * SEAL_BOUND
@@ -132,12 +146,14 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
   }
 
   const submit = () => {
-    if (!valid || sealing) return
+    if (!valid || working) return
+    setBusy(true)
+    if (sealError) useGameStore.setState({ playError: null }) // clear stale message for a clean attempt
     seal(Math.round(value * 10 ** decimals))
   }
 
   return (
-    <div className={`betpanel panel seal-panel ${closingSoon ? 'seal-panel--closing' : ''} ${sealing ? 'seal-panel--sealing' : ''}`}>
+    <div className={`betpanel panel seal-panel ${closingSoon ? 'seal-panel--closing' : ''} ${working ? 'seal-panel--sealing' : ''}`}>
       <div className="betpanel-head">
         <span className="panel-title">{waiting ? 'Lock in your prediction' : 'Seal your prediction'}</span>
         <span className="eyebrow">{terms?.priceFeedId ?? 'BTC/USD'} at match end</span>
@@ -192,12 +208,12 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
         <a className="seal-how" href="#" onClick={(e) => e.preventDefault()} title="Your call is time-lock encrypted to the match-end drand round, so it stays secret until settlement.">how it works ↗</a>
       </p>
 
-      <button className="seal-btn" onClick={submit} disabled={!valid || sealing}>
-        <span className="seal-btn-lock" aria-hidden="true">🔒</span>
-        {sealing ? 'Sealing…' : waiting ? 'Lock in prediction' : 'Seal prediction'}
+      <button className="seal-btn" onClick={submit} disabled={!valid || working}>
+        <span className="seal-btn-lock" aria-hidden="true">{working ? '⏳' : '🔒'}</span>
+        {working ? 'Sealing…' : waiting ? 'Lock in prediction' : 'Seal prediction'}
       </button>
 
-      {sealing && <div className="seal-ritual" aria-hidden="true"><span className="seal-wax">✦</span></div>}
+      {working && <div className="seal-ritual" aria-hidden="true"><span className="seal-wax">✦</span></div>}
     </div>
   )
 }
@@ -323,9 +339,30 @@ function SealedWaitingPanel() {
 function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) => void }) {
   const toActSeat = useGameStore((s) => s.match?.toActSeat)
   const yourSeat = useGameStore((s) => s.match?.yourSeat)
+  const seats = useGameStore((s) => s.match?.seats)
   const folded = useGameStore((s) => s.match?.seats.find((x) => x.seat === s.match?.yourSeat)?.folded)
   const alias = toActSeat != null ? seatAlias(toActSeat, yourSeat) : null
   const toggle = (a: Exclude<Armed, null>) => setArmed(armed === a ? null : a)
+
+  // All but one player folded and nobody is to act: betting is over for good —
+  // "waiting for the next turn…" would be a lie. Say what actually happens next.
+  const alive = seats?.filter((x) => !x.folded).length ?? 0
+  if (toActSeat == null && (seats?.length ?? 0) > 0 && alive <= 1) {
+    return (
+      <div className="betpanel panel">
+        <div className="betpanel-head">
+          <span className="panel-title">Live</span>
+          <span className="betpanel-locked eyebrow">
+            {folded ? 'you folded — betting is over' : 'everyone else folded — betting is over'}
+          </span>
+        </div>
+        <p className="seal-note eyebrow">
+          The match runs to its scheduled end, then settles automatically
+          {folded ? '.' : ' — the pot comes to you.'}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="betpanel panel">
@@ -371,6 +408,7 @@ function ActionPanel() {
   const match = useGameStore((s) => s.match)!
   const yourTurn = useGameStore((s) => s.yourTurn)!
   const act = useGameStore((s) => s.act)
+  const actPending = useGameStore((s) => s.actPending)
   const terms = useGameStore((s) => s.terms)
   const now = useNow()
 
@@ -396,7 +434,11 @@ function ActionPanel() {
     max: maxRaiseTo,
   }), [minRaiseTo, maxRaiseTo, match.currentBet, match.pot]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = (action: BettingAction) => act(action)
+  // While an action is being signed+sent, lock the panel and narrate it — clicking again
+  // would burn a nonce. `pending` is set the instant a button is tapped (before the wallet).
+  const pending = actPending != null
+  const pendingType = actPending?.type
+  const send = (action: BettingAction) => { if (!pending) act(action) }
   const canRaise = stack > toCall
   const raiseValid = raiseTo >= minRaiseTo && raiseTo <= maxRaiseTo
   const isShove = raiseTo >= maxRaiseTo
@@ -414,25 +456,26 @@ function ActionPanel() {
         <Exposure label="stack" value={stack} token={token} />
       </div>
 
-      <div className="poker-actions">
-        <button className="pk-btn pk-fold" onClick={() => send({ type: 'fold' })}>
-          Fold
+      <div className={`poker-actions ${pending ? 'poker-actions--pending' : ''}`}>
+        <button className={`pk-btn pk-fold ${pendingType === 'fold' ? 'pk-btn--busy' : ''}`} onClick={() => send({ type: 'fold' })} disabled={pending} aria-busy={pendingType === 'fold'}>
+          {pendingType === 'fold' ? 'Folding…' : 'Fold'}
         </button>
         {toCall === 0 ? (
-          <button className="pk-btn pk-call" onClick={() => send({ type: 'check' })}>
-            Check
+          <button className={`pk-btn pk-call ${pendingType === 'check' ? 'pk-btn--busy' : ''}`} onClick={() => send({ type: 'check' })} disabled={pending} aria-busy={pendingType === 'check'}>
+            {pendingType === 'check' ? 'Checking…' : 'Check'}
           </button>
         ) : (
           <button
-            className="pk-btn pk-call"
+            className={`pk-btn pk-call ${pendingType === 'call' ? 'pk-btn--busy' : ''}`}
             onClick={() => send({ type: 'call' })}
-            disabled={stack === 0}
+            disabled={pending || stack === 0}
+            aria-busy={pendingType === 'call'}
           >
-            Call {formatChips(toCall)}
+            {pendingType === 'call' ? 'Sending…' : `Call ${formatChips(toCall)}`}
           </button>
         )}
-        <button className="pk-btn pk-allin" onClick={() => send({ type: 'allIn' })}>
-          All-in {formatChips(stack)}
+        <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''}`} onClick={() => send({ type: 'allIn' })} disabled={pending} aria-busy={pendingType === 'allIn'}>
+          {pendingType === 'allIn' ? 'Sending…' : `All-in ${formatChips(stack)}`}
         </button>
       </div>
 
@@ -474,9 +517,11 @@ function ActionPanel() {
             <button
               className="pk-btn pk-raise"
               onClick={() => send(isShove ? { type: 'allIn' } : { type: 'raiseTo', amount: raiseTo })}
-              disabled={!raiseValid}
+              disabled={!raiseValid || pending}
             >
-              {isShove ? `All-in ${formatChips(stack)}` : `Raise to ${formatChips(raiseTo)}`}
+              {pendingType === 'raiseTo' || (pendingType === 'allIn' && isShove)
+                ? 'Sending…'
+                : isShove ? `All-in ${formatChips(stack)}` : `Raise to ${formatChips(raiseTo)}`}
             </button>
           </div>
         </div>

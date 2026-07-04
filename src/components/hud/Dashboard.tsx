@@ -9,6 +9,8 @@ import { hostAlias } from '@/lib/seats'
 import { api, type MatchDetail } from '@/lib/api'
 import type { DashboardSortKey, LiveGame, UpcomingGame } from '@/lib/protocol'
 import { ReclaimCard } from './ReclaimCard'
+import { ClaimWinningsCard } from './ClaimWinningsCard'
+import type { ClaimableWinning } from '@/lib/adapters'
 import { personaEmblem } from './Seats'
 import { WalletMenu } from './WalletMenu'
 import './hud.css'
@@ -554,6 +556,61 @@ function MyReclaimableMatches() {
 }
 
 // ---------------------------------------------------------------------------
+// My winnings — SETTLED matches this wallet has an unclaimed payout in.
+// Scanned directly on-chain (seat accounts owned by the connected wallet); no backend needed.
+// ---------------------------------------------------------------------------
+
+function MyClaimableWinnings() {
+  const chain = useMemo(() => createAdapters().chain, [])
+  const { connected } = useWallet()
+  const [winnings, setWinnings] = useState<ClaimableWinning[]>([])
+  const [collected, setCollected] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (!connected) { setWinnings([]); setCollected(new Set()); return }
+    let alive = true
+    chain.listClaimableWinnings()
+      .then((rows) => { if (alive) setWinnings(rows) })
+      .catch(() => { /* best-effort — an RPC hiccup shouldn't break the dashboard */ })
+    return () => { alive = false }
+  }, [connected, chain])
+
+  // Keep a collected id in the list (its card shows the ✓ done state) but stop counting it
+  // toward the pending total, so the header total drains as the player collects.
+  const onDone = (id: string) => setCollected((prev) => new Set(prev).add(id))
+
+  if (winnings.length === 0) return null
+
+  const pendingTotal = winnings
+    .filter((w) => !collected.has(w.onchainMatchId))
+    .reduce((sum, w) => sum + w.payout, 0)
+
+  return (
+    <section className="dash-section">
+      <div className="dash-section-head">
+        <span className="dash-section-dot dash-section-dot--win" />
+        <span className="dash-section-label">Winnings to collect</span>
+        <span className="dash-section-sub">
+          {pendingTotal > 0
+            ? `${(pendingTotal / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC waiting for you`
+            : 'all collected'}
+        </span>
+      </div>
+      <div className="dash-reclaim-list">
+        {winnings.map((w) => (
+          <ClaimWinningsCard
+            key={w.onchainMatchId}
+            onchainMatchId={w.onchainMatchId}
+            payout={w.payout}
+            onDone={onDone}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 
@@ -671,6 +728,7 @@ export function Dashboard() {
         // ── First-run hero — the animated table drifts behind it ──
         <div className="dash-hero-wrap">
           <DashHero status={status} updatedLabel={updatedLabel} onCreate={handleCreate} connected={connected} />
+          <MyClaimableWinnings />
           <MyReclaimableMatches />
         </div>
       ) : (
@@ -684,6 +742,7 @@ export function Dashboard() {
           </header>
 
           <div className="dash-body">
+            <MyClaimableWinnings />
             <MyReclaimableMatches />
 
             <section className="dash-section">

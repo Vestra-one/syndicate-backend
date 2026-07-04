@@ -33,6 +33,7 @@ import { i128le } from '@/lib/intent'
 import type {
   Adapters,
   ChainClient,
+  ClaimableWinning,
   CreateAndDepositInput,
   OnchainMatchStatus,
   OnchainSeatInfo,
@@ -728,6 +729,48 @@ function createLiveChain(): ChainClient {
     },
 
     /**
+     * Player-signed payout pull for a SETTLED match, by id. Mirror of `refundSelf` on the
+     * claim instruction: keyed by the (match, player) seat PDA, so it works standalone from a
+     * "my winnings" list. `simulateSignAndSend` surfaces a clean anchor code (e.g. AlreadyClaimed).
+     */
+    async claimSettled(onchainMatchId: string): Promise<string> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
+      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
+      if (!mintAddr) throw new Error('[live] chips token mint not configured')
+
+      const conn = getConnection()
+      const player = adapter.publicKey
+      const matchAcct = matchPda(onchainMatchId)
+      const vault = vaultPda(matchAcct)
+      const seat = seatPda(matchAcct, player)
+
+      const seatInfo = await conn.getAccountInfo(seat)
+      if (!seatInfo?.data) throw new Error('NoSeat')
+
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const ix = await program.methods
+        .claim()
+        .accounts({
+          player,
+          matchAccount: matchAcct,
+          seat,
+          vault,
+          playerToken,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction()
+
+      const tx = new Transaction()
+      if (createIx) tx.add(createIx)
+      tx.add(ix)
+      return simulateSignAndSend(conn, tx, player)
+    },
+
+    /**
      * Player-signed refund. The v2 seat PDA is keyed by (match, player) alone, so this works
      * standalone (e.g. a "my matches" list) without any active gateway/match state.
      */
@@ -852,6 +895,43 @@ function createLiveChain(): ChainClient {
           matchPda: matchKeys[i].toBase58(),
           deposit: seat.deposit,
           entryFeePaid: seat.entryFeePaid,
+        })
+      }
+      return out
+    },
+
+    /** Scan the connected wallet's seats for SETTLED matches with an unclaimed payout. */
+    async listClaimableWinnings(): Promise<ClaimableWinning[]> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) return []
+
+      const player = adapter.publicKey
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      // Same discriminator + player-offset filter as listReclaimableMatches (offset 40 =
+      // SeatAccount.player, after 8 disc + 32 match_key).
+      const seatAccounts: Array<{ publicKey: PublicKey; account: unknown }> =
+        await program.account.seatAccount.all([
+          { memcmp: { offset: 40, bytes: player.toBase58() } },
+        ])
+      if (seatAccounts.length === 0) return []
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const matchKeys = seatAccounts.map((a) => (a.account as any).matchKey as PublicKey)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const matchAccts: any[] = await program.account.matchAccount.fetchMultiple(matchKeys)
+
+      const out: ClaimableWinning[] = []
+      for (let i = 0; i < seatAccounts.length; i++) {
+        const seat = mapSeat(seatAccounts[i].account)
+        if (seat.claimed || seat.payout <= 0) continue // already pulled, or nothing to collect
+        const matchAcct = matchAccts[i]
+        if (!matchAcct) continue
+        if (mapMatchStatus(matchAcct).status !== 'SETTLED') continue
+        out.push({
+          onchainMatchId: n(matchAcct.matchId).toString(),
+          matchPda: matchKeys[i].toBase58(),
+          payout: seat.payout,
         })
       }
       return out

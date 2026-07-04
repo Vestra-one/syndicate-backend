@@ -93,6 +93,16 @@ export interface ReclaimableMatch extends OnchainMatchStatus {
 }
 
 /**
+ * A SETTLED match this wallet has an unclaimed payout in (found by scanning seat accounts).
+ * `payout` is the exact on-chain amount waiting to be pulled via `claimSettled`.
+ */
+export interface ClaimableWinning {
+  onchainMatchId: string
+  matchPda: string
+  payout: Chips
+}
+
+/**
  * The lifecycle of an on-chain commit tx, surfaced so the UI can narrate the wait
  * honestly (build → wallet prompt → network finality) instead of a blind spinner.
  *  - 'signing'    → the wallet approval prompt is up; we're waiting on the user.
@@ -116,6 +126,13 @@ export interface ChainClient {
   deposit(matchId: string, joinCommitmentHex?: string, amount?: Chips, onProgress?: TxProgressFn): Promise<string>
   /** pull payout after SETTLED (idempotent). */
   claim(matchId: string): Promise<string>
+  /**
+   * Player-signed pull payout for a SETTLED match, by on-chain id. Like `refundSelf`, the
+   * v2 seat PDA is derived from `(match, player)` alone, so this works standalone from a
+   * "my winnings" list with no active gateway/match state. Idempotent: an already-claimed
+   * seat throws an error whose message is `AlreadyClaimed`.
+   */
+  claimSettled(onchainMatchId: string): Promise<string>
   /** reclaim deposit + entry fee after VOID. */
   refund(matchId: string): Promise<string>
   /**
@@ -146,6 +163,8 @@ export interface ChainClient {
   cancelAndRefundSelf(onchainMatchId: string): Promise<string>
   /** Scan the connected wallet's seats for matches stuck FILLING past deadline, or already VOID. */
   listReclaimableMatches(): Promise<ReclaimableMatch[]>
+  /** Scan the connected wallet's seats for SETTLED matches with an unclaimed payout. */
+  listClaimableWinnings(): Promise<ClaimableWinning[]>
 }
 
 export interface Adapters {

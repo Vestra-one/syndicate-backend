@@ -21,9 +21,13 @@ function TxBanner() {
   const lastTx = useGameStore((s) => s.lastTx)
   const [dismissed, setDismissed] = useState(false)
 
-  // Reset dismissed when a new tx comes in
+  // Reset dismissed when a new tx comes in, then auto-dismiss after 10s so the
+  // banner doesn't linger on top of the table once the confirmation has landed.
   useEffect(() => {
-    if (lastTx) setDismissed(false)
+    if (!lastTx) return
+    setDismissed(false)
+    const t = setTimeout(() => setDismissed(true), 10_000)
+    return () => clearTimeout(t)
   }, [lastTx])
 
   if (!lastTx || dismissed) return null
