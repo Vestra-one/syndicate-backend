@@ -148,6 +148,21 @@ pub async fn submit_seal(
             return Err(ApiError::conflict("seal_closed", "seal window closed"));
         }
     }
+    match m.effective_timelock_target() {
+        Some(expected) if body.timelock_target == expected => {}
+        Some(expected) => {
+            return Err(ApiError::conflict(
+                "bad_timelock_target",
+                format!("expected server timelock_target {expected}"),
+            ));
+        }
+        None => {
+            return Err(ApiError::conflict(
+                "timelock_target_pending",
+                "server timelock target is not ready",
+            ));
+        }
+    }
     let ciphertext = base64::engine::general_purpose::STANDARD
         .decode(&body.ciphertext_b64)
         .map_err(|e| ApiError::bad_request(format!("ciphertext_b64: {e}")))?;

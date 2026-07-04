@@ -39,7 +39,7 @@ async fn tick(st: &AppState, rpc: &RpcClient) -> Result<(), ApiError> {
     let rows = client
         .query(
             r#"
-            SELECT id, match_id, kind::text AS kind, status::text AS status
+            SELECT id, match_id, kind::text AS kind, status::text AS status, tx_signature
             FROM chain_jobs
             WHERE status IN ('confirmed', 'dead_letter', 'skipped')
               AND COALESCE((payload->>'acked')::boolean, false) = false
@@ -56,6 +56,7 @@ async fn tick(st: &AppState, rpc: &RpcClient) -> Result<(), ApiError> {
         let match_id: Uuid = row.get("match_id");
         let kind: String = row.get("kind");
         let status: String = row.get("status");
+        let tx_signature: Option<String> = row.get("tx_signature");
 
         if status == "confirmed" {
             if let Err(e) = sync_match_from_chain(st, rpc, match_id).await {
@@ -63,7 +64,9 @@ async fn tick(st: &AppState, rpc: &RpcClient) -> Result<(), ApiError> {
                 continue; // leave unacked; retried next tick
             }
             let event = match kind.as_str() {
-                "lock" => Some(ChainEvent::Locked),
+                "lock" => Some(ChainEvent::Locked {
+                    tx_sig: tx_signature.clone(),
+                }),
                 "begin_live" => Some(ChainEvent::LiveBegan),
                 "submit_settlement" => Some(ChainEvent::Settled),
                 "void" | "void_before_start" | "void_live_after_deadline" => {
@@ -157,6 +160,7 @@ async fn sync_match_from_chain(
                 button = CASE WHEN $7 THEN $8::smallint ELSE button END,
                 button_seed = CASE WHEN $7 THEN $9 ELSE button_seed END,
                 void_kind = COALESCE($10, void_kind),
+                timelock_target = COALESCE($11, timelock_target),
                 locked_at = CASE WHEN $2 = 'sealing' AND locked_at IS NULL THEN now() ELSE locked_at END,
                 settled_at = CASE WHEN $2 = 'settled' AND settled_at IS NULL THEN now() ELSE settled_at END,
                 voided_at = CASE WHEN $2 = 'voided' AND voided_at IS NULL THEN now() ELSE voided_at END
@@ -173,10 +177,23 @@ async fn sync_match_from_chain(
                 &(m.button as i16),
                 &m.button_seed.as_slice(),
                 &void_kind,
+                &timelock_target_for_match(&row, m.seal_deadline_ts).map(|t| t as i64),
             ],
         )
         .await?;
     Ok(())
+}
+
+fn timelock_target_for_match(row: &db::MatchRow, seal_deadline_sec: u64) -> Option<u64> {
+    if seal_deadline_sec == 0 {
+        return None;
+    }
+    let latest_match_end = crate::config::latest_match_end_sec(
+        seal_deadline_sec,
+        row.total_betting_duration_sec(),
+        row.begin_live_window_sec,
+    );
+    Some(crate::config::timelock_target_round(latest_match_end))
 }
 
 /// Ordered event log for replay (shared with the actor's recovery path).

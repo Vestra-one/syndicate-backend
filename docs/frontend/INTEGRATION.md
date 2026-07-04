@@ -141,13 +141,20 @@ surface it via `/v1/wallets/{wallet}/claimables`.
 ## 7. Game start, sealing, dealer
 
 When the room fills (or the fill deadline passes with ≥ min players) the backend locks
-on-chain. WS pushes `phase {phase:"sealing", seal_deadline, timelock_target, ...}`.
+on-chain. WS pushes
+`phase {phase:"sealing", lock_confirmed:true, lock_tx_sig, seal_deadline, timelock_target, ...}`
+only after the lock job has confirmed and the server has mirrored the on-chain
+`seal_deadline`. Treat this frame as the safe point for `register_prediction_commitment`;
+do not start the seal countdown from local fill/full detection or from a pending lock job.
+During sealing, `scheduled_end` is the projected latest match end used for timelock
+validation; the live frame replaces it with the actual scheduled end.
 
-**Sealing UX** (the player has `seal_window_sec` — default 20s — to seal):
+**Sealing UX** (the player has `seal_window_sec` — default 90s — to seal):
 
 1. Player picks a price prediction (i128, exponent −18 — e.g. $64,123.50 → `64123.5e18`).
 2. Encrypt it with **tlock** to the drand round the server gave you (`timelock_target` in
-   the `phase` message — already bounds-checked to publish just after match end):
+   the `phase` message — derived from the confirmed on-chain `seal_deadline` and
+   bounds-checked to publish just after match end):
    ```ts
    import { timelockEncrypt, roundTime } from "tlock-js";      // pin tlock-js@^0.9
    import { HttpChainClient, HttpCachingChain } from "drand-client";
@@ -257,9 +264,12 @@ On-chain `SyndicateError` highlights (Anchor error codes, from the IDL):
 `BadStatus` (wrong phase — usually a race; refresh), `CandidateLimitReached` (32 deposits
 cap), `InvalidRoomCommitment` (private/public commitment mismatch — wrong room code),
 `SeatNotConfirmed` (candidate tried to seal/claim — use refund), `SealWindowClosed`,
-`AlreadySealed`, `InvalidDrandRound` (wrong timelock round — recompute from the `phase`
-message), `AlreadyClaimed`, `MatchFull`, `NotEnoughPlayers`, `RefundUnavailable`. Retryable:
-`BadStatus`-as-race and RPC blockhash errors; everything else is a UX correction.
+`AlreadySealed`, `InvalidDrandRound` (wrong timelock round — use the server
+`timelock_target` from the confirmed `phase:"sealing"` frame), `AlreadyClaimed`,
+`MatchFull`, `NotEnoughPlayers`, `RefundUnavailable`. Retryable: `BadStatus`-as-race and
+RPC blockhash errors; everything else is a UX correction. Backend seal upload can also
+return `timelock_target_pending` or `bad_timelock_target`; refresh match state and use the
+server target.
 
 ## Appendix A — normative hashes (test vectors ship with the backend tests)
 

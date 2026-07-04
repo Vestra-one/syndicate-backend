@@ -147,9 +147,9 @@ pub enum Cmd {
     Poke,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainEvent {
-    Locked,
+    Locked { tx_sig: Option<String> },
     LiveBegan,
     Settled,
     Voided,
@@ -381,16 +381,20 @@ impl Actor {
     async fn on_chain_event(&mut self, event: ChainEvent, row: MatchRow) {
         self.row = row;
         match event {
-            ChainEvent::Locked => {
+            ChainEvent::Locked { tx_sig } => {
                 // Mark the losers (not_confirmed) + write confirmed seats to match_seats.
                 if let Err(e) = self.materialize_confirmed_seats().await {
                     warn!(match_id = %self.id, "materialize seats: {e}");
                 }
-                let timelock_target = self.row.timelock_target;
+                let timelock_target = self.row.effective_timelock_target();
                 self.broadcast(json!({
                     "v": 1, "t": "phase", "server_time_ms": now_ms(),
                     "match_id": self.id, "phase": "sealing",
+                    "lock_confirmed": true,
+                    "lock_tx_sig": tx_sig,
                     "seal_deadline": self.row.seal_deadline_ts.map(ts_ms),
+                    "scheduled_end": self.row.projected_scheduled_end_ms(),
+                    "projected_scheduled_end": self.row.projected_scheduled_end_ms(),
                     "timelock_target": timelock_target,
                 }));
                 self.st.registry.lobby.publish(json!({

@@ -408,7 +408,9 @@ pub async fn post_room(
                 &(g("big_blind").as_u64().unwrap_or(2) as i64),
                 &(g("min_players").as_u64().unwrap_or(2) as i16),
                 &(g("max_players").as_u64().unwrap_or(5) as i16),
-                &(g("seal_window_sec").as_u64().unwrap_or(20) as i32),
+                &(g("seal_window_sec")
+                    .as_u64()
+                    .unwrap_or(config::DEFAULT_SEAL_WINDOW_SEC) as i32),
                 &(g("begin_live_window_sec").as_u64().unwrap_or(30) as i32),
                 &fill_deadline,
                 &Option::<i64>::None,

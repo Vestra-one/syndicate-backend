@@ -114,6 +114,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
     } else {
         Value::Null
     };
+    let lock_tx_sig = confirmed_lock_tx_sig(st, row.id).await;
 
     json!({
         "v": 1,
@@ -147,11 +148,14 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "timing": {
             "fill_deadline": row.fill_deadline_ts.map(ts_ms),
             "lock_ts": row.lock_ts.map(ts_ms),
+            "lock_confirmed": row.lock_ts.is_some(),
+            "lock_tx_sig": lock_tx_sig,
             "seal_deadline": row.seal_deadline_ts.map(ts_ms),
             "live_start": row.live_start_ts.map(ts_ms),
-            "scheduled_end": row.scheduled_end_ts.map(ts_ms),
+            "scheduled_end": row.scheduled_end_ts.map(ts_ms).or_else(|| row.projected_scheduled_end_ms()),
+            "projected_scheduled_end": row.projected_scheduled_end_ms(),
             "street_schedule": street_schedule,
-            "timelock_target": row.timelock_target,
+            "timelock_target": row.effective_timelock_target(),
         },
         "button": row.button,
         "seats": seat_views,
@@ -164,6 +168,22 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "head": hex::encode(&row.event_head),
         "void_kind": row.void_kind,
     })
+}
+
+async fn confirmed_lock_tx_sig(st: &AppState, match_id: uuid::Uuid) -> Option<String> {
+    let client = st.pool.get().await.ok()?;
+    let row = client
+        .query_opt(
+            r#"SELECT tx_signature
+               FROM chain_jobs
+               WHERE match_id = $1 AND kind = 'lock' AND status = 'confirmed'
+               ORDER BY confirmed_at DESC NULLS LAST, updated_at DESC
+               LIMIT 1"#,
+            &[&match_id],
+        )
+        .await
+        .ok()??;
+    row.get("tx_signature")
 }
 
 /// Post-settlement reveal: predictions + settlement price from the confirmed settle job's

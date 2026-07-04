@@ -7,6 +7,7 @@ use syndicate_chain::{drand_round_publish_ts, DRAND_GENESIS_TIME, DRAND_PERIOD_S
 
 /// Must equal the on-chain `MAX_TIMELOCK_SKEW_SEC`.
 pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
+pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 90;
 
 /// League of Entropy quicknet.
 pub const DRAND_CHAIN_HASH_DEFAULT: &str =
@@ -234,7 +235,7 @@ impl Default for Overlay {
     fn default() -> Self {
         Self {
             bounds: Bounds::default(),
-            seal_window_sec: 20,
+            seal_window_sec: DEFAULT_SEAL_WINDOW_SEC,
             begin_live_window_sec: 30,
             action_timeout_ms: 25_000,
             time_bank_sec: 60,

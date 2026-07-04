@@ -137,7 +137,10 @@ impl MatchRow {
             big_blind: row.get::<_, Option<i64>>("big_blind").unwrap_or(2) as u64,
             min_players: row.get::<_, Option<i16>>("min_players").unwrap_or(2) as u8,
             max_players: row.get::<_, Option<i16>>("max_players").unwrap_or(2) as u8,
-            seal_window_sec: row.get::<_, Option<i32>>("seal_window_sec").unwrap_or(20) as u64,
+            seal_window_sec: row
+                .get::<_, Option<i32>>("seal_window_sec")
+                .map(|v| v as u64)
+                .unwrap_or(crate::config::DEFAULT_SEAL_WINDOW_SEC),
             begin_live_window_sec: row
                 .get::<_, Option<i32>>("begin_live_window_sec")
                 .unwrap_or(30) as u64,
@@ -161,6 +164,28 @@ impl MatchRow {
     pub fn total_betting_duration_sec(&self) -> u64 {
         self.round_durations_sec.iter().sum::<u64>()
             + self.observation_windows_sec.iter().sum::<u64>()
+    }
+
+    pub fn projected_scheduled_end_ms(&self) -> Option<u64> {
+        self.latest_match_end_sec()
+            .and_then(|v| v.checked_mul(1000))
+    }
+
+    pub fn latest_match_end_sec(&self) -> Option<u64> {
+        let seal_deadline_sec = self.seal_deadline_ts?.timestamp().try_into().ok()?;
+        Some(crate::config::latest_match_end_sec(
+            seal_deadline_sec,
+            self.total_betting_duration_sec(),
+            self.begin_live_window_sec,
+        ))
+    }
+
+    pub fn effective_timelock_target(&self) -> Option<u64> {
+        self.timelock_target.or_else(|| {
+            Some(crate::config::timelock_target_round(
+                self.latest_match_end_sec()?,
+            ))
+        })
     }
 
     pub fn is_terminal(&self) -> bool {
