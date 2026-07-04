@@ -12,6 +12,7 @@ export function YourPosition() {
   const terms = useGameStore((s) => s.terms)
   const match = useGameStore((s) => s.match)
   const sealStatus = useGameStore((s) => s.sealStatus)
+  const sealClosed = useGameStore((s) => s.sealClosed)
   const prediction = useGameStore((s) => s.yourPrediction)
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
 
@@ -20,12 +21,21 @@ export function YourPosition() {
   const predFloat = prediction != null ? prediction / 10 ** decimals : null
   const distance = predFloat != null && lastPrice != null ? lastPrice - predFloat : null
   const live = match?.phase === 'LIVE'
+  // The window closed and we never sealed — the prediction defaulted, and that
+  // fact must persist through settlement so the final ranking stays explicable (§16).
+  const defaulted = sealClosed && sealStatus !== 'sealed'
   const money = (v: number) =>
     v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
 
   return (
-    <div className="position panel">
+    <div className={`position panel ${defaulted ? 'position--defaulted' : ''}`}>
       <div className="panel-title">Your position</div>
+
+      {defaulted && (
+        <div className="position-defaulted-flag">
+          <span aria-hidden="true">⚠</span> NOT SEALED — defaulted to market at close
+        </div>
+      )}
 
       <div className="position-pred">
         <span className="eyebrow">your sealed prediction</span>
@@ -33,11 +43,13 @@ export function YourPosition() {
           <span className="position-pred-value mono">{formatPrice(predFloat)}</span>
         ) : (
           <span className="position-pred-empty eyebrow">
-            {sealStatus === 'sealed'
-              ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
-              : sealStatus === 'sealing'
-                ? 'sealing…'
-                : 'not sealed yet'}
+            {defaulted
+              ? 'defaulted — can’t win prediction rank'
+              : sealStatus === 'sealed'
+                ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
+                : sealStatus === 'sealing'
+                  ? 'sealing…'
+                  : 'not sealed yet'}
           </span>
         )}
       </div>

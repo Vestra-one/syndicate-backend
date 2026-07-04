@@ -5,6 +5,7 @@ import { RoundStatus } from './RoundStatus'
 import { BettingPanel } from './BettingPanel'
 import { YourPosition } from './YourPosition'
 import { Seats } from './Seats'
+import { TurnBanner } from './TurnBanner'
 import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
@@ -68,6 +69,7 @@ export function Hud() {
   return (
     <div className="hud">
       {inMatch && <Seats />}
+      {inMatch && <TurnBanner />}
 
       <header className="hud-top">
         <Brand />

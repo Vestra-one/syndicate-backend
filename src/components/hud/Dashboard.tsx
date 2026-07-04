@@ -618,7 +618,7 @@ export function Dashboard() {
     void joinGame(matchId)
   }
   const handleWatch = (matchId: string) => {
-    if (!connected) { setVisible(true); return }
+    // Spectating needs no auth — go straight to the table (§6 / enterTable).
     void enterTable(matchId)
   }
   const handleCreate = () => {

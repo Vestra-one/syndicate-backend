@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import type { SeatTag } from '@/lib/seats'
+import { TimerRing } from './TimerRing'
 
 /**
  * A player pod — the seated-player representation modelled on the FIBO
@@ -29,6 +30,10 @@ export interface SeatPodProps {
   /** momentary CHECK beat — a check moves no money, so it needs a visible flash */
   flashCheck?: boolean
   timer?: string
+  /** live countdown ring around the acting pod — the same visual as your action bar (§13.1) */
+  ring?: { remainingMs: number; totalMs: number }
+  /** the acting player has dipped into their 30s time bank — pins a BANK badge */
+  bank?: boolean
   /** holds the dealer button this hand */
   dealer?: boolean
   side?: 'left' | 'right'
@@ -43,6 +48,8 @@ export interface SeatPodProps {
   next?: boolean
   /** just filled this instant — plays the seat-taken materialize beat */
   joining?: boolean
+  /** this player's recent public betting actions (newest first) — shown on hover */
+  history?: { label: string; ago: string }[]
 }
 
 function SeatGlyph() {
@@ -78,6 +85,8 @@ export function SeatPod({
   allIn,
   flashCheck,
   timer,
+  ring,
+  bank,
   dealer,
   side = 'left',
   size = 'full',
@@ -86,6 +95,7 @@ export function SeatPod({
   reserved,
   next,
   joining,
+  history,
 }: SeatPodProps) {
   const cls = [
     'pod',
@@ -156,13 +166,43 @@ export function SeatPod({
         <span className="pod-check-flash" aria-hidden="true" key={`chk-${name}`}>CHECK</span>
       )}
 
-      {timer && <span className="pod-timer">{timer}</span>}
+      {ring ? (
+        <span className="pod-ring">
+          <TimerRing
+            remainingMs={ring.remainingMs}
+            totalMs={ring.totalMs}
+            size={34}
+            stroke={3}
+            label={bank ? 'BANK' : `${Math.ceil(Math.max(0, ring.remainingMs) / 1000)}`}
+          />
+        </span>
+      ) : (
+        timer && <span className="pod-timer">{timer}</span>
+      )}
 
       {tag && !empty && (
         <span className={`pod-tag pod-tag--${tag.kind}`} title={tag.hint}>
           <TagIcon kind={tag.kind} />
           {tag.label}
         </span>
+      )}
+
+      {history && !empty && (
+        <div className={`pod-tip pod-tip--${side}`} role="tooltip">
+          <div className="pod-tip-head">{name} · recent actions</div>
+          {history.length > 0 ? (
+            <ul className="pod-tip-list">
+              {history.slice(0, 8).map((h, i) => (
+                <li key={i} className="pod-tip-row">
+                  <span className="pod-tip-label">{h.label}</span>
+                  <span className="pod-tip-ago mono">{h.ago}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="pod-tip-empty">No actions yet this match</div>
+          )}
+        </div>
       )}
     </div>
   )

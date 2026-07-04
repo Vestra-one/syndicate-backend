@@ -14,7 +14,7 @@ import type {
   UpcomingGame,
   VoidReason,
 } from '@/lib/protocol'
-import { DRAND, PAST_FILLING_PHASES } from '@/lib/protocol'
+import { DRAND, GATEWAY_PRICE_PHASES } from '@/lib/protocol'
 import type { ServerFrame, WsMatchState, WsAction } from '@/lib/realtime/wsTypes'
 import {
   actionIntentMessage,
@@ -120,6 +120,9 @@ interface GameState {
   terms: TableTerms | null
   match: MatchStateView | null
   yourTurn: { toCall: number; minRaiseTo: number; deadline: number } | null
+  /** The action being signed+sent right now — set the instant a poker button is clicked so
+   *  the action panel shows immediate "Sending…" feedback while the wallet signs (§8). */
+  actPending: BettingAction | null
   /** Epoch-ms the fill window closes (room voids if under min). Drives the waiting-room countdown. */
   fillDeadline: number | null
   /** Creator-selectable ranges for a new table — buy-in in token base units, fill window in seconds. */
@@ -135,6 +138,10 @@ interface GameState {
   queuedPrediction: FixedPrice | null
   /** The server closed the seal window (§6) — no further seals are accepted. */
   sealClosed: boolean
+  /** Engine seats that have sealed so far (from `seal_status`) — powers the "N/5 sealed" strip. */
+  sealedSeats: number[]
+  /** Epoch-ms the seal window closes (from `seal_status`/`phase`) — drives the in-panel countdown. */
+  sealDeadline: number | null
   defaultAction: DefaultAction
 
   priceHistory: PricePoint[]
@@ -318,10 +325,14 @@ let unsub: (() => void) | null = null
 let actionHead: Uint8Array = new Uint8Array(32)
 let actionNonce = 0
 let myEngineSeat: number | null = null
+// Bounds the on-demand context refresh a Seal click can trigger, so a window that
+// never gets its drand round assigned can't hammer REST in a tight retry loop.
+let sealContextTries = 0
 function resetActionChain() {
   actionHead = new Uint8Array(32)
   actionNonce = 0
   myEngineSeat = null
+  sealContextTries = 0
 }
 
 /** Subscribe the open socket to a match channel — server replies with a snapshot then the
@@ -478,6 +489,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   terms: null,
   match: null,
   yourTurn: null,
+  actPending: null,
   fillDeadline: null,
   createLimits: null,
   roundStartedAt: null,
@@ -486,6 +498,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   yourPrediction: null,
   queuedPrediction: null,
   sealClosed: false,
+  sealedSeats: [],
+  sealDeadline: null,
   defaultAction: 'check_fold',
 
   priceHistory: [],
@@ -536,12 +550,14 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   /**
    * Push a spot tick from the always-on price feed into the chart history (§2).
-   * During an active match the gateway's feedPrice is authoritative, so we only
-   * feed the chart from spot ticks pre-match (no match, or still FILLING).
+   * The gateway's feedPrice only becomes authoritative once the hand is LIVE (it
+   * rides in on `action` frames). Through FILLING *and* SEALING no gateway price
+   * flows, so the spot feed must keep the chart — and the seal panel's live price
+   * (which seeds the seal input) — alive; otherwise the Seal button stays disabled.
    */
   ingestLivePrice: (price, ts) => {
     const m = get().match
-    if (m && PAST_FILLING_PHASES.includes(m.phase)) return
+    if (m && GATEWAY_PRICE_PHASES.includes(m.phase)) return
     set((s) => ({ priceHistory: [...s.priceHistory, { price, ts }].slice(-MAX_HISTORY) }))
   },
 
@@ -825,10 +841,13 @@ export const useGameStore = create<GameState>((set, get) => ({
       status: 'offline',
       match: null,
       yourTurn: null,
+      actPending: null,
       sealStatus: 'unsealed',
       yourPrediction: null,
       queuedPrediction: null,
       sealClosed: false,
+      sealedSeats: [],
+      sealDeadline: null,
       settlement: null,
       voided: null,
       seated: false,
@@ -1007,13 +1026,35 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   sealPrediction: async (price) => {
     const { terms, match, sealStatus, sealClosed } = get()
-    if (!adapters || !terms || sealStatus !== 'unsealed' || sealClosed) return // seal-once
+    if (!adapters || !terms || sealStatus !== 'unsealed' || sealClosed) {
+      // seal-once — but log why so a no-op click in the seal window is never a silent mystery.
+      console.warn('[seal] click ignored', {
+        hasAdapters: !!adapters, hasTerms: !!terms, sealStatus, sealClosed,
+      })
+      return
+    }
     const targetRound = terms.timelockTargetRound
     const seatIndex = myEngineSeat ?? match?.yourSeat
     if (!targetRound || seatIndex == null || !match) {
       // The drand round + engine seat are assigned when the table locks (phase → SEALING).
       // Hold the call locally; ensureSealContext auto-seals it the moment the window opens.
-      set({ queuedPrediction: price })
+      const windowOpen = match?.phase === 'SEALING' && !sealClosed
+      console.warn('[seal] context not ready — holding prediction locally', {
+        targetRound, seatIndex, hasMatch: !!match, phase: match?.phase, windowOpen,
+      })
+      set({
+        queuedPrediction: price,
+        // Pre-lock (WaitingRoom) this is expected and the room shows the "locked in" state.
+        // But if the seal window is already open, silence reads as a dead button — say so,
+        // and pull the missing round/seat from REST so the queued call can auto-fire.
+        playError: windowOpen
+          ? 'Preparing the seal window — your prediction is saved and will seal in a moment.'
+          : get().playError,
+      })
+      if (windowOpen && sealContextTries < 4) {
+        sealContextTries++
+        void ensureSealContext(set, get)
+      }
       return
     }
     const onchainMatchId = terms.onchainMatchId
@@ -1059,7 +1100,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       // way to know the seal was accepted before latching 'sealed'.
       await api.submitSeal(match.matchId, body)
       // The plaintext stays on the client for the distance-to-conviction chart.
-      set({ sealStatus: 'sealed', yourPrediction: price, queuedPrediction: null })
+      sealContextTries = 0
+      set({ sealStatus: 'sealed', yourPrediction: price, queuedPrediction: null, playError: null })
     } catch (err) {
       console.error('seal failed:', err)
       const msg = err instanceof ApiError ? `Sealing failed — ${err.message}` : 'Sealing failed — try again before the window closes.'
@@ -1080,6 +1122,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { tag, amount, wire } = bettingActionToWire(action)
     const nonce = ++actionNonce
     const prevHead = actionHead
+    // Instant feedback: flip the panel to "Sending…" now, before the (slow) wallet sign —
+    // otherwise the button looks dead for the whole signature round-trip.
+    set({ actPending: action })
     try {
       const msg = actionIntentMessage({
         matchId: BigInt(terms.onchainMatchId),
@@ -1101,9 +1146,10 @@ export const useGameStore = create<GameState>((set, get) => ({
         action: wire,
         signature,
       })
-      set({ yourTurn: null }) // optimistic; the broadcast `action` frame is authoritative
+      set({ yourTurn: null, actPending: null }) // optimistic; the broadcast `action` frame is authoritative
     } catch (err) {
       actionNonce-- // signing was cancelled/failed — free the nonce for a retry
+      set({ actPending: null }) // re-enable the buttons so they can try again
       console.error('act failed:', err)
     }
   },
@@ -1160,6 +1206,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       yourPrediction: null,
       queuedPrediction: null,
       sealClosed: false,
+      sealedSeats: [],
+      sealDeadline: null,
       settlement: null,
       voided: null,
       reviewing: false,
@@ -1237,7 +1285,11 @@ function snapshotToMatchState(state: WsMatchState, myWallet: string | null): Mat
     folded: s.folded ?? false,
     allIn: s.all_in ?? false,
   }))
-  const mine = myWallet ? state.seats.find((s) => s.wallet === myWallet) : undefined
+  // Prefer the wallet match; fall back to our known engine seat (set from `your_turn`/lock)
+  // so a wallet-casing/absent-wallet snapshot still resolves our stack instead of showing 0.
+  const mine =
+    (myWallet ? state.seats.find((s) => s.wallet === myWallet) : undefined) ??
+    (myEngineSeat != null ? state.seats.find((s) => s.seat_index === myEngineSeat) : undefined)
   return {
     matchId: state.match_id,
     phase: mapPhase(state.phase),
@@ -1320,12 +1372,16 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         match: s.match ? { ...s.match, phase } : s.match,
         terms: s.terms && frame.timelock_target != null ? { ...s.terms, timelockTargetRound: frame.timelock_target } : s.terms,
         fillDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.fillDeadline,
+        sealDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.sealDeadline,
         roundStartedAt: frame.live_start != null ? toEpochMs(frame.live_start) : s.roundStartedAt,
         sealClosed: s.sealClosed || frame.phase === 'sealing_closed',
       }))
       // The lock broadcast carries no seats — fetch our engine seat (needed to sign the
       // seal intent) and fire any queued early prediction now that the window is open.
       if (frame.phase === 'sealing') void ensureSealContext(set, get)
+      // No live frame carries per-seat stacks, so pull them once the hand starts (blinds
+      // posted) — otherwise stack/committed/all-in stay 0 for the whole match.
+      if (frame.phase === 'live') void refreshMatchSeats(set, get)
       break
     }
 
@@ -1338,16 +1394,27 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // case where the latch was lost (the plaintext is gone, but re-sealing would 409).
       const mineSealed =
         myEngineSeat != null && (frame.just_sealed === myEngineSeat || (frame.sealed?.includes(myEngineSeat) ?? false))
-      set((s) => ({
-        sealClosed: s.sealClosed || frame.closed === true,
-        sealStatus: mineSealed ? 'sealed' : s.sealStatus,
-      }))
+      set((s) => {
+        // Merge the sealed-seat set so a `just_sealed`-only delta still advances the strip.
+        const merged = new Set(s.sealedSeats)
+        frame.sealed?.forEach((x) => merged.add(x))
+        if (frame.just_sealed != null) merged.add(frame.just_sealed)
+        return {
+          sealClosed: s.sealClosed || frame.closed === true,
+          sealStatus: mineSealed ? 'sealed' : s.sealStatus,
+          sealedSeats: [...merged].sort((a, b) => a - b),
+          sealDeadline: frame.deadline_ms != null ? toEpochMs(frame.deadline_ms) : s.sealDeadline,
+        }
+      })
       break
     }
 
     case 'your_turn':
       myEngineSeat = frame.seat
-      set({ yourTurn: { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms } })
+      set({ yourTurn: { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms }, actPending: null })
+      // Make sure our own stack/committed are populated before the action panel opens — the
+      // turn frame carries to_call/min_raise_to but no stacks.
+      void refreshMatchSeats(set, get)
       break
 
     case 'action': {
@@ -1368,6 +1435,9 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         priceHistory: priceNum > 0 ? [...s.priceHistory, { price: priceNum, ts: now }].slice(-MAX_HISTORY) : s.priceHistory,
         yourTurn: frame.to_act != null && frame.to_act === myEngineSeat ? s.yourTurn : null,
       }))
+      // Action frames move pot/current_bet but not per-seat stacks — pull the fresh stacks so
+      // the HUD's stack/committed track the hand as bets/calls land (human-paced, so cheap).
+      void refreshMatchSeats(set, get)
       break
     }
 
@@ -1382,11 +1452,12 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
           revealedPredictions: [],
         },
         yourTurn: null,
+        actPending: null,
       })
       break
 
     case 'voided':
-      set({ voided: { reason: (frame.kind ?? 'Void') as VoidReason }, yourTurn: null })
+      set({ voided: { reason: (frame.kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })
       break
 
     case 'error':
@@ -1425,6 +1496,54 @@ async function ensureSealContext(set: SetState, get: () => GameState): Promise<v
   const s = get()
   if (s.queuedPrediction != null && s.sealStatus === 'unsealed' && !s.sealClosed) {
     void s.sealPrediction(s.queuedPrediction)
+  }
+}
+
+/**
+ * Refresh per-seat stacks/committed/folded from REST detail and merge them into `match`.
+ *
+ * Engine seats (and their buy-in stacks) are assigned at lock, and NO live frame carries
+ * per-seat stacks: the `phase`/`your_turn`/`action` stream only moves pot/current_bet/turn.
+ * A player connected straight through FILLING → lock only ever received the seatless FILLING
+ * snapshot, so without this pull `match.yourStack`/`yourExposure` stay 0 for the whole match
+ * (stack / committed / all-in all read 0.00). Called on the LIVE transition and after each
+ * action so the HUD's own numbers track the hand as it plays out.
+ */
+async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<void> {
+  const matchId = get().match?.matchId ?? joinMatchId
+  if (!matchId) return
+  const wallet = adapters?.wallet.address() ?? get().walletAddress
+  try {
+    const detail = await api.getMatch(matchId)
+    if (detail.seats.length === 0) return // still pre-lock — nothing to merge yet
+    const seats: SeatView[] = detail.seats.map((s) => ({
+      seat: s.seat_index,
+      wallet: s.wallet,
+      stack: s.stack ?? 0,
+      committedThisStreet: s.committed ?? 0,
+      totalContribution: s.total_contribution ?? 0,
+      folded: s.folded ?? false,
+      allIn: s.all_in ?? false,
+    }))
+    const mine =
+      (wallet ? detail.seats.find((x) => x.wallet === wallet) : undefined) ??
+      (myEngineSeat != null ? detail.seats.find((x) => x.seat_index === myEngineSeat) : undefined)
+    if (mine) myEngineSeat = mine.seat_index
+    set((s) =>
+      s.match
+        ? {
+            match: {
+              ...s.match,
+              seats,
+              yourSeat: mine?.seat_index ?? s.match.yourSeat,
+              yourStack: mine?.stack ?? s.match.yourStack,
+              yourExposure: mine?.total_contribution ?? s.match.yourExposure,
+            },
+          }
+        : {},
+    )
+  } catch (err) {
+    console.warn('[seats] refresh failed:', err)
   }
 }
 

@@ -55,11 +55,20 @@ export function WaitingRoom() {
   const plan = buildSeatPlan(w.max, yourSeat, w.match?.seats ?? [], w.filled)
   const joins = useJoins(plan, yourSeat)
 
+  // Final-countdown escalation: once the auto-start clock is inside 10s the whole
+  // room tenses — the felt lockup enlarges, the rim light warms, and Leave locks
+  // in the last 3s so nobody triggers a refund edge case mid-deal (§10).
+  const now = useNow(250)
+  const full = w.filled >= w.max
+  const remaining = w.fillDeadline != null ? Math.max(0, w.fillDeadline - now) : null
+  const finalCountdown = (full || (remaining != null && remaining <= 10_000)) && !(remaining === 0 && !full)
+  const seatsLocked = full || (remaining != null && remaining <= 3_000)
+
   if (!w.active) return null
   return (
-    <div className="wr">
+    <div className={`wr ${finalCountdown ? 'wr--final' : ''} ${seatsLocked ? 'wr--locked' : ''}`}>
       <SeatRing plan={plan} match={w.match} buyIn={buyIn} joining={joins.flash} />
-      <FeltCaption filled={w.filled} max={w.max} fillDeadline={w.fillDeadline} />
+      <FeltCaption filled={w.filled} max={w.max} fillDeadline={w.fillDeadline} enough={w.enough} />
 
       <aside className="wr-rail wr-rail--left">
         <YourSeatCard />
@@ -68,11 +77,11 @@ export function WaitingRoom() {
       </aside>
 
       <aside className="wr-rail wr-rail--right">
-        <InviteCard filled={w.filled} max={w.max} />
+        {full ? <TableFullCard plan={plan} match={w.match} buyIn={buyIn} /> : <InviteCard filled={w.filled} max={w.max} />}
         <RoomInfoCard filled={w.filled} max={w.max} />
       </aside>
 
-      <Dock />
+      <Dock seatsLocked={seatsLocked} />
     </div>
   )
 }
@@ -247,37 +256,45 @@ export function waitingSeatAngles(n: number): number[] {
 // Centre-of-felt caption — the quiet hero: "TABLE FILLING · n/max".
 // ---------------------------------------------------------------------------
 
-function FeltCaption({ filled, max, fillDeadline }: { filled: number; max: number; fillDeadline: number | null }) {
+function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; max: number; fillDeadline: number | null; enough: boolean }) {
   const ref = useAnchor(useCallback(() => projectFeltCentre(), []))
   const now = useNow(250)
   const full = filled >= max
   const need = Math.max(0, max - filled)
   const remaining = fillDeadline != null ? Math.max(0, fillDeadline - now) : null
   const expired = remaining != null && remaining <= 0
+  // The seal window opens the moment min players are met — the countdown only
+  // *means* something then. Below min it's FILLING; at/above min it's COUNTDOWN.
+  const counting = enough && remaining != null && !expired
+  const finalSecs = counting && remaining <= 10_000
+  const locking = full || (counting && remaining <= 3_000)
 
-  // The one status line: while filling, the countdown is inseparable from the
-  // "or when full" auto-start — a single sentence, not two competing clocks.
+  // The one status line: FILLING waits for players; COUNTDOWN counts down but
+  // notes more can still join; the last 10s escalate to a hard "dealing" beat.
   let clock: string
-  if (full) clock = 'Table full — dealing you in'
-  else if (remaining != null && !expired) clock = `Starts in ${formatCountdown(remaining)} or when full`
+  if (full) clock = 'All seated — dealing you in'
+  else if (locking) clock = `Seats locked — dealing in ${formatCountdown(remaining ?? 0)}`
+  else if (counting) clock = `Match starts in ${formatCountdown(remaining)} · more can still join`
   else if (expired) clock = 'Fill window closed'
-  else clock = 'Starts as soon as the table is full'
+  else clock = `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'}`
+
+  const eyebrow = full ? 'Table ready' : counting ? 'Match starting' : 'Table filling'
 
   return (
-    <div ref={ref} className="wr-felt" style={{ opacity: 0 }}>
-      <div className="wr-felt-eyebrow">{full ? 'Table ready' : 'Table filling'}</div>
+    <div ref={ref} className={`wr-felt ${finalSecs || full ? 'wr-felt--final' : ''}`} style={{ opacity: 0 }}>
+      <div className="wr-felt-eyebrow">{eyebrow}</div>
       <div className="wr-felt-count">
         <b>{filled}</b>
         <span className="wr-felt-slash">/</span>
         {max}
       </div>
-      {!full && (
+      {!full && !counting && (
         <div className="wr-felt-need">
           Waiting for {need} more {need === 1 ? 'trader' : 'traders'}
         </div>
       )}
-      <div className={`wr-felt-clock ${full ? 'wr-felt-clock--ready' : ''}`}>
-        <span className="wr-felt-clock-icon" aria-hidden="true">⏳</span>
+      <div className={`wr-felt-clock ${full || counting ? 'wr-felt-clock--ready' : ''}`}>
+        <span className="wr-felt-clock-icon" aria-hidden="true">{locking ? '🔒' : '⏳'}</span>
         {clock}
       </div>
     </div>
@@ -501,6 +518,43 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
   )
 }
 
+/**
+ * At 5/5 the invite panel is dead UI — swap it for a roster summary of the full
+ * table (every seat, its persona read) plus the pot-to-play preview, so the last
+ * window before the deal reads as "everyone's here" rather than "still inviting" (§11).
+ */
+function TableFullCard({ plan, match, buyIn }: { plan: SeatCell[]; match: ReturnType<typeof useWaiting>['match']; buyIn: number }) {
+  const terms = useGameStore((s) => s.terms)
+  const token = terms?.chipsToken ?? 'USDC'
+  const yourSeat = match?.yourSeat ?? 0
+  const potPreview = buyIn * plan.length
+  return (
+    <section className="wr-card wr-card--full">
+      <div className="wr-card-title">Table full</div>
+      <div className="wr-full-copy">All seats taken — the hand is about to deal.</div>
+      <ul className="wr-roster">
+        {plan.map((cell) => {
+          const isYou = cell.kind === 'you'
+          const alias = isYou ? 'You' : seatAlias(cell.seat, yourSeat)
+          const tag = seatTag(cell.seat, yourSeat)
+          const initial = isYou ? '₿' : alias.replace(/^The\s+/, '').charAt(0).toUpperCase()
+          return (
+            <li key={cell.seat} className={`wr-roster-row ${isYou ? 'wr-roster-row--you' : ''}`}>
+              <span className="wr-roster-emblem" aria-hidden="true">{initial}</span>
+              <span className="wr-roster-name">{alias}</span>
+              <span className={`wr-roster-tag pod-tag--${tag.kind}`} title={tag.hint}>{tag.label}</span>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="wr-full-pot">
+        <span className="eyebrow">pot to play for</span>
+        <span className="mono">{formatChips(potPreview)} {token} <span className="wr-full-pot-fees">+ fees</span></span>
+      </div>
+    </section>
+  )
+}
+
 function InviteCard({ filled, max }: { filled: number; max: number }) {
   const terms = useGameStore((s) => s.terms)
   const matchId = terms?.onchainMatchId ?? terms?.matchPda ?? null
@@ -558,7 +612,7 @@ function Toast({ show, text }: { show: boolean; text: string }) {
 // Bottom dock — exit + sound + trust seal
 // ---------------------------------------------------------------------------
 
-function Dock() {
+function Dock({ seatsLocked }: { seatsLocked: boolean }) {
   const leave = useGameStore((s) => s.leaveToDiscovery)
   const [sound, setSound] = useState(() => (typeof localStorage !== 'undefined' ? localStorage.getItem('st-sound') !== 'off' : true))
   const toggleSound = () => {
@@ -572,7 +626,14 @@ function Dock() {
   return (
     <div className="wr-dock">
       <div className="wr-dock-left">
-        <button className="wr-dock-btn" onClick={() => leave()}>Leave table</button>
+        <button
+          className="wr-dock-btn"
+          onClick={() => leave()}
+          disabled={seatsLocked}
+          title={seatsLocked ? 'Seats are locked — the hand is being dealt' : undefined}
+        >
+          Leave table
+        </button>
         <button className="wr-dock-btn wr-dock-btn--sound" onClick={toggleSound}>
           {sound ? '🔊' : '🔈'} Sound: {sound ? 'On' : 'Off'}
         </button>

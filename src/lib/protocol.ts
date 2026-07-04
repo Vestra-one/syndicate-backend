@@ -33,6 +33,16 @@ export const PAST_FILLING_PHASES: MatchPhase[] = [
   'SEALING', 'LIVE', 'SETTLEMENT_WINDOW', 'DECRYPT', 'SETTLED', 'VOID',
 ]
 
+/**
+ * Phases in which the gateway supplies the authoritative price (it rides in on
+ * `action` frames once the hand is LIVE). Through FILLING *and* SEALING no gateway
+ * price flows, so the always-on spot feed must keep the chart — and the seal panel's
+ * live price — alive. Notably this EXCLUDES 'SEALING', unlike PAST_FILLING_PHASES.
+ */
+export const GATEWAY_PRICE_PHASES: MatchPhase[] = [
+  'LIVE', 'SETTLEMENT_WINDOW', 'DECRYPT', 'SETTLED', 'VOID',
+]
+
 export type Chips = number      // integer, token base units
 export type FixedPrice = number // integer fixed-point at feed `decimals`
 export type Wallet = string     // base58 Solana pubkey
@@ -203,6 +213,7 @@ export type VoidReason =
 
 export interface LiveGame {
   matchId: string
+  onchainMatchId?: string
   feed: string
   buyIn: Chips
   potSize: Chips

@@ -67,6 +67,45 @@ function lastAction(feed: PublicEvent[], seat: number): PublicEvent | undefined 
   return undefined
 }
 
+/** Compact "ago" for the pod tooltip — mirrors the action feed's own scale. */
+function agoShort(ts: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ts) / 1000))
+  if (s < 1) return 'now'
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`
+}
+
+/**
+ * This seat's public betting actions from the live feed (newest first) — the data
+ * behind the pod's hover tooltip. Scoped to the recent window the feed keeps (§ MAX_FEED),
+ * so it reads as "what this player has been doing", not a full cross-match dossier.
+ */
+function seatHistory(feed: PublicEvent[], seat: number, token: string, now: number): { label: string; ago: string }[] {
+  const out: { label: string; ago: string }[] = []
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const e = feed[i]
+    if (!('seat' in e) || e.seat !== seat) continue
+    let label: string | null = null
+    if (e.kind === 'fold') {
+      label = 'Folded'
+    } else if (e.kind === 'action') {
+      const amt = e.amount > 0 ? ` ${formatChips(e.amount)} ${token}` : ''
+      switch (e.action) {
+        case 'raiseTo':
+        case 'betTo': label = `Raised${amt}`; break
+        case 'call': label = `Called${amt}`; break
+        case 'check': label = 'Checked'; break
+        case 'allIn': label = `All-in${amt}`; break
+        case 'fold': label = 'Folded'; break
+        default: label = e.action
+      }
+    }
+    if (label) out.push({ label, ago: agoShort(e.ts, now) })
+  }
+  return out
+}
+
 /** Derive the pod's status line + tone from turn order, fold state, and last action. */
 function podStatus(
   seat: SeatView,
@@ -138,21 +177,35 @@ function OpponentPod({
   const [turnStart, setTurnStart] = useState<number | null>(null)
   useEffect(() => { setTurnStart(active ? Date.now() : null) }, [active])
 
-  // Once the estimate hits zero the server is auto-acting for them — a pinned
-  // "0s" pip reads as broken, so drop the pip and let the status line carry it.
-  let timer: string | undefined
+  // Countdown ring around the acting pod (the same visual as your action bar).
+  // "You" gets the real server deadline; opponents don't expose one, so we count
+  // their allotted action time from the moment they took the turn. Once it hits
+  // zero the player has slipped into their time bank — badge it BANK.
+  const bankMs = (useGameStore((s) => s.terms?.timeBankSec ?? 0)) * 1000
+  let ring: { remainingMs: number; totalMs: number } | undefined
+  let bank = false
   let timedOut = false
   if (active) {
-    let remaining: number | null = null
+    let remainingMs: number | null = null
+    let totalMs = actionSecs * 1000
     if (seat.seat === match.yourSeat && yourTurn) {
-      remaining = Math.ceil((yourTurn.deadline - now) / 1000)
+      remainingMs = yourTurn.deadline - now
     } else if (turnStart && actionSecs > 0) {
-      remaining = Math.ceil(actionSecs - (now - turnStart) / 1000)
+      remainingMs = actionSecs * 1000 - (now - turnStart)
     }
-    if (remaining != null && remaining > 0) timer = `${remaining}s`
-    else if (remaining != null) timedOut = true
+    if (remainingMs != null) {
+      if (remainingMs <= 0 && bankMs > 0 && turnStart) {
+        // Into the time bank — count that down instead of pinning a broken "0s".
+        bank = true
+        totalMs = bankMs
+        remainingMs = bankMs - (now - turnStart - actionSecs * 1000)
+      }
+      if (remainingMs > 0) ring = { remainingMs, totalMs }
+      else timedOut = true
+    }
   }
   const shownStatus = timedOut ? { text: 'Timing out', tone: 'thinking' as StatusTone } : status
+  const history = seatHistory(feed, seat.seat, token, now)
 
   return (
     <div ref={ref} className="table-seat" style={{ opacity: 0 }}>
@@ -163,12 +216,14 @@ function OpponentPod({
         status={shownStatus}
         stack={`${formatChips(seat.stack)} ${token}`}
         tag={seatTag(seat.seat, match.yourSeat)}
+        history={history}
         active={active}
         folded={seat.folded}
         checked={status.tone === 'called'}
         allIn={seat.allIn}
         flashCheck={flashCheck}
-        timer={timer}
+        ring={ring}
+        bank={bank}
         dealer={match.buttonSeat === seat.seat}
         side={angle < 0 ? 'left' : 'right'}
       />
