@@ -1133,6 +1133,12 @@
   letter-spacing: 1.6px;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
 }
+.pot-token {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.72;
+  letter-spacing: 0.6px;
+}
 
 /* ---- Action feed ---- */
 .hud-mid {
@@ -2393,6 +2399,8 @@
   color: var(--text-faint);
   font-size: 12px;
 }
+.reveal-dist--above { color: var(--up); }
+.reveal-dist--below { color: var(--down); }
 .reveal-row--folded {
   opacity: 0.5;
 }

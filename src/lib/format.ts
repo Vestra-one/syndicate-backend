@@ -21,9 +21,39 @@ export function formatClock(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-/** Token base units (6-decimal USDC) → a compact human amount, e.g. 10_500_000 → "10.5". */
-export function formatChips(base: number): string {
-  return (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+/**
+ * Per-currency display decimals. Every money amount on a table renders with the
+ * same fixed precision so `2.8` and `2.35` never sit next to each other ragged.
+ */
+const MONEY_DECIMALS: Record<string, number> = { USDC: 2, USD: 2, SATS: 0 }
+
+function moneyDecimals(token: string): number {
+  return MONEY_DECIMALS[token] ?? 2
+}
+
+/**
+ * Token base units (6-decimal) → a human amount with thousands separators and a
+ * currency-appropriate fixed precision, e.g. 10_500_000 → "10.50",
+ * 11_200_000 → "11.20", 1_234_500_000 → "1,234.50". No token suffix — callers
+ * that render `{formatChips(x)} {token}` keep working; use `formatMoney` to get
+ * the suffix bundled in.
+ */
+export function formatChips(base: number, token = 'USDC'): string {
+  const digits = moneyDecimals(token)
+  return (base / 1e6).toLocaleString('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+}
+
+/**
+ * Token base units → a fully formatted money string with its currency, the one
+ * way an amount should read anywhere in the product: "1,234.50 USDC".
+ * `signed` prefixes a `+` on positive values (for deltas / deposits).
+ */
+export function formatMoney(base: number, token = 'USDC', opts?: { signed?: boolean }): string {
+  const sign = opts?.signed && base > 0 ? '+' : ''
+  return `${sign}${formatChips(base, token)} ${token}`
 }
 
 /** ms → a countdown that grows an hours field when needed: "4:07", "1:02:30". */

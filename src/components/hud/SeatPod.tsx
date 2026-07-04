@@ -123,7 +123,7 @@ export function SeatPod({
       {timer && <span className="pod-timer">{timer}</span>}
 
       {tag && !empty && (
-        <span className={`pod-tag pod-tag--${tag.kind}`}>
+        <span className={`pod-tag pod-tag--${tag.kind}`} title={tag.hint}>
           <TagIcon kind={tag.kind} />
           {tag.label}
         </span>

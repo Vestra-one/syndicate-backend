@@ -24,18 +24,24 @@ export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
  * balanced baseline.
  */
 export type SeatTagKind = 'tight' | 'aggressive' | 'safe' | 'passive' | 'unknown' | 'balanced'
-export interface SeatTag { label: string; kind: SeatTagKind }
+/** `hint` explains how the read is computed — surfaced as the badge's tooltip. */
+export interface SeatTag { label: string; kind: SeatTagKind; hint: string }
 
+/**
+ * The five personas (plus the "balanced" self-baseline). A read is derived from
+ * a player's observed betting tendencies across the hand — never from identity.
+ */
 const TAGS: SeatTag[] = [
-  { label: 'Tight player', kind: 'tight' },
-  { label: 'Aggressive', kind: 'aggressive' },
-  { label: 'Safe player', kind: 'safe' },
-  { label: 'Passive', kind: 'passive' },
-  { label: 'Unknown', kind: 'unknown' },
+  { label: 'Tight', kind: 'tight', hint: 'Tight — folds most hands, commits chips only on strong convictions.' },
+  { label: 'Aggressive', kind: 'aggressive', hint: 'Aggressive — raises and re-raises often, applies pressure to the table.' },
+  { label: 'Safe', kind: 'safe', hint: 'Safe — sizes bets conservatively and rarely risks the whole stack.' },
+  { label: 'Passive', kind: 'passive', hint: 'Passive — calls far more than it raises, lets others set the pace.' },
+  { label: 'Unknown', kind: 'unknown', hint: 'Unknown — not enough hands observed yet to read this player.' },
 ]
 
 export function seatTag(seat: SeatIndex, yourSeat?: SeatIndex): SeatTag {
-  if (seat === yourSeat) return { label: 'Balanced player', kind: 'balanced' }
+  if (seat === yourSeat)
+    return { label: 'Balanced', kind: 'balanced', hint: 'Balanced — your baseline read: a mix of calls, raises, and folds.' }
   return TAGS[seat % TAGS.length]
 }
 

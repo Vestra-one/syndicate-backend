@@ -1,5 +1,5 @@
 import { useGameStore } from '@/store/gameStore'
-import { formatChips, formatPrice } from '@/lib/format'
+import { formatMoney, formatPrice } from '@/lib/format'
 import type { DefaultAction } from '@/lib/protocol'
 
 /**
@@ -16,6 +16,7 @@ export function YourPosition() {
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
 
   const decimals = terms?.decimals ?? 2
+  const token = terms?.chipsToken ?? 'USDC'
   const predFloat = prediction != null ? prediction / 10 ** decimals : null
   const distance = predFloat != null && lastPrice != null ? lastPrice - predFloat : null
   const live = match?.phase === 'LIVE'
@@ -53,10 +54,8 @@ export function YourPosition() {
       {match?.yourSeat != null && (
         <div className="position-row eyebrow">
           <span>seat {match.yourSeat + 1}</span>
-          <span className="mono">stack {formatChips(match.yourStack ?? 0)}</span>
-          <span className="mono">
-            committed {formatChips(match.yourExposure ?? 0)} {terms?.chipsToken ?? 'USDC'}
-          </span>
+          <span className="mono">stack {formatMoney(match.yourStack ?? 0, token)}</span>
+          <span className="mono">committed {formatMoney(match.yourExposure ?? 0, token)}</span>
         </div>
       )}
 

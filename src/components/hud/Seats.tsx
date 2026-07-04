@@ -232,8 +232,8 @@ function Pot({ amount, token }: { amount: number; token: string }) {
   // the HUD only carries the amount label, floated just above the pile.
   return (
     <div ref={ref} className="table-pot" style={{ opacity: 0 }}>
-      <div className="pot-eyebrow eyebrow">pot · {token}</div>
-      <div className="pot-amount mono">{formatChips(amount)}</div>
+      <div className="pot-eyebrow eyebrow">pot</div>
+      <div className="pot-amount mono">{formatChips(amount, token)} <span className="pot-token">{token}</span></div>
     </div>
   )
 }

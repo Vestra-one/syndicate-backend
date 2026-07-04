@@ -40,7 +40,10 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     }
 
     // Live mode: seed with the current pot, then follow it as the match plays out.
-    const readPot = (p: number) => handle.setPot(p)
+    // `match.pot` is in token base units (6 dp); the coin pile scales off the
+    // human token amount, so a real ~18 USDC pot builds a modest heap rather than
+    // saturating the 115-coin cap (which buried the pot label under the coins).
+    const readPot = (p: number) => handle.setPot(p / 1e6)
     readPot(useGameStore.getState().match?.pot ?? 0)
 
     // Price board is only visible in-match — on discovery the chart has no context yet.

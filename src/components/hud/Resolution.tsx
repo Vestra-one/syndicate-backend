@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
-import { formatPrice } from '@/lib/format'
+import { formatPrice, formatMoney } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
 
 /**
@@ -75,13 +75,18 @@ function SettledCeremony() {
   const won = yourAward > 0
   const winnerSeat = settlement.awards[0]?.seat
 
+  const token = terms?.chipsToken ?? 'USDC'
   const foldedSeats = new Set(match?.seats.filter((s) => s.folded).map((s) => s.seat))
   const ranked = [...settlement.revealedPredictions]
-    .map((r) => ({
-      ...r,
-      dist: Math.abs(toFloat(r.prediction) - settlePrice),
-      folded: foldedSeats.has(r.seat),
-    }))
+    .map((r) => {
+      const predFloat = toFloat(r.prediction)
+      return {
+        ...r,
+        dist: Math.abs(predFloat - settlePrice),
+        dir: predFloat > settlePrice ? 'above' : predFloat < settlePrice ? 'below' : 'exact',
+        folded: foldedSeats.has(r.seat),
+      }
+    })
     .sort((a, b) => a.dist - b.dist)
 
   const onClaim = async () => {
@@ -110,18 +115,20 @@ function SettledCeremony() {
                 {r.folded && <span className="reveal-folded"> folded</span>}
               </span>
               <span className="reveal-pred mono">{formatPrice(toFloat(r.prediction))}</span>
-              <span className="reveal-dist mono">±{r.dist.toFixed(decimals)}</span>
+              <span className={`reveal-dist mono reveal-dist--${r.dir}`}>
+                {r.dir === 'exact' ? 'exact' : `$${r.dist.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${r.dir}`}
+              </span>
             </li>
           ))}
         </ul>
 
         <div className={`ceremony-result ${won ? 'ceremony-result--win' : ''}`}>
-          {won ? `You won the pot — ${yourAward} ${terms?.chipsToken ?? 'USDC'}` : 'No award this match'}
+          {won ? `You won the pot — ${formatMoney(yourAward, token)}` : 'No award this match'}
         </div>
 
         {won && (
           <button className="seal-btn ceremony-claim" onClick={onClaim} disabled={claiming || !!tx}>
-            {tx ? 'Claimed ✓' : claiming ? 'Claiming…' : `Claim ${yourAward}`}
+            {tx ? 'Claimed ✓' : claiming ? 'Claiming…' : `Claim ${formatMoney(yourAward, token)}`}
           </button>
         )}
 
