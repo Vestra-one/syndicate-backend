@@ -96,10 +96,11 @@ export interface ReclaimableMatch extends OnchainMatchStatus {
  * The lifecycle of an on-chain commit tx, surfaced so the UI can narrate the wait
  * honestly (build → wallet prompt → network finality) instead of a blind spinner.
  *  - 'signing'    → the wallet approval prompt is up; we're waiting on the user.
- *  - 'confirming' → broadcast; waiting for the network to finalize.
+ *  - 'confirming' → broadcast; waiting for the network to finalize. The tx signature
+ *                   exists by now, so it's passed along for the "verify on Solscan" link.
  */
 export type TxStage = 'signing' | 'confirming'
-export type TxProgressFn = (stage: TxStage) => void
+export type TxProgressFn = (stage: TxStage, sig?: string) => void
 
 /** On-chain custody. The client builds; the wallet signs. Returns tx signatures. */
 export interface ChainClient {

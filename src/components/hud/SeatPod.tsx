@@ -39,6 +39,10 @@ export interface SeatPodProps {
   you?: boolean
   /** the open chair you're about to take — a highlighted, unlocked "sit here" marker */
   reserved?: boolean
+  /** the next open chair a joiner will drop into — carries a soft pulse */
+  next?: boolean
+  /** just filled this instant — plays the seat-taken materialize beat */
+  joining?: boolean
 }
 
 function SeatGlyph() {
@@ -80,6 +84,8 @@ export function SeatPod({
   empty,
   you,
   reserved,
+  next,
+  joining,
 }: SeatPodProps) {
   const cls = [
     'pod',
@@ -90,6 +96,8 @@ export function SeatPod({
     allIn ? 'pod--allin' : '',
     empty ? 'pod--empty' : '',
     reserved ? 'pod--reserved' : '',
+    next ? 'pod--next' : '',
+    joining ? 'pod--joining' : '',
     you ? 'pod--you' : '',
   ]
     .filter(Boolean)

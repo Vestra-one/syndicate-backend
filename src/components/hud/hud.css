@@ -1141,6 +1141,25 @@
   50% { box-shadow: 0 0 0 1px rgba(243, 217, 138, 0.5), 0 0 26px rgba(243, 217, 138, 0.3), inset 0 1px 0 rgba(243, 217, 138, 0.18); }
 }
 
+/* ---- next open chair: the seat that fills next — a soft, patient pulse ---- */
+.pod--next {
+  animation: pod-next-pulse 2.4s ease-in-out infinite;
+}
+.pod--next .pod-lock { color: rgba(243, 217, 138, 0.75); }
+.pod--next .pod-name { color: var(--gold-line); }
+@keyframes pod-next-pulse {
+  0%, 100% { border-color: rgba(202, 162, 63, 0.24); box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.45); }
+  50% { border-color: rgba(243, 217, 138, 0.5); box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.45), 0 0 20px rgba(243, 217, 138, 0.22); }
+}
+
+/* ---- seat taken: materialize beat when a player drops in ---- */
+.pod--joining { animation: pod-join-in 0.6s var(--ease) both; }
+@keyframes pod-join-in {
+  0% { opacity: 0; transform: translateY(9px) scale(0.82); }
+  55% { transform: translateY(-2px) scale(1.04); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 /* ---- compact size (pre-game waiting ring) ---- */
 .pod--compact {
   min-width: 158px;
@@ -3653,23 +3672,84 @@
 }
 .txc-link:hover { background: rgba(79, 209, 139, 0.12); }
 
-.txc-dots {
-  display: inline-flex;
-  gap: 5px;
+/* Finalize step — an honest elapsed clock instead of mystery pagination dots */
+.txc-elapsed {
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
-.txc-dots i {
-  width: 5px;
-  height: 5px;
+.txc-elapsed-hint { color: var(--text-faint); }
+
+/* Reassurance state once finality drags past the slow threshold */
+.txc-reassure {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  max-width: 280px;
+  text-align: center;
+  animation: txc-fade-in 0.3s var(--ease);
+}
+.txc-reassure a {
+  color: var(--gold-bright);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.txc-reassure a:hover { color: var(--gold); }
+
+/* Truncated signature → Solscan, quiet enough not to compete with the wait copy */
+.txc-verify {
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  text-decoration: none;
+  padding: 3px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.txc-verify:hover {
+  color: var(--gold-bright);
+  border-color: rgba(243, 217, 138, 0.35);
+  background: rgba(243, 217, 138, 0.06);
+}
+
+/* Seat-taken payoff — coins materialize into a stack at the seat, bottom-up */
+.txc-coinstack {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  width: 34px;
+  height: 46px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 2;
+}
+.txc-coin {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--i) * 7px);
+  width: 34px;
+  height: 9px;
   border-radius: 50%;
-  background: var(--gold-bright);
-  opacity: 0.35;
-  animation: txc-dot 1.2s var(--ease) infinite;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold) 55%, #8a6a24);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 8px rgba(243, 217, 138, 0.35);
+  opacity: 0;
+  transform: translateY(-14px) scaleX(0.6);
+  animation: txc-coin-drop 0.42s var(--ease) forwards;
+  animation-delay: calc(0.32s + var(--i) * 0.11s);
 }
-.txc-dots i:nth-child(2) { animation-delay: 0.2s; }
-.txc-dots i:nth-child(3) { animation-delay: 0.4s; }
-@keyframes txc-dot {
-  0%, 100% { opacity: 0.25; transform: translateY(0); }
-  40%      { opacity: 1; transform: translateY(-3px); }
+@keyframes txc-coin-drop {
+  0%   { opacity: 0; transform: translateY(-14px) scaleX(0.6); }
+  70%  { opacity: 1; transform: translateY(2px) scaleX(1.05); }
+  100% { opacity: 1; transform: translateY(0) scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .txc-coin {
+    animation-duration: 0.01s;
+    animation-delay: calc(var(--i) * 0.02s);
+  }
 }
 
 .txc-actions {
@@ -3679,6 +3759,130 @@
   margin-top: 4px;
 }
 .txc-actions .ghost-btn { flex: 1; }
+
+/* ---- Error view: balance math, refund note, technical details ---- */
+.txc-err {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+/* Required-vs-actual ledger for an insufficient-balance failure */
+.txc-balance {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: rgba(0, 0, 0, 0.22);
+}
+.txc-balance-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.txc-balance-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.txc-balance-val {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.txc-balance-row--short {
+  padding-top: 7px;
+  border-top: 1px solid var(--hairline);
+}
+.txc-balance-row--short .txc-balance-label { color: #e7a08c; }
+.txc-balance-row--short .txc-balance-val { color: #e7a08c; font-weight: 600; }
+
+/* Seat-taken reassurance — funds never left / are refundable */
+.txc-refund-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 209, 139, 0.24);
+  background: rgba(79, 209, 139, 0.06);
+}
+
+/* Collapsible raw error for support / power users */
+.txc-tech {
+  border-top: 1px solid var(--hairline);
+  padding-top: 10px;
+}
+.txc-tech-summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  transition: color 0.15s var(--ease);
+}
+.txc-tech-summary::-webkit-details-marker { display: none; }
+.txc-tech-summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s var(--ease);
+}
+.txc-tech[open] .txc-tech-summary::before { transform: rotate(90deg); }
+.txc-tech-summary:hover { color: var(--text-dim); }
+.txc-tech-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 9px;
+}
+.txc-tech-raw {
+  flex: 1;
+  min-width: 0;
+  max-height: 108px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--hairline);
+}
+.txc-tech-copy {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.txc-tech-copy:hover { color: var(--text); border-color: var(--hairline-strong); }
+
+/* Error actions: primary faucet stacked over the Back / Try again row */
+.txc-err-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.txc-faucet {
+  display: block;
+  width: 100%;
+  padding: 10px 0;
+  text-align: center;
+  text-decoration: none;
+}
 
 /* ---- Waiting room (pre-game "table filling") ---- */
 /* =====================================================================
@@ -3754,34 +3958,46 @@
 .wr-seat-hero {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 13px;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.wr-seat-label {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
 }
 .wr-seat-num {
-  font-size: 44px;
+  font-size: 40px;
   font-weight: 700;
   line-height: 0.9;
   color: var(--gold-bright);
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
 }
-.wr-seat-token {
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.14em;
+/* the money line — buy-in + entry, unambiguous (no lone "1 USDC") */
+.wr-seat-money {
+  font-size: 13px;
   color: var(--text-dim);
+  line-height: 1.5;
 }
-.wr-kv-row {
+.wr-seat-money .mono { color: var(--text); font-size: 14px; }
+.wr-seat-plus { margin: 0 6px; color: var(--text-faint); }
+.wr-seat-total {
   display: flex;
-  gap: 26px;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(202, 162, 63, 0.14);
 }
-.wr-kv { display: flex; flex-direction: column; gap: 3px; }
-.wr-kv-label {
+.wr-seat-total-label {
   font-size: 9px;
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.wr-kv-value { font-size: 15px; color: var(--text); }
+.wr-seat-total-val { font-size: 15px; color: var(--gold-bright); font-weight: 600; }
 
 .wr-seat-detail {
   margin-top: 13px;
@@ -4008,6 +4224,43 @@
 }
 .wr-invite-secondary:hover { background: rgba(202, 162, 63, 0.1); color: var(--gold-bright); border-color: rgba(202, 162, 63, 0.4); }
 
+/* ---- copy-link confirmation toast ---- */
+.wr-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 22px;
+  background: rgba(12, 8, 4, 0.92);
+  border: 1px solid rgba(79, 209, 139, 0.45);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  z-index: 20;
+  pointer-events: none;
+  animation: wr-toast-in 0.24s var(--ease) both;
+}
+.wr-toast-check {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--up);
+  color: #08130c;
+  font-size: 11px;
+  font-weight: 700;
+}
+@keyframes wr-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+}
+
 /* ---- TIMER ---- */
 .wr-card--timer { text-align: center; }
 .wr-timer-head {
@@ -4226,35 +4479,34 @@
 }
 .wr-felt-count b { color: var(--gold-bright); font-weight: 700; }
 .wr-felt-slash { color: var(--text-faint); margin: 0 2px; font-weight: 400; }
-.wr-felt-sub {
+/* "Waiting for N more" — the count, in words */
+.wr-felt-need {
   font-family: var(--font-display);
   font-size: 12px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.95);
+  margin-top: 2px;
 }
-.wr-felt-pips { display: flex; gap: 7px; margin: 10px 0 8px; }
-.wr-felt-pip {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(0, 0, 0, 0.55);
-  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.6);
-  transition: background 0.3s var(--ease), box-shadow 0.3s var(--ease);
-}
-.wr-felt-pip--on {
-  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
-  border-color: rgba(38, 24, 9, 0.7);
-  box-shadow: 0 0 9px rgba(243, 217, 138, 0.6), inset 0 1px 1px rgba(255, 246, 214, 0.6);
-}
-.wr-felt-hint {
+/* the single integrated countdown pill: "Starts in 1:15 or when full" */
+.wr-felt-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+  padding: 6px 13px;
+  border-radius: 20px;
+  background: rgba(10, 7, 4, 0.62);
+  border: 1px solid rgba(202, 162, 63, 0.28);
+  backdrop-filter: blur(6px);
   font-size: 12px;
-  color: var(--text-dim);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.95);
+  color: var(--gold-line);
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
 }
-.wr-felt-hint--ready { color: var(--up); }
+.wr-felt-clock-icon { font-size: 12px; filter: saturate(0.85); }
+.wr-felt-clock--ready { color: var(--up); border-color: rgba(79, 209, 139, 0.4); }
 
 /* ---- bottom dock ---- */
 .wr-dock {
@@ -4498,7 +4750,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .txc-ring, .txc-emblem-core, .txc-node-spin, .txc-node-dot, .txc-dots i,
+  .txc-ring, .txc-emblem-core, .txc-node-spin, .txc-node-dot,
   .txc-emblem--done .txc-emblem-core, .txc-emblem--done::after,
   .wr-ring--wait .wr-ring-arc, .wr-ring--wait .wr-ring-arc-glow {
     animation: none !important;

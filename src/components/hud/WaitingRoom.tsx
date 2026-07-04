@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { useNow } from '@/lib/useNow'
 import { useAnchor } from '@/lib/useAnchor'
 import { formatChips, formatCountdown } from '@/lib/format'
 import { buildInviteUrl } from '@/lib/invite'
 import { projectFeltCentre, projectWaitingSeat } from '@/three/table/tableView'
-import { PAST_FILLING_PHASES } from '@/lib/protocol'
+import { PAST_FILLING_PHASES, type SeatView } from '@/lib/protocol'
 import { seatAlias, seatTag, describeEvent, hostAlias } from '@/lib/seats'
 import { SeatPod } from './SeatPod'
 import { personaEmblem } from './Seats'
@@ -48,22 +48,28 @@ export function useWaiting() {
 
 export function WaitingRoom() {
   const w = useWaiting()
+  const yourSeat = w.match?.yourSeat ?? 0
+  const buyIn = w.terms?.buyIn ?? 0
+  // One canonical seating plan drives the ring, the join feed, and the join
+  // animation, so every part of the screen agrees on who sits where.
+  const plan = buildSeatPlan(w.max, yourSeat, w.match?.seats ?? [], w.filled)
+  const joins = useJoins(plan, yourSeat)
+
   if (!w.active) return null
   return (
     <div className="wr">
-      <SeatRing max={w.max} match={w.match} filled={w.filled} />
-      <FeltCaption filled={w.filled} max={w.max} min={w.min} enough={w.enough} />
+      <SeatRing plan={plan} match={w.match} buyIn={buyIn} joining={joins.flash} />
+      <FeltCaption filled={w.filled} max={w.max} fillDeadline={w.fillDeadline} />
 
       <aside className="wr-rail wr-rail--left">
         <YourSeatCard />
         <HowItWorksCard max={w.max} />
-        <RecentActivityCard />
+        <RecentActivityCard joins={joins.log} />
       </aside>
 
       <aside className="wr-rail wr-rail--right">
-        <RoomInfoCard filled={w.filled} max={w.max} enough={w.enough} />
         <InviteCard filled={w.filled} max={w.max} />
-        <TimerCard enough={w.enough} />
+        <RoomInfoCard filled={w.filled} max={w.max} />
       </aside>
 
       <Dock />
@@ -72,52 +78,121 @@ export function WaitingRoom() {
 }
 
 // ---------------------------------------------------------------------------
-// Seats ringing the outer rail — real players as brass medallions, empty
-// chairs as locked "open seat" chips. All pinned to the 3D table's rim.
+// Seating plan — one source of truth for which seat is you / seated / open.
 // ---------------------------------------------------------------------------
 
-function SeatRing({ max, match, filled }: { max: number; match: ReturnType<typeof useWaiting>['match']; filled: number }) {
+type SeatCell =
+  | { seat: number; kind: 'you' }
+  | { seat: number; kind: 'seated'; sv?: SeatView }
+  | { seat: number; kind: 'open'; next: boolean }
+
+/**
+ * Assigns every one of `max` fixed chairs a role. You sit at `yourSeat`; engine
+ * seats (once assigned at lock) fill their real index; during FILLING the engine
+ * hasn't assigned seats yet (snapshot `seats` is empty) so the confirmed count
+ * beyond you (`filled`, from WS seat_update) shows as anonymous "Seated" pods in
+ * the first open slots; the remainder are open, and the first open chair is
+ * flagged `next` for the fill-me pulse.
+ */
+function buildSeatPlan(max: number, yourSeat: number, realSeats: SeatView[], filled: number): SeatCell[] {
+  const byIndex = new Map(realSeats.map((s) => [s.seat, s]))
+  const realOthers = realSeats.filter((s) => s.seat !== yourSeat).length
+  let anonLeft = Math.max(0, filled - 1 - realOthers)
+  let nextMarked = false
+  const cells: SeatCell[] = []
+  for (let seat = 0; seat < max; seat++) {
+    if (seat === yourSeat) cells.push({ seat, kind: 'you' })
+    else if (byIndex.has(seat)) cells.push({ seat, kind: 'seated', sv: byIndex.get(seat) })
+    else if (anonLeft > 0) { anonLeft--; cells.push({ seat, kind: 'seated' }) }
+    else { const next = !nextMarked; nextMarked = true; cells.push({ seat, kind: 'open', next }) }
+  }
+  return cells
+}
+
+/**
+ * Watches the plan for newly-seated chairs and, when one appears, (a) flags it
+ * for the seat-taken materialize beat and (b) drops a "<name> took seat N" line
+ * into the activity feed. Skips the first render so an already-seated table
+ * doesn't announce everyone at once.
+ */
+function useJoins(plan: SeatCell[], yourSeat: number) {
+  const seatedKey = plan.filter((c) => c.kind === 'seated').map((c) => c.seat).join(',')
+  const prev = useRef<Set<number> | null>(null)
+  const [flash, setFlash] = useState<Set<number>>(() => new Set())
+  const [log, setLog] = useState<{ seat: number; ts: number }[]>([])
+
+  useEffect(() => {
+    const current = new Set(seatedKey ? seatedKey.split(',').map(Number) : [])
+    if (prev.current == null) { prev.current = current; return }
+    const added = [...current].filter((s) => !prev.current!.has(s))
+    prev.current = current
+    if (added.length === 0) return
+    const now = Date.now()
+    setLog((l) => [...added.map((seat) => ({ seat, ts: now })), ...l].slice(0, 6))
+    setFlash((f) => { const n = new Set(f); added.forEach((s) => n.add(s)); return n })
+    const t = setTimeout(() => {
+      setFlash((f) => { const n = new Set(f); added.forEach((s) => n.delete(s)); return n })
+    }, 1200)
+    return () => clearTimeout(t)
+  }, [seatedKey])
+
+  return { flash, log: log.map((j) => ({ ...j, name: seatAlias(j.seat, yourSeat) })) }
+}
+
+// ---------------------------------------------------------------------------
+// Seats ringing the outer rail — real players as brass medallions, empty
+// chairs as recessed "open seat" chips. All pinned to the 3D table's rim.
+// ---------------------------------------------------------------------------
+
+function SeatRing({
+  plan,
+  match,
+  buyIn,
+  joining,
+}: {
+  plan: SeatCell[]
+  match: ReturnType<typeof useWaiting>['match']
+  buyIn: number
+  joining: Set<number>
+}) {
   const yourSeat = match?.yourSeat ?? 0
   const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
-  const byIndex = new Map((match?.seats ?? []).map((s) => [s.seat, s]))
-
-  // During FILLING the engine hasn't assigned seats yet (snapshot.seats is empty), but we
-  // know how many players are confirmed (`filled`, from WS seat_update). Show the extras
-  // as anonymous "Seated" pods in the first open slots so joins are visible immediately.
-  let anonLeft = Math.max(0, filled - 1 - (match?.seats.filter((s) => s.seat !== yourSeat).length ?? 0))
-
-  // Every chair gets a fixed slot by seat index (0→leftmost … max-1→rightmost),
-  // fanned across the front of the felt clear of the cabinet. Your chair is a lit
-  // pod; other seated players are persona pods; the rest are locked & open.
-  const angles = waitingSeatAngles(max)
+  const angles = waitingSeatAngles(plan.length)
 
   return (
     <div className="wr-seats">
-      {angles.map((angle, seat) => {
-        const side = angle < 0 ? 'left' : 'right'
-        if (seat === yourSeat) {
-          return <SeatSlot key="you" angle={angle} side={side}>
-            <YouPod seatNo={seat + 1} stack={match?.yourStack} token={token} yourSeat={yourSeat} side={side} />
-          </SeatSlot>
+      {plan.map((cell) => {
+        const angle = angles[cell.seat] ?? 0
+        const side: 'left' | 'right' = angle < 0 ? 'left' : 'right'
+        if (cell.kind === 'you') {
+          return (
+            <SeatSlot key="you" angle={angle} side={side}>
+              <YouPod seatNo={cell.seat + 1} stack={match?.yourStack ?? buyIn} token={token} yourSeat={yourSeat} side={side} />
+            </SeatSlot>
+          )
         }
-        const sv = byIndex.get(seat)
-        const showAnon = !sv && anonLeft > 0 && (anonLeft--, true)
-        return (
-          <SeatSlot key={seat} angle={angle} side={side}>
-            {sv || showAnon ? (
+        if (cell.kind === 'seated') {
+          const alias = seatAlias(cell.seat, yourSeat)
+          const stack = cell.sv?.stack ?? buyIn
+          return (
+            <SeatSlot key={cell.seat} angle={angle} side={side}>
               <SeatPod
                 size="compact"
                 side={side}
-                name={seatAlias(seat, yourSeat)}
-                seatNo={seat + 1}
-                emblem={personaEmblem(seatAlias(seat, yourSeat))}
-                status={{ text: 'Seated', tone: 'seated' }}
-                stack={sv ? `${formatChips(sv.stack)} ${token}` : undefined}
-                tag={seatTag(seat, yourSeat)}
+                name={alias}
+                seatNo={cell.seat + 1}
+                emblem={personaEmblem(alias)}
+                status={{ text: 'Seated ✓', tone: 'seated' }}
+                stack={`${formatChips(stack)} ${token}`}
+                tag={seatTag(cell.seat, yourSeat)}
+                joining={joining.has(cell.seat)}
               />
-            ) : (
-              <SeatPod size="compact" side={side} empty name="Open seat" seatNo={seat + 1} />
-            )}
+            </SeatSlot>
+          )
+        }
+        return (
+          <SeatSlot key={cell.seat} angle={angle} side={side}>
+            <SeatPod size="compact" side={side} empty name="Open seat" next={cell.next} />
           </SeatSlot>
         )
       })}
@@ -135,7 +210,7 @@ export function SeatSlot({ angle, side, children }: { angle: number; side: 'left
   )
 }
 
-function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack?: number; token: string; yourSeat: number; side: 'left' | 'right' }) {
+function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack: number; token: string; yourSeat: number; side: 'left' | 'right' }) {
   const addr = useGameStore((s) => s.walletAddress)
   const short = addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : 'You'
   return (
@@ -146,8 +221,8 @@ function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stac
       name={short}
       seatNo={seatNo}
       emblem="₿"
-      status={{ text: 'Your seat', tone: 'turn' }}
-      stack={stack != null ? `${formatChips(stack)} ${token}` : undefined}
+      status={{ text: 'You', tone: 'turn' }}
+      stack={`${formatChips(stack)} ${token}`}
       tag={seatTag(yourSeat, yourSeat)}
     />
   )
@@ -161,7 +236,10 @@ function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stac
 export function waitingSeatAngles(n: number): number[] {
   if (n <= 0) return []
   if (n === 1) return [0]
-  const SPREAD = 52
+  // Keep the fan narrow enough that the outermost chairs stay on the open felt
+  // and never ride up onto the curved rim's engraved text (§9 "never overlapping
+  // the engraved rim text").
+  const SPREAD = 40
   return Array.from({ length: n }, (_, i) => -SPREAD + (2 * SPREAD * i) / (n - 1))
 }
 
@@ -169,25 +247,38 @@ export function waitingSeatAngles(n: number): number[] {
 // Centre-of-felt caption — the quiet hero: "TABLE FILLING · n/max".
 // ---------------------------------------------------------------------------
 
-function FeltCaption({ filled, max, min, enough }: { filled: number; max: number; min: number; enough: boolean }) {
+function FeltCaption({ filled, max, fillDeadline }: { filled: number; max: number; fillDeadline: number | null }) {
   const ref = useAnchor(useCallback(() => projectFeltCentre(), []))
-  const need = Math.max(0, min - filled)
+  const now = useNow(250)
+  const full = filled >= max
+  const need = Math.max(0, max - filled)
+  const remaining = fillDeadline != null ? Math.max(0, fillDeadline - now) : null
+  const expired = remaining != null && remaining <= 0
+
+  // The one status line: while filling, the countdown is inseparable from the
+  // "or when full" auto-start — a single sentence, not two competing clocks.
+  let clock: string
+  if (full) clock = 'Table full — dealing you in'
+  else if (remaining != null && !expired) clock = `Starts in ${formatCountdown(remaining)} or when full`
+  else if (expired) clock = 'Fill window closed'
+  else clock = 'Starts as soon as the table is full'
+
   return (
     <div ref={ref} className="wr-felt" style={{ opacity: 0 }}>
-      <div className="wr-felt-eyebrow">{enough ? 'Table ready' : 'Table filling'}</div>
+      <div className="wr-felt-eyebrow">{full ? 'Table ready' : 'Table filling'}</div>
       <div className="wr-felt-count">
         <b>{filled}</b>
         <span className="wr-felt-slash">/</span>
         {max}
       </div>
-      <div className="wr-felt-sub">players joined</div>
-      <div className="wr-felt-pips" aria-hidden="true">
-        {Array.from({ length: max }).map((_, i) => (
-          <span key={i} className={`wr-felt-pip ${i < filled ? 'wr-felt-pip--on' : ''}`} />
-        ))}
-      </div>
-      <div className={`wr-felt-hint ${enough ? 'wr-felt-hint--ready' : ''}`}>
-        {enough ? 'The match begins shortly' : `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'}`}
+      {!full && (
+        <div className="wr-felt-need">
+          Waiting for {need} more {need === 1 ? 'trader' : 'traders'}
+        </div>
+      )}
+      <div className={`wr-felt-clock ${full ? 'wr-felt-clock--ready' : ''}`}>
+        <span className="wr-felt-clock-icon" aria-hidden="true">⏳</span>
+        {clock}
       </div>
     </div>
   )
@@ -204,22 +295,23 @@ function YourSeatCard() {
   if (!terms) return null
   const seatNo = (match?.yourSeat ?? 0) + 1
 
+  const token = terms.chipsToken
+  const total = terms.buyIn + terms.entryFee
   return (
     <section className="wr-card wr-card--seat">
       <div className="wr-card-title">Your seat</div>
       <div className="wr-seat-hero">
+        <span className="wr-seat-label">Seat</span>
         <span className="wr-seat-num mono">{seatNo}</span>
-        <span className="wr-seat-token">USDC</span>
       </div>
-      <div className="wr-kv-row">
-        <div className="wr-kv">
-          <span className="wr-kv-label">Buy-in</span>
-          <span className="wr-kv-value mono">{formatChips(terms.buyIn)}</span>
-        </div>
-        <div className="wr-kv">
-          <span className="wr-kv-label">Entry fee</span>
-          <span className="wr-kv-value mono">{formatChips(terms.entryFee)}</span>
-        </div>
+      <div className="wr-seat-money">
+        <span className="mono">{formatChips(terms.buyIn)}</span> buy-in
+        <span className="wr-seat-plus">+</span>
+        <span className="mono">{formatChips(terms.entryFee)}</span> entry
+      </div>
+      <div className="wr-seat-total">
+        <span className="wr-seat-total-label">Committed</span>
+        <span className="wr-seat-total-val mono">{formatChips(total)} {token}</span>
       </div>
       {showDetails && (
         <div className="wr-seat-detail">
@@ -330,27 +422,35 @@ function HowItWorksCard({ max }: { max: number }) {
   )
 }
 
-function RecentActivityCard() {
+function RecentActivityCard({ joins }: { joins: { seat: number; ts: number; name: string }[] }) {
   const feed = useGameStore((s) => s.feed)
   const yourSeat = useGameStore((s) => s.match?.yourSeat)
   const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   const now = useNow(15_000)
-  const recent = [...feed].slice(-4).reverse()
+
+  // Seat-taken lines (local, since FILLING carries no per-seat join event) merged
+  // chronologically with the public action feed, newest first.
+  const items = [
+    ...joins.map((j) => ({ ts: j.ts, text: `${j.name} took seat ${j.seat + 1}` })),
+    ...feed.map((e) => ({ ts: e.ts, text: describeEvent(e, yourSeat, token) })),
+  ]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 4)
 
   return (
     <section className="wr-card">
       <div className="wr-card-title">Recent activity</div>
-      {recent.length === 0 ? (
+      {items.length === 0 ? (
         <div className="wr-activity-empty">
           Quiet so far — invite a few traders to get the table moving.
         </div>
       ) : (
         <ul className="wr-activity">
-          {recent.map((e, i) => (
-            <li key={`${e.ts}-${i}`} className="wr-activity-row">
+          {items.map((it, i) => (
+            <li key={`${it.ts}-${i}`} className="wr-activity-row">
               <span className="wr-activity-dot" aria-hidden="true" />
-              <span className="wr-activity-text">{describeEvent(e, yourSeat, token)}</span>
-              <span className="wr-activity-ago mono">{ago(e.ts, now)}</span>
+              <span className="wr-activity-text">{it.text}</span>
+              <span className="wr-activity-ago mono">{ago(it.ts, now)}</span>
             </li>
           ))}
         </ul>
@@ -370,12 +470,14 @@ function ago(ts: number, now: number): string {
 // RIGHT rail
 // ---------------------------------------------------------------------------
 
-function RoomInfoCard({ filled, max, enough }: { filled: number; max: number; enough: boolean }) {
+function RoomInfoCard({ filled, max }: { filled: number; max: number }) {
   const terms = useGameStore((s) => s.terms)
   if (!terms) return null
   const matchId = terms.onchainMatchId ?? terms.matchPda ?? null
   const shortId = matchId ? `${matchId.slice(0, 4)}…${matchId.slice(-4)}` : '—'
 
+  // No "Status" row here — the felt centre is the single status source (§5). This
+  // card is just the static table facts.
   return (
     <section className="wr-card">
       <div className="wr-card-title">Room info</div>
@@ -384,18 +486,17 @@ function RoomInfoCard({ filled, max, enough }: { filled: number; max: number; en
         <InfoRow label="Entry fee" value={`${formatChips(terms.entryFee)} ${terms.chipsToken}`} />
         <InfoRow label="Feed" value={terms.priceFeedId} />
         <InfoRow label="Players" value={`${filled} / ${max}`} />
-        <InfoRow label="Status" value={enough ? 'Ready to start' : 'Waiting for players'} accent={enough} />
         <InfoRow label="Room ID" value={shortId} mono />
       </div>
     </section>
   )
 }
 
-function InfoRow({ label, value, mono, accent }: { label: string; value: string; mono?: boolean; accent?: boolean }) {
+function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="wr-info-row">
       <span className="wr-info-label">{label}</span>
-      <span className={`wr-info-value ${mono ? 'mono' : ''} ${accent ? 'wr-info-value--accent' : ''}`}>{value}</span>
+      <span className={`wr-info-value ${mono ? 'mono' : ''}`}>{value}</span>
     </div>
   )
 }
@@ -437,38 +538,19 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
       {canShare && (
         <button className="wr-invite-secondary" onClick={share}>↗ Share link</button>
       )}
+      <Toast show={copied} text="Invite link copied to clipboard" />
     </section>
   )
 }
 
-function TimerCard({ enough }: { enough: boolean }) {
-  const fillDeadline = useGameStore((s) => s.fillDeadline)
-  const leave = useGameStore((s) => s.leaveToDiscovery)
-  const now = useNow(250)
-  const remaining = fillDeadline != null ? Math.max(0, fillDeadline - now) : null
-  const expired = remaining != null && remaining <= 0
-
-  if (expired && !enough) {
-    return (
-      <section className="wr-card wr-card--timer wr-card--stalled">
-        <div className="wr-timer-icon" aria-hidden="true">⌛</div>
-        <div className="wr-timer-label">The table didn’t fill in time</div>
-        <button className="wr-timer-leave" onClick={() => leave()}>Back to tables</button>
-      </section>
-    )
-  }
-
+/** A transient confirmation pill, pinned bottom-centre above the dock. */
+function Toast({ show, text }: { show: boolean; text: string }) {
+  if (!show) return null
   return (
-    <section className="wr-card wr-card--timer">
-      <div className="wr-timer-head">
-        <span className="wr-timer-icon" aria-hidden="true">⌛</span>
-        <span className="wr-timer-cap">{enough ? 'Match starting' : 'Starts automatically in'}</span>
-      </div>
-      <div className="wr-timer-clock mono">{remaining != null ? formatCountdown(remaining) : '—'}</div>
-      <div className="wr-timer-sub">
-        {enough ? 'All set — dealing you in' : 'The match starts as soon as the table is seated.'}
-      </div>
-    </section>
+    <div className="wr-toast" role="status">
+      <span className="wr-toast-check" aria-hidden="true">✓</span>
+      {text}
+    </div>
   )
 }
 

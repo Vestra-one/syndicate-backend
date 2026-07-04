@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useGameStore } from '@/store/gameStore'
-import type { TxStageName } from '@/store/gameStore'
+import type { TxErrorCode, TxStageName } from '@/store/gameStore'
+import { networkInfo } from '@/lib/network'
+import { formatChips } from '@/lib/format'
 
 /**
  * The commit ceremony — the full-screen moment between "take your seat" and a
@@ -18,6 +20,11 @@ import type { TxStageName } from '@/store/gameStore'
  */
 
 type RailState = 'done' | 'active' | 'pending'
+
+// Where "this is taking a while" sends people. Discord is our live support channel.
+const SUPPORT_URL = 'https://discord.gg/cQthYMAY5'
+// Past this, silent spinning reads as "stuck" — swap to an explicit reassurance state.
+const SLOW_FINALITY_MS = 30_000
 
 const STAGE_ORDER: Record<TxStageName, number> = {
   preparing: 0,
@@ -40,18 +47,38 @@ export function TxCeremony() {
   const createTable = useGameStore((s) => s.createTable)
   const joinTable = useGameStore((s) => s.joinTable)
   const storeWallet = useGameStore((s) => s.walletAddress)
+  const chipBalance = useGameStore((s) => s.chipBalance)
   const { wallet, publicKey } = useWallet()
 
   // A 60s stall on the wallet prompt is the classic "the popup opened behind my
   // window / never opened" case — surface a manual escape hatch once it drags.
   const [stalled, setStalled] = useState(false)
 
-  // On success, linger just long enough to land the "you're in" beat, then hand
-  // off to the seated table (the lobby is already gone — `seated` is true).
+  // Ticks once a second while finality is pending so the elapsed-time readout stays
+  // live. Anchored to `confirmingAt` (set when the tx broadcast) rather than mount, so
+  // it survives re-renders and reflects the real wait.
+  const [now, setNow] = useState(() => Date.now())
+
+  // "Technical details" copy affordance — flips to a confirmation for a beat after a copy.
+  const [copiedRaw, setCopiedRaw] = useState(false)
+
+  // Which cluster this build talks to — gates the "Get test USDC / SOL" faucet buttons.
+  const net = useMemo(() => networkInfo(), [])
+
+  // On success, linger long enough to land the "you're in" beat AND let the coin
+  // stack materialize at the seat, then hand off to the seated table (the lobby is
+  // already gone — `seated` is true).
   useEffect(() => {
     if (tx?.stage !== 'confirmed') return
-    const t = setTimeout(() => useGameStore.getState().dismissTxProgress(), 2000)
+    const t = setTimeout(() => useGameStore.getState().dismissTxProgress(), 2600)
     return () => clearTimeout(t)
+  }, [tx?.stage])
+
+  useEffect(() => {
+    if (tx?.stage !== 'confirming') return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
   }, [tx?.stage])
 
   // Arm the no-response nudge only while the wallet prompt is actually up.
@@ -93,9 +120,16 @@ export function TxCeremony() {
   const shortAddr = address ? `${address.slice(0, 4)}…${address.slice(-4)}` : null
 
   const { title, sub } = copyFor(tx.stage, isCreate)
-  const explorerUrl = tx.sig
-    ? `https://explorer.solana.com/tx/${tx.sig}?cluster=devnet`
-    : null
+
+  // Solscan (devnet) lets power users verify the exact tx. The signature exists from
+  // the confirming beat onward, so the link shows through the wait — not just on success.
+  const solscanUrl = tx.sig ? `https://solscan.io/tx/${tx.sig}?cluster=devnet` : null
+  const shortSig = tx.sig ? `${tx.sig.slice(0, 4)}…${tx.sig.slice(-4)}` : null
+
+  const isConfirming = tx.stage === 'confirming'
+  const elapsedMs = tx.confirmingAt ? Math.max(0, now - tx.confirmingAt) : 0
+  const elapsedSec = Math.round(elapsedMs / 1000)
+  const slowFinality = isConfirming && elapsedMs >= SLOW_FINALITY_MS
 
   // Re-enter the same commit; module-level ctx (createCtx / joinRoom) persists.
   // `reset` must clear the optimistic `seated` flag too, or the re-entry hits the
@@ -105,8 +139,40 @@ export function TxCeremony() {
     reset()
     setTimeout(() => (isCreate ? createTable() : joinTable()), 60)
   }
+  // Try again re-runs the whole commit, which simulates on-chain BEFORE the wallet prompt
+  // (`simulateSignAndSend` / createAndDeposit both simulate first). A still-doomed tx —
+  // e.g. balance unchanged — fails at simulation and lands back here without the user ever
+  // signing, so nobody signs a hopeless transaction twice.
   const retry = () => recommit(dismiss)
   const retryFromStall = () => recommit(abort)
+
+  // ---- Error view derivation (only meaningful when isError) ----------------
+  const code: TxErrorCode = tx.errorCode ?? 'unknown'
+  const required = tx.amount
+  const actual = tx.walletBalance ?? chipBalance ?? 0
+  const token = tx.chipsToken
+  // An `insufficient` failure splits two ways: short on the chips token (top up USDC), or
+  // the token covers it but there's no SOL left for network fees (top up SOL). We only claim
+  // a USDC shortfall when the numbers actually prove it.
+  const usdcShort = code === 'insufficient' && actual < required
+  const solShort = code === 'insufficient' && actual >= required
+  const shortfall = Math.max(0, required - actual)
+  const errorTitle = errorHeadline(code, isCreate)
+  const errorSub = usdcShort
+    ? `You need ${formatChips(required, token)} ${token} to sit down — your wallet has ${formatChips(actual, token)}.`
+    : solShort
+      ? "Your USDC covers the buy-in, but there's not enough SOL to pay the network fee."
+      : tx.error
+  // On a test cluster, a shortfall gets a primary faucet button (USDC or SOL as appropriate);
+  // when it's shown, Try again steps down to a secondary so there's one clear primary action.
+  const faucetUrl = usdcShort ? net.faucetUrl : solShort ? net.solFaucetUrl : null
+  const faucetLabel = usdcShort ? 'Get test USDC' : 'Get test SOL'
+
+  const copyRaw = () => {
+    void navigator.clipboard?.writeText(tx.errorRaw ?? tx.error ?? '')
+    setCopiedRaw(true)
+    setTimeout(() => setCopiedRaw(false), 1800)
+  }
 
   return (
     <div className={`txc ${isDone ? 'txc--done' : ''} ${isError ? 'txc--error' : ''}`}>
@@ -123,10 +189,19 @@ export function TxCeremony() {
           <span className="txc-emblem-core">
             {isDone ? '✓' : isError ? '!' : '◎'}
           </span>
+          {/* Seat-taken payoff — a coin stack builds up at the seat before we route
+              to the table, so the win registers instead of a hard cut. */}
+          {isDone && !isCreate && (
+            <span className="txc-coinstack" aria-hidden="true">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <span key={i} className="txc-coin" style={{ '--i': i } as CSSProperties} />
+              ))}
+            </span>
+          )}
         </div>
 
-        <div className="txc-title">{title}</div>
-        <div className="txc-sub">{isError ? tx.error : sub}</div>
+        <div className="txc-title">{isError ? errorTitle : title}</div>
+        <div className="txc-sub">{isError ? errorSub : sub}</div>
 
         {/* Wallet identity — at the approve beat, tell the player exactly where to
             look and which account is signing. */}
@@ -150,6 +225,48 @@ export function TxCeremony() {
           </div>
         )}
 
+        {/* Error detail — balance math when short, a refund note when the seat vanished,
+            and the raw error tucked into a copyable "Technical details" row. */}
+        {isError && (
+          <div className="txc-err">
+            {usdcShort && (
+              <div className="txc-balance">
+                <div className="txc-balance-row">
+                  <span className="txc-balance-label">Needed</span>
+                  <span className="txc-balance-val mono">{formatChips(required, token)} {token}</span>
+                </div>
+                <div className="txc-balance-row">
+                  <span className="txc-balance-label">In your wallet</span>
+                  <span className="txc-balance-val mono">{formatChips(actual, token)} {token}</span>
+                </div>
+                <div className="txc-balance-row txc-balance-row--short">
+                  <span className="txc-balance-label">Short by</span>
+                  <span className="txc-balance-val mono">{formatChips(shortfall, token)} {token}</span>
+                </div>
+              </div>
+            )}
+
+            {code === 'seat_taken' && (
+              <div className="txc-refund-note">
+                Your buy-in wasn’t committed, so there’s nothing to refund. If any deposit did
+                land, it’s automatically refundable — your funds are safe.
+              </div>
+            )}
+
+            {tx.errorRaw && (
+              <details className="txc-tech">
+                <summary className="txc-tech-summary">Technical details</summary>
+                <div className="txc-tech-body">
+                  <code className="txc-tech-raw mono">{tx.errorRaw}</code>
+                  <button className="txc-tech-copy" onClick={copyRaw}>
+                    {copiedRaw ? 'Copied ✓' : 'Copy'}
+                  </button>
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
         {/* Progress rail — real lifecycle, lit from adapter callbacks */}
         {!isError && (
           <div className="txc-rail" role="list">
@@ -169,18 +286,33 @@ export function TxCeremony() {
 
         {/* Footer — reassurance while waiting, exits when done or failed */}
         {isError ? (
-          <div className="txc-actions">
-            <button className="ghost-btn" onClick={dismiss}>
-              Back
-            </button>
-            <button className="ghost-btn ghost-btn--primary" onClick={retry}>
-              Try again
-            </button>
+          <div className="txc-err-actions">
+            {faucetUrl && (
+              <a
+                className="ghost-btn ghost-btn--primary txc-faucet"
+                href={faucetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {faucetLabel} ↗
+              </a>
+            )}
+            <div className="txc-actions">
+              <button className="ghost-btn" onClick={dismiss}>
+                Back to table
+              </button>
+              <button
+                className={`ghost-btn ${faucetUrl ? '' : 'ghost-btn--primary'}`}
+                onClick={retry}
+              >
+                Try again
+              </button>
+            </div>
           </div>
         ) : isDone ? (
           <div className="txc-foot">
-            {explorerUrl && (
-              <a className="txc-link" href={explorerUrl} target="_blank" rel="noopener noreferrer">
+            {solscanUrl && (
+              <a className="txc-link" href={solscanUrl} target="_blank" rel="noopener noreferrer">
                 View transaction ↗
               </a>
             )}
@@ -191,13 +323,36 @@ export function TxCeremony() {
             <span className="txc-hint eyebrow">
               {isSigning
                 ? 'Confirm the transaction in your wallet'
-                : 'Finality on Solana takes a few seconds — keep this open'}
+                : slowFinality
+                  ? 'Still working — nothing is lost'
+                  : 'Finality on Solana takes a few seconds — keep this open'}
             </span>
-            {tx.stage === 'confirming' && (
-              <span className="txc-dots" aria-hidden="true">
-                <i /><i /><i />
+
+            {/* Finalize step: honest elapsed clock, then a reassurance state if the
+                network drags, then the signature so power users can verify on Solscan. */}
+            {isConfirming && !slowFinality && (
+              <span className="txc-elapsed mono">
+                ~{elapsedSec}s <span className="txc-elapsed-hint">· usually under 10s</span>
               </span>
             )}
+            {slowFinality && (
+              <span className="txc-reassure">
+                The network is unusually busy. Your funds are safe and the seat will finalize —
+                if it doesn’t clear soon,{' '}
+                <a href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">reach us on Discord</a>.
+              </span>
+            )}
+            {isConfirming && solscanUrl && (
+              <a
+                className="txc-verify mono"
+                href={solscanUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {shortSig} ↗
+              </a>
+            )}
+
             {isSigning && stalled && (
               <span className="txc-nudge">
                 Nothing happening? Open your wallet manually or{' '}
@@ -249,5 +404,25 @@ function copyFor(stage: TxStageName, isCreate: boolean): { title: string; sub: s
         title: isCreate ? "Couldn't open the table" : "Couldn't take your seat",
         sub: '',
       }
+  }
+}
+
+/** A distinct, state-specific headline per failure so the card never reads generically. */
+function errorHeadline(code: TxErrorCode, isCreate: boolean): string {
+  switch (code) {
+    case 'rejected':
+      return 'Approval dismissed'
+    case 'insufficient':
+      return 'Not enough to sit down'
+    case 'seat_taken':
+      return 'That seat was just taken'
+    case 'already_seated':
+      return "You're already seated"
+    case 'closed':
+      return 'Deposits are closed'
+    case 'network':
+      return 'The network dropped it'
+    default:
+      return isCreate ? "Couldn't open the table" : "Couldn't take your seat"
   }
 }

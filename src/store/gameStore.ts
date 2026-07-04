@@ -26,7 +26,7 @@ import {
 import bs58 from 'bs58'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import type { PriceRange } from '@/lib/priceRanges'
-import { createAdapters, type Adapters } from '@/lib/adapters'
+import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames } from '@/lib/discovery'
 import {
@@ -51,6 +51,26 @@ export type PlayMode = 'join' | 'create'
  *  error      → simulation/send/confirm failed (message in `error`)
  */
 export type TxStageName = 'preparing' | 'signing' | 'confirming' | 'confirmed' | 'error'
+
+/**
+ * Distinct commit-failure states, each with its own copy + recovery path in the ceremony:
+ *  - rejected       → user declined the wallet prompt
+ *  - insufficient    → not enough USDC (or SOL for fees) to cover the buy-in
+ *  - seat_taken      → the table filled while the user was signing
+ *  - already_seated  → the wallet already holds a seat at this table
+ *  - closed          → deposits closed / the match already started
+ *  - network         → RPC congestion / dropped tx / server (intent) error
+ *  - unknown         → an unmatched program/simulation error (raw kept for support)
+ */
+export type TxErrorCode =
+  | 'rejected'
+  | 'insufficient'
+  | 'seat_taken'
+  | 'already_seated'
+  | 'closed'
+  | 'network'
+  | 'unknown'
+
 export type TxCommit = {
   kind: PlayMode
   stage: TxStageName
@@ -59,7 +79,16 @@ export type TxCommit = {
   feed?: string
   seats?: string // e.g. "2/6" at commit time
   sig?: string
+  /** Epoch-ms the tx was broadcast (stage → confirming) — anchors the finality elapsed clock. */
+  confirmingAt?: number
   error?: string
+  /** Classified failure state — drives the ceremony's error copy + recovery affordances. */
+  errorCode?: TxErrorCode
+  /** The raw underlying error, verbatim — surfaced in the collapsible "Technical details" row. */
+  errorRaw?: string
+  /** Wallet's spendable chip balance (base units) snapshotted at an `insufficient` failure,
+   *  so the card can show "you need X — your wallet has Y" against a stable number. */
+  walletBalance?: number
 }
 
 // ~1h at 500ms snapshots — covers the price cabinet's widest trailing-window tab ('1H')
@@ -319,30 +348,102 @@ const RESUME_PHASE_RANK: Record<string, number> = {
 }
 
 /**
- * Turn a raw deposit error into a user-facing message. `simulateSignAndSend` throws
- * `Error(<AnchorErrorCode>)` for program errors, or an Error with the raw message
- * otherwise — surface something actionable instead of "see console".
+ * Classify a raw commit error into one of the distinct `TxErrorCode` states.
+ * `simulateSignAndSend` throws `Error(<AnchorErrorCode>)` for program errors, the wallet
+ * throws its own reject/decline message, and the RPC throws blockhash/timeout text — each
+ * maps to a bucket the ceremony narrates with its own copy and recovery path.
  */
-function depositErrorMessage(err: unknown, kind: PlayMode = 'join'): string {
+function classifyDepositError(err: unknown): TxErrorCode {
+  if (err instanceof ApiError) return 'network' // intent/room reservation failed server-side
   const msg = err instanceof Error ? err.message : String(err)
-  // Anchor / SPL / system-program cases we can phrase better than the raw code.
-  if (/User rejected|rejected the request|denied|declined|cancell?ed/i.test(msg)) {
-    return 'You cancelled the transaction in your wallet.'
+  if (/User rejected|rejected the request|denied|declined|cancell?ed/i.test(msg)) return 'rejected'
+  if (/already in use|SeatAlreadyExists|AlreadySeated/i.test(msg)) return 'already_seated'
+  if (/MatchFull|SeatTaken|TableFull/i.test(msg)) return 'seat_taken'
+  if (/DepositsClosed|MatchStarted|NotFilling/i.test(msg)) return 'closed'
+  if (/insufficient|0x1\b|InsufficientFunds/i.test(msg)) return 'insufficient'
+  if (/block height exceeded|blockhash|expired|timed out|congest/i.test(msg)) return 'network'
+  return 'unknown'
+}
+
+/** The verbatim error text, kept for the ceremony's "Technical details" copy row. */
+function rawErrorText(err: unknown): string {
+  if (err instanceof ApiError) return `HTTP ${err.status} — ${err.message}`
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * A short user-facing summary per failure state. The ceremony renders richer, context-aware
+ * copy (required-vs-actual balance, refund note, faucet) on top of this, but this string is
+ * the single source for `playError` toasts and the card's fallback sub-headline.
+ */
+function depositErrorMessage(code: TxErrorCode, kind: PlayMode): string {
+  switch (code) {
+    case 'rejected':
+      return 'You dismissed the approval in your wallet — nothing was sent.'
+    case 'insufficient':
+      return "You don't have enough USDC to cover the buy-in and entry fee."
+    case 'seat_taken':
+      return 'This table filled while you were signing — no funds left your wallet.'
+    case 'already_seated':
+      return 'You already have a seat at this table.'
+    case 'closed':
+      return 'This table already started — deposits are closed.'
+    case 'network':
+      return 'The network dropped the transaction. Check your connection and try again.'
+    default:
+      return kind === 'create'
+        ? "Couldn't open the table — the transaction was rejected on-chain."
+        : "Couldn't take your seat — the transaction was rejected on-chain."
   }
-  if (/already in use|SeatAlreadyExists|AlreadySeated/i.test(msg)) {
-    return 'You already have a seat at this table.'
+}
+
+/**
+ * Land a commit failure: classify it, log the distinct state, revert the optimistic seat,
+ * and drive the ceremony into its error view. For an `insufficient` failure we refetch the
+ * chip balance so the card can show "you need X — your wallet has Y" against a live number.
+ * An ApiError carries a specific server message, so we surface that verbatim over the generic
+ * network copy while still tagging the state `network` for the card's treatment.
+ */
+async function failCommit(set: SetState, err: unknown, kind: PlayMode): Promise<void> {
+  const code = classifyDepositError(err)
+  const raw = rawErrorText(err)
+  const message = err instanceof ApiError ? err.message : depositErrorMessage(code, kind)
+  console.warn(`[tx:${kind}] commit failed — ${code}:`, raw)
+
+  let walletBalance: number | undefined
+  if (code === 'insufficient' && adapters) {
+    try {
+      walletBalance = await adapters.chain.chipBalance()
+      set({ chipBalance: walletBalance })
+    } catch {
+      /* leave undefined — the card falls back to the last-known balance */
+    }
   }
-  if (/MatchFull|SeatTaken|TableFull/i.test(msg)) return 'This table just filled up — pick another.'
-  if (/DepositsClosed|MatchStarted|NotFilling/i.test(msg)) return 'This table already started — deposits are closed.'
-  if (/insufficient|0x1\b|InsufficientFunds/i.test(msg)) {
-    return 'Insufficient balance — you need enough USDC (buy-in + entry fee) plus SOL for fees.'
-  }
-  if (/block height exceeded|blockhash|expired|timed out/i.test(msg)) {
-    return 'The network dropped the transaction (RPC congestion). Try again.'
-  }
-  // Unmatched program/simulation errors can be a wall of logs — keep the card readable.
-  const verb = kind === 'create' ? 'open the table' : 'take your seat'
-  return `Couldn't ${verb} — the transaction was rejected on-chain. Check your balance and try again.`
+
+  set((s) => ({
+    seated: false,
+    playError: message,
+    txProgress: s.txProgress
+      ? { ...s.txProgress, stage: 'error', error: message, errorCode: code, errorRaw: raw, walletBalance }
+      : null,
+  }))
+}
+
+/**
+ * The stage callback the chain adapter drives during a commit tx. It advances
+ * `txProgress.stage`, captures the tx signature once broadcast (so the ceremony can
+ * link it to Solscan for verification), and stamps `confirmingAt` the first time we
+ * enter finality — the anchor for the finalize step's elapsed-time clock.
+ */
+function txProgressCallback(set: SetState): TxProgressFn {
+  return (stage, sig) =>
+    set((s) => {
+      if (!s.txProgress) return {}
+      const next: TxCommit = { ...s.txProgress, stage }
+      if (sig) next.sig = sig
+      if (stage === 'confirming' && next.confirmingAt == null) next.confirmingAt = Date.now()
+      return { txProgress: next }
+    })
 }
 
 /**
@@ -782,9 +883,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       // Public room: default (zeroed) join commitment. Private-room joins bind the room
       // code via the /v1/rooms/code/{code} → join_commitment flow (follow-up).
-      const txSig = await adapters.chain.deposit(matchId, undefined, terms.buyIn + terms.entryFee, (stage) =>
-        set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})),
-      )
+      const txSig = await adapters.chain.deposit(matchId, undefined, terms.buyIn + terms.entryFee, txProgressCallback(set))
       set((s) => ({
         lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
@@ -803,13 +902,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       subscribeMatch(matchId)
       void refreshBalance(set)
     } catch (err) {
-      console.error('deposit failed:', err)
-      const msg = depositErrorMessage(err)
-      set((s) => ({
-        seated: false,
-        playError: msg,
-        txProgress: s.txProgress ? { ...s.txProgress, stage: 'error', error: msg } : null,
-      }))
+      await failCommit(set, err, 'join')
     }
   },
 
@@ -870,7 +963,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         fillWindowSec: cp.fill_window_sec,
         maxOracleConfidence: cp.max_oracle_confidence,
         oracleExponent: cp.oracle_exponent,
-      }, (stage) => set((s) => (s.txProgress ? { txProgress: { ...s.txProgress, stage } } : {})))
+      }, txProgressCallback(set))
 
       // 3. Report the finalized txhash — the server RPC-verifies it and registers the room.
       let matchUuid: string | null = null
@@ -898,13 +991,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
       void refreshBalance(set)
     } catch (err) {
-      console.error('create failed:', err)
-      const msg = err instanceof ApiError ? err.message : depositErrorMessage(err, 'create')
-      set((s) => ({
-        seated: false,
-        playError: msg,
-        txProgress: s.txProgress ? { ...s.txProgress, stage: 'error', error: msg } : null,
-      }))
+      await failCommit(set, err, 'create')
     }
   },
 

@@ -211,7 +211,7 @@ async function simulateSignAndSend(
     const code = anchorErrorCode(err)
     throw code ? new Error(code) : err
   }
-  onProgress?.('confirming') // broadcast — waiting on finality
+  onProgress?.('confirming', sig) // broadcast — waiting on finality
   // A bare-signature confirmTransaction(sig, commitment) has no expiry — if the RPC's
   // signature-subscribe WS never fires (common on congested/public endpoints), this hangs
   // forever with no error surfaced. Passing the blockhash strategy bounds it to the
@@ -503,7 +503,7 @@ function createLiveChain(): ChainClient {
         throw err
       }
 
-      onProgress?.('confirming') // broadcast — waiting on finality
+      onProgress?.('confirming', sig) // broadcast — waiting on finality
       await conn.confirmTransaction(sig, 'finalized')
       return { txSig: sig, matchPda: matchAcct.toBase58() }
     },
