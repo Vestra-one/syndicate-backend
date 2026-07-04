@@ -682,10 +682,34 @@ export function createPriceBoard(): PriceBoardHandle {
 
     const raw = history.filter((h) => Number.isFinite(h.price))
     if (raw.length < 2 || price == null) {
-      cx.fillStyle = 'rgba(208,184,138,0.55)'
-      cx.font = `500 26px ${SERIF}`
+      // Empty-chart state: a dimmed grid + a pulsing marker on the mid-line + a
+      // label, so a warming-up feed reads as "waiting for the first tick" rather
+      // than a broken panel with one stray line.
+      cx.strokeStyle = faint
+      cx.lineWidth = 1
+      for (let i = 0; i <= 4; i++) {
+        const gy = gy0 + ((gy1 - gy0) * i) / 4
+        cx.beginPath(); cx.moveTo(gx0, gy); cx.lineTo(gx1, gy); cx.stroke()
+      }
+      for (let i = 0; i <= 4; i++) {
+        const gx = gx0 + ((gx1 - gx0) * i) / 4
+        cx.beginPath(); cx.moveTo(gx, gy0); cx.lineTo(gx, gy1); cx.stroke()
+      }
+      const midX = (gx0 + gx1) / 2
+      const midY = (gy0 + gy1) / 2
+      const pulse = 0.5 + 0.5 * Math.sin(clock / 320)
+      cx.save()
+      cx.globalAlpha = 0.4 + 0.5 * pulse
+      cx.shadowColor = accent
+      cx.shadowBlur = 8 + 14 * pulse
+      cx.fillStyle = accent
+      cx.beginPath(); cx.arc(midX, midY, 5 + 2 * pulse, 0, Math.PI * 2); cx.fill()
+      cx.restore()
+      cx.fillStyle = dim
+      cx.font = `500 22px ${SERIF}`
       cx.textAlign = 'center'
-      cx.fillText('awaiting price feed…', SCW / 2, (gy0 + gy1) / 2)
+      cx.textBaseline = 'middle'
+      cx.fillText('waiting for first tick', midX, midY + 42)
       drawFooterPlaque(clock)
       screenTex.needsUpdate = true
       return
@@ -745,6 +769,7 @@ export function createPriceBoard(): PriceBoardHandle {
 
     // ---- horizontal grid + right price axis (skip ticks that collide with a pill) ----
     cx.font = `500 18px ${SANS}`
+    let lastYLabel = ''
     for (let i = 0; i <= 4; i++) {
       const v = vmin + ((vmax - vmin) * i) / 4
       const gy = toY(v)
@@ -756,10 +781,15 @@ export function createPriceBoard(): PriceBoardHandle {
       cx.stroke()
       const collides = Math.abs(gy - ly) < 28 || (py != null && Math.abs(gy - py) < 28)
       if (collides) continue
+      // On a near-flat span every tick rounds to the same figure; drop repeats so
+      // the axis never reads "62,457 / 62,457" stacked down the edge.
+      const label = fmtPrice(v)
+      if (label === lastYLabel) continue
+      lastYLabel = label
       cx.fillStyle = dim
       cx.textAlign = 'left'
       cx.textBaseline = 'middle'
-      cx.fillText(fmtPrice(v), gx1 + 14, gy)
+      cx.fillText(label, gx1 + 14, gy)
     }
 
     // ---- vertical grid + bottom time axis ----

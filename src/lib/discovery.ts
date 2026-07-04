@@ -7,7 +7,7 @@ export function ratedScore(g: LiveGame): number {
 }
 
 /** REST timestamps are ms epoch (§1), but on-chain-derived values can leak seconds; normalize. */
-function toEpochMs(ts: number | null | undefined): number | undefined {
+export function toEpochMs(ts: number | null | undefined): number | undefined {
   if (ts == null) return undefined
   return ts > 1e12 ? ts : ts * 1000
 }

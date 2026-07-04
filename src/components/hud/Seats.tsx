@@ -4,7 +4,7 @@ import { seatAlias, seatTag } from '@/lib/seats'
 import { formatChips } from '@/lib/format'
 import { useNow } from '@/lib/useNow'
 import { useAnchor } from '@/lib/useAnchor'
-import { projectPot, projectSeatAngle, seatAngles } from '@/three/table/tableView'
+import { projectPot, projectSeatAngle, seatFanAngles } from '@/three/table/tableView'
 import type { MatchStateView, PublicEvent, SeatView } from '@/lib/protocol'
 import { SeatPod, type StatusTone } from './SeatPod'
 
@@ -29,15 +29,15 @@ export function Seats() {
   const others = match.seats
     .filter((s) => s.seat !== match.yourSeat)
     .sort((a, b) => a.seat - b.seat)
-  const angles = seatAngles(others.length)
+  const angleFor = seatFanAngles(match.seats.map((s) => s.seat), match.yourSeat)
 
   return (
     <div className="table-seats">
-      {others.map((s, i) => (
+      {others.map((s) => (
         <OpponentPod
           key={s.seat}
           seat={s}
-          angle={angles[i]}
+          angle={angleFor.get(s.seat) ?? 0}
           match={match}
           feed={feed}
           token={token}
@@ -126,6 +126,11 @@ function OpponentPod({
   const active = match.toActSeat === seat.seat && !seat.folded
   const sigil = SIGILS[alias]
 
+  // A check moves no money, so it needs its own visible beat: flash CHECK on
+  // the plaque for ~1.6s after the action lands (the 3D felt ripple pairs with it).
+  const la = lastAction(feed, seat.seat)
+  const flashCheck = la?.kind === 'action' && la.action === 'check' && now - la.ts < 1600
+
   // Countdown pip on the acting seat. "You" gets the real server deadline;
   // opponents don't expose one, so we count their allotted action time from the
   // moment they took the turn (stamped when `active` flips on).
@@ -161,6 +166,8 @@ function OpponentPod({
         active={active}
         folded={seat.folded}
         checked={status.tone === 'called'}
+        allIn={seat.allIn}
+        flashCheck={flashCheck}
         timer={timer}
         dealer={match.buttonSeat === seat.seat}
         side={angle < 0 ? 'left' : 'right'}

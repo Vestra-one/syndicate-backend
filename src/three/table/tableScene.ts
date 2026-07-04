@@ -3,7 +3,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createPriceBoard } from './priceBoard'
-import { createPotPile } from './pot'
+import { createPotPile, createCoinKit } from './pot'
+import { createSeatChips, type SeatChipState } from './seatChips'
 import {
   bindTableView,
   unbindTableView,
@@ -46,6 +47,12 @@ export interface TableSceneHandle {
   feltY: number
   /** Drive the 3D coin pile at the centre of the felt from the live pot value. */
   setPot: (amount: number) => void
+  /** Drive the per-seat coin stacks + committed piles from live seat state. */
+  setSeats: (seats: SeatChipState[]) => void
+  /** A check at `seat`: ripple the felt (no coins move). */
+  knock: (seat: number) => void
+  /** Award the pot to `seat`: stream coins from the pot into their stack. */
+  awardPot: (seat: number) => void
   /** Show or hide the price-board cabinet (hidden on discovery, shown in-match). */
   setPriceBoardVisible: (visible: boolean) => void
   dispose: () => void
@@ -860,10 +867,19 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   bindPriceBoardTabs(priceBoard.getTabAnchors())
   bindPriceChartButton(priceBoard.getChartButtonAnchor())
 
+  // ---- coins (one shared kit: pot heap + every seat stack draw from it) ----
+  // The struck-gold coin's geometry and textures are minted once and shared, so
+  // the pot and all six seat stacks are one set of GPU assets, not seven.
+  const coinKit = createCoinKit()
+
   // ---- pot (3D coin heap, centre-front of the felt) ----
   // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1) })
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit })
   scene.add(potPile.group)
+
+  // ---- per-seat chips (personal stacks + committed piles on the felt) ----
+  const seatChips = createSeatChips({ feltY: yFelt, kit: coinKit })
+  scene.add(seatChips.group)
 
   // ---- floor ----
   // No floor mesh — the room backdrop supplies the floor. We keep its world Y
@@ -984,6 +1000,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
     potPile.update(t)
+    seatChips.update(t)
     priceBoard.update(t)
     composer.render()
   }
@@ -1016,6 +1033,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     unbindPriceBoardTabs()
     unbindPriceChartButton()
     potPile.dispose()
+    seatChips.dispose()
+    coinKit.dispose()
     priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
@@ -1041,6 +1060,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     tableRadius: R_OUTER,
     feltY: yFelt,
     setPot: (amount: number) => potPile.setAmount(amount),
+    setSeats: (s: SeatChipState[]) => seatChips.setSeats(s),
+    knock: (seat: number) => seatChips.knock(seat),
+    awardPot: (seat: number) => seatChips.awardPot(seat),
     setPriceBoardVisible: (v: boolean) => { priceBoard.group.visible = v },
     dispose,
   }

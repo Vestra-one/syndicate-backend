@@ -80,6 +80,8 @@ interface GameState {
   activeGames: LiveGame[]
   upcomingGames: UpcomingGame[]
   discoveryStatus: DiscoveryStatus
+  /** Epoch-ms of the last successful discovery load — drives the live "updated Xs ago" label. */
+  discoveryUpdatedAt: number | null
   dashboardSort: DashboardSortKey
 
   status: ConnectionStatus
@@ -126,10 +128,13 @@ interface GameState {
   lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
   txProgress: TxCommit | null // live commit tx being narrated by the waiting ceremony
   pendingInvite: string | null // matchId from a ?table=… deep-link, awaiting the user's accept
+  inviteFrom: string | null // the inviter's pseudonymous alias from the deep-link's ?from= param
 
   // actions
   fetchBalance: () => Promise<void>
-  loadDiscovery: () => Promise<void>
+  /** Load the discovery feed. `silent` polls skip the loading flash and keep the
+   *  last-good list on a transient failure (used by the dashboard's live ticker). */
+  loadDiscovery: (opts?: { silent?: boolean }) => Promise<void>
   ingestLivePrice: (price: number, ts: number) => void
   setPriceBoardRange: (range: PriceRange) => void
   openPriceChart: () => void
@@ -149,10 +154,14 @@ interface GameState {
   setCreateBuyIn: (baseUnits: number) => void
   /** Set the fill window (seconds) for the table being created — clamped to createLimits. */
   setCreateFillWindow: (sec: number) => void
+  /** Switch the market (price feed) for the table being created, keeping the host's buy-in & fill window. */
+  setCreateFeed: (feed: string) => void
   dismissInvite: () => void
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
   dismissTxProgress: () => void
+  /** Bail out of a commit before it's signed — reverts the optimistic seat and clears the ceremony. */
+  abortTxCommit: () => void
   sealPrediction: (price: FixedPrice) => Promise<void>
   /** Withdraw an early lock-in that hasn't been sealed yet. */
   clearQueuedPrediction: () => void
@@ -231,7 +240,7 @@ function configToTerms(config: ApiConfig, feed: string): TableTerms {
     settlementWindowSec: d.begin_live_window_sec,
     geofenceBlocklist: [],
     allowDuplicateWalletPerMatch: false,
-    fillWindowSec: clamp(3600, config.bounds.fill_window_sec.min, config.bounds.fill_window_sec.max),
+    fillWindowSec: clamp(300, config.bounds.fill_window_sec.min, config.bounds.fill_window_sec.max),
     practiceMode: false,
     timelockTargetRound: 0,
   }
@@ -358,6 +367,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   activeGames: [],
   upcomingGames: [],
   discoveryStatus: 'idle',
+  discoveryUpdatedAt: null,
   dashboardSort: 'gameTime',
 
   status: 'offline',
@@ -394,6 +404,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   lastTx: null,
   txProgress: null,
   pendingInvite: null,
+  inviteFrom: null,
 
   fetchBalance: async () => {
     if (!adapters) adapters = createAdapters()
@@ -401,8 +412,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     await refreshBalance(set, true)
   },
 
-  loadDiscovery: async () => {
-    set({ discoveryStatus: 'loading' })
+  loadDiscovery: async (opts) => {
+    const silent = opts?.silent ?? false
+    // Silent polls must never flash the spinner — only an explicit/first load flips to 'loading'.
+    if (!silent) set({ discoveryStatus: 'loading' })
     const [activeResult, upcomingResult] = await Promise.allSettled([
       fetchActiveGames(),
       fetchUpcomingGames(),
@@ -411,11 +424,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     const upcoming = upcomingResult.status === 'fulfilled' ? upcomingResult.value : []
     if (activeResult.status === 'rejected') console.warn('active-games fetch failed:', activeResult.reason)
     if (upcomingResult.status === 'rejected') console.warn('upcoming-games fetch failed:', upcomingResult.reason)
-    // Only show error if BOTH endpoints fail
+    // Only surface error if BOTH endpoints fail.
     if (activeResult.status === 'rejected' && upcomingResult.status === 'rejected') {
-      set({ activeGames: [], upcomingGames: [], discoveryStatus: 'error' })
+      // A transient blip on a background poll shouldn't blank a working lobby — keep the last-good list.
+      if (!silent) set({ activeGames: [], upcomingGames: [], discoveryStatus: 'error' })
     } else {
-      set({ activeGames: active, upcomingGames: upcoming, discoveryStatus: 'ready' })
+      set({ activeGames: active, upcomingGames: upcoming, discoveryStatus: 'ready', discoveryUpdatedAt: Date.now() })
     }
   },
 
@@ -550,7 +564,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
-    set({ playError: null, pendingInvite: null })
+    set({ playError: null, pendingInvite: null, inviteFrom: null })
 
     try {
       const addr = await adapters.wallet.connect()
@@ -651,6 +665,26 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!s.terms || !s.createLimits) return {}
     const fillWindowSec = clamp(Math.round(sec), s.createLimits.fillWindowMinSec, s.createLimits.fillWindowMaxSec)
     return { terms: { ...s.terms, fillWindowSec } }
+  }),
+
+  setCreateFeed: (feed) => set((s) => {
+    if (!s.terms || !createCtx) return {}
+    if (feed === s.terms.priceFeedId) return {}
+    if (!s.terms.supportedFeeds.includes(feed)) return {}
+    createCtx = { ...createCtx, feed }
+    // Rebuild the feed-derived defaults (blinds scale off buy-in, etc.) but keep
+    // the host's own choices so switching markets doesn't reset their edits.
+    const base = configToTerms(createCtx.config, feed)
+    return {
+      terms: {
+        ...base,
+        buyIn: s.terms.buyIn,
+        rakeCap: s.terms.buyIn,
+        smallBlind: Math.max(1, Math.floor(s.terms.buyIn / 200)),
+        bigBlind: Math.max(2, Math.floor(s.terms.buyIn / 100)),
+        fillWindowSec: s.terms.fillWindowSec,
+      },
+    }
   }),
 
   /** Open the v2 WebSocket (idempotent). Spectate needs no wallet; if one is connected the
@@ -876,7 +910,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   dismissTxProgress: () => set({ txProgress: null }),
 
-  dismissInvite: () => set({ pendingInvite: null }),
+  // User cancelled from the ceremony before signing. Safe only pre-signature: no
+  // funds have moved yet, so we just revert the optimistic seat and close the view.
+  // If the wallet prompt is up, the in-flight sign() still resolves/rejects, but its
+  // downstream set()s are all guarded by `s.txProgress` and become no-ops.
+  abortTxCommit: () => set({ txProgress: null, seated: false }),
+
+  dismissInvite: () => set({ pendingInvite: null, inviteFrom: null }),
 
   sealPrediction: async (price) => {
     const { terms, match, sealStatus, sealClosed } = get()

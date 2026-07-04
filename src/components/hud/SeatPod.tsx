@@ -24,6 +24,10 @@ export interface SeatPodProps {
   active?: boolean
   folded?: boolean
   checked?: boolean
+  /** all-in this hand — pins a gold ALL-IN ribbon on the pod */
+  allIn?: boolean
+  /** momentary CHECK beat — a check moves no money, so it needs a visible flash */
+  flashCheck?: boolean
   timer?: string
   /** holds the dealer button this hand */
   dealer?: boolean
@@ -33,6 +37,17 @@ export interface SeatPodProps {
   empty?: boolean
   /** your own chair — a lit, highlighted pod */
   you?: boolean
+  /** the open chair you're about to take — a highlighted, unlocked "sit here" marker */
+  reserved?: boolean
+}
+
+function SeatGlyph() {
+  return (
+    <svg className="pod-lock pod-sit" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="7" r="3.4" fill="currentColor" />
+      <path fill="currentColor" d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7v1H5z" />
+    </svg>
+  )
 }
 
 function LockGlyph() {
@@ -56,12 +71,15 @@ export function SeatPod({
   active,
   folded,
   checked,
+  allIn,
+  flashCheck,
   timer,
   dealer,
   side = 'left',
   size = 'full',
   empty,
   you,
+  reserved,
 }: SeatPodProps) {
   const cls = [
     'pod',
@@ -69,7 +87,9 @@ export function SeatPod({
     size === 'compact' ? 'pod--compact' : '',
     active ? 'pod--active' : '',
     folded ? 'pod--folded' : '',
+    allIn ? 'pod--allin' : '',
     empty ? 'pod--empty' : '',
+    reserved ? 'pod--reserved' : '',
     you ? 'pod--you' : '',
   ]
     .filter(Boolean)
@@ -78,7 +98,9 @@ export function SeatPod({
   return (
     <div className={cls}>
       <div className="pod-avatar">
-        {empty ? (
+        {reserved ? (
+          <SeatGlyph />
+        ) : empty ? (
           <LockGlyph />
         ) : typeof emblem === 'string' ? (
           <span className="pod-mono">{emblem}</span>
@@ -106,7 +128,7 @@ export function SeatPod({
         {stack && <div className="pod-stack">Stack: {stack}</div>}
       </div>
 
-      {seatNo != null && !empty && <span className="pod-seatno">{seatNo}</span>}
+      {seatNo != null && (!empty || reserved) && <span className="pod-seatno">{seatNo}</span>}
 
       {dealer && !empty && (
         <span className="pod-dealer" title="Dealer button" aria-label="Dealer button">
@@ -118,6 +140,12 @@ export function SeatPod({
         <span className="pod-check" aria-hidden="true">
           <svg viewBox="0 0 20 20"><path fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" d="M5 10.5l3.2 3.2L15 6.5" /></svg>
         </span>
+      )}
+
+      {allIn && !empty && <span className="pod-allin-ribbon">ALL-IN</span>}
+
+      {flashCheck && (
+        <span className="pod-check-flash" aria-hidden="true" key={`chk-${name}`}>CHECK</span>
       )}
 
       {timer && <span className="pod-timer">{timer}</span>}

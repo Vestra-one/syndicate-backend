@@ -18,6 +18,17 @@ export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
 }
 
 /**
+ * A stable, characterful host alias for invite links, where no seat index
+ * exists yet. Deterministic from the match id — the same table always presents
+ * the same inviter name + emblem — and leaks no identity.
+ */
+export function hostAlias(matchId: string): string {
+  let h = 0
+  for (let i = 0; i < matchId.length; i++) h = (Math.imul(h, 31) + matchId.charCodeAt(i)) >>> 0
+  return ALIASES[h % ALIASES.length]
+}
+
+/**
  * A stable "read" on each opponent's style — the behaviour badge under their
  * pod (mirrors the reference's TIGHT / AGGRESSIVE / SAFE / PASSIVE / UNKNOWN).
  * Deterministic from the seat index, so it leaks no identity; you're always the

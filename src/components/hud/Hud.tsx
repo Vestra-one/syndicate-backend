@@ -10,6 +10,7 @@ import { Resolution } from './Resolution'
 import { Lobby } from './Lobby'
 import { TxCeremony } from './TxCeremony'
 import { WaitingRoom, useWaiting } from './WaitingRoom'
+import { useLobbyPreview } from './Lobby'
 import { PriceBoardTabs } from './PriceBoardTabs'
 import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
@@ -58,9 +59,15 @@ export function Hud() {
   // screen (its own rails, seat ring, dock). Suppress the in-match chrome so the
   // two layouts don't stack; the brand + wallet header stays put in both.
   const { active: waiting } = useWaiting()
+  // While the join/create card is previewing a table you haven't sat at yet, the
+  // live-table chrome (opponent pods, feed, betting panel, your-position) has no
+  // real data — showing it ghosted reads as a bug, so suppress it entirely. The
+  // Lobby draws its own anchored seat ring instead.
+  const { open: lobby } = useLobbyPreview()
+  const inMatch = !waiting && !lobby
   return (
     <div className="hud">
-      {!waiting && <Seats />}
+      {inMatch && <Seats />}
 
       <header className="hud-top">
         <Brand />
@@ -69,13 +76,13 @@ export function Hud() {
 
       <PriceBoardTabs />
 
-      {!waiting && (
+      {inMatch && (
         <div className="hud-mid">
           <ActionFeed />
         </div>
       )}
 
-      {!waiting && (
+      {inMatch && (
         <footer className="hud-bottom">
           <YourPosition />
           <BettingPanel />

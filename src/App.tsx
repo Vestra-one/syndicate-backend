@@ -28,8 +28,8 @@ export default function App() {
   // A ?table=<id> invite deep-link → stash it; the Dashboard surfaces an accept
   // prompt (needs a user gesture to open the wallet, so we never auto-join on load).
   useEffect(() => {
-    const id = consumeInviteParam()
-    if (id) useGameStore.setState({ pendingInvite: id })
+    const inv = consumeInviteParam()
+    if (inv) useGameStore.setState({ pendingInvite: inv.matchId, inviteFrom: inv.inviter })
   }, [])
 
   // Stream live BTC/USD ticks into the cabinet chart (keeps it alive pre-match).

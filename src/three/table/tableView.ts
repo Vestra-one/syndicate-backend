@@ -53,14 +53,32 @@ export function seatAngles(n: number): number[] {
   return [...l, ...r]
 }
 
+/**
+ * The single source of truth for which seat sits at which angle: you (if seated)
+ * dead front at 0°, opponents fanned across the front arc in stable seat order.
+ * Both the HUD pods (Seats.tsx) and the 3D coin stacks (seatChips) read this, so
+ * a player's medallion and their physical chips always share the same bearing.
+ */
+export function seatFanAngles(
+  seatIndices: number[],
+  yourSeat: number | undefined,
+): Map<number, number> {
+  const others = seatIndices.filter((s) => s !== yourSeat).sort((a, b) => a - b)
+  const angles = seatAngles(others.length)
+  const map = new Map<number, number>()
+  others.forEach((s, i) => map.set(s, angles[i]))
+  if (yourSeat != null && seatIndices.includes(yourSeat)) map.set(yourSeat, 0)
+  return map
+}
+
 function seatWorld(angleDeg: number, radius = R_SEAT, y = Y_SEAT): THREE.Vector3 {
   const a = (angleDeg * Math.PI) / 180
   return new THREE.Vector3(Math.sin(a) * radius, y, Math.cos(a) * radius)
 }
-// The 3D coin heap is centred on (0, felt, 1.1); the amount label floats just
-// above the top of the pile and a touch toward the camera so the number reads
-// over the coins rather than buried in them.
-const POT_WORLD = new THREE.Vector3(0, 0.85, 1.25)
+// The 3D coin heap is centred on (0, felt, 1.1); the amount label floats well
+// clear above the top of the pile (raised so a tall pot never buries the number
+// in coins) and a touch toward the camera so it reads over the heap.
+const POT_WORLD = new THREE.Vector3(0, 1.24, 1.2)
 // The pre-game countdown sits lower and further forward than the pot label so the
 // ring rests on the open felt, clear of the price cabinet behind it.
 const FELT_CENTRE_WORLD = new THREE.Vector3(0, 0.42, 1.42)

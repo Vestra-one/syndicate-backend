@@ -223,7 +223,7 @@ export interface UpcomingGame {
   fillDeadline?: number
 }
 
-export type DashboardSortKey = 'gameTime' | 'potSize' | 'buyIn' | 'feed'
+export type DashboardSortKey = 'gameTime' | 'potSize' | 'buyIn' | 'newest'
 
 export interface MatchHistorySummary {
   matchId: string

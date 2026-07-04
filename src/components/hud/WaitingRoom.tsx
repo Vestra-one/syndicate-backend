@@ -6,7 +6,7 @@ import { formatChips, formatCountdown } from '@/lib/format'
 import { buildInviteUrl } from '@/lib/invite'
 import { projectFeltCentre, projectWaitingSeat } from '@/three/table/tableView'
 import { PAST_FILLING_PHASES } from '@/lib/protocol'
-import { seatAlias, seatTag, describeEvent } from '@/lib/seats'
+import { seatAlias, seatTag, describeEvent, hostAlias } from '@/lib/seats'
 import { SeatPod } from './SeatPod'
 import { personaEmblem } from './Seats'
 import { ReclaimCard } from './ReclaimCard'
@@ -126,7 +126,7 @@ function SeatRing({ max, match, filled }: { max: number; match: ReturnType<typeo
 }
 
 /** Positions a pod against its projected 3D anchor on the felt. */
-function SeatSlot({ angle, side, children }: { angle: number; side: 'left' | 'right'; children: React.ReactNode }) {
+export function SeatSlot({ angle, side, children }: { angle: number; side: 'left' | 'right'; children: React.ReactNode }) {
   const ref = useAnchor(useCallback(() => projectWaitingSeat(angle), [angle]))
   return (
     <div ref={ref} className={`wr-seat wr-seat--${side}`} style={{ opacity: 0 }}>
@@ -158,7 +158,7 @@ function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stac
  * Spans ±SPREAD so the pods sit on the open felt, clear of the flanking rails.
  * Ordered left→right for a stable slot mapping.
  */
-function waitingSeatAngles(n: number): number[] {
+export function waitingSeatAngles(n: number): number[] {
   if (n <= 0) return []
   if (n === 1) return [0]
   const SPREAD = 52
@@ -405,7 +405,8 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   const matchId = terms?.onchainMatchId ?? terms?.matchPda ?? null
   const [copied, setCopied] = useState(false)
   if (!matchId || filled >= max) return null
-  const url = buildInviteUrl(matchId)
+  // Sign the link with a stable table alias so the invitee sees "<name> invited you".
+  const url = buildInviteUrl(matchId, hostAlias(matchId))
 
   const copy = () => {
     void navigator.clipboard?.writeText(url)

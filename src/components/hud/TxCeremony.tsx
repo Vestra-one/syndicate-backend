@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { useWallet } from '@solana/wallet-adapter-react'
 import { useGameStore } from '@/store/gameStore'
 import type { TxStageName } from '@/store/gameStore'
 
@@ -35,14 +36,29 @@ const RAIL: { key: string; label: string }[] = [
 export function TxCeremony() {
   const tx = useGameStore((s) => s.txProgress)
   const dismiss = useGameStore((s) => s.dismissTxProgress)
+  const abort = useGameStore((s) => s.abortTxCommit)
   const createTable = useGameStore((s) => s.createTable)
   const joinTable = useGameStore((s) => s.joinTable)
+  const storeWallet = useGameStore((s) => s.walletAddress)
+  const { wallet, publicKey } = useWallet()
+
+  // A 60s stall on the wallet prompt is the classic "the popup opened behind my
+  // window / never opened" case — surface a manual escape hatch once it drags.
+  const [stalled, setStalled] = useState(false)
 
   // On success, linger just long enough to land the "you're in" beat, then hand
   // off to the seated table (the lobby is already gone — `seated` is true).
   useEffect(() => {
     if (tx?.stage !== 'confirmed') return
     const t = setTimeout(() => useGameStore.getState().dismissTxProgress(), 2000)
+    return () => clearTimeout(t)
+  }, [tx?.stage])
+
+  // Arm the no-response nudge only while the wallet prompt is actually up.
+  useEffect(() => {
+    setStalled(false)
+    if (tx?.stage !== 'signing') return
+    const t = setTimeout(() => setStalled(true), 60_000)
     return () => clearTimeout(t)
   }, [tx?.stage])
 
@@ -63,18 +79,34 @@ export function TxCeremony() {
     return 'pending'
   }
 
+  const isSigning = tx.stage === 'signing'
+  // Cancelling is only safe before the signature exists — i.e. while we're still
+  // preparing the tx or waiting on the wallet prompt. Once broadcast, there's
+  // nothing to abort.
+  const canCancel = tx.stage === 'preparing' || isSigning
+
   const emblemMode = isError ? 'error' : isDone ? 'done' : 'work'
+
+  const walletName = wallet?.adapter.name ?? 'your wallet'
+  const walletIcon = wallet?.adapter.icon ?? null
+  const address = publicKey?.toBase58() ?? storeWallet
+  const shortAddr = address ? `${address.slice(0, 4)}…${address.slice(-4)}` : null
 
   const { title, sub } = copyFor(tx.stage, isCreate)
   const explorerUrl = tx.sig
     ? `https://explorer.solana.com/tx/${tx.sig}?cluster=devnet`
     : null
 
-  const retry = () => {
-    dismiss()
-    // Re-enter the same commit; module-level ctx (createCtx / joinRoom) persists.
+  // Re-enter the same commit; module-level ctx (createCtx / joinRoom) persists.
+  // `reset` must clear the optimistic `seated` flag too, or the re-entry hits the
+  // `if (seated) return` guard and silently no-ops. From the error screen `seated`
+  // is already false, but from the mid-signing nudge it's still true — so abort().
+  const recommit = (reset: () => void) => {
+    reset()
     setTimeout(() => (isCreate ? createTable() : joinTable()), 60)
   }
+  const retry = () => recommit(dismiss)
+  const retryFromStall = () => recommit(abort)
 
   return (
     <div className={`txc ${isDone ? 'txc--done' : ''} ${isError ? 'txc--error' : ''}`}>
@@ -96,6 +128,16 @@ export function TxCeremony() {
         <div className="txc-title">{title}</div>
         <div className="txc-sub">{isError ? tx.error : sub}</div>
 
+        {/* Wallet identity — at the approve beat, tell the player exactly where to
+            look and which account is signing. */}
+        {isSigning && (
+          <div className="txc-wallet">
+            {walletIcon && <img className="txc-wallet-icon" src={walletIcon} alt="" aria-hidden="true" />}
+            <span className="txc-wallet-name">Confirm in {walletName}</span>
+            {shortAddr && <span className="txc-wallet-addr mono"> · {shortAddr}</span>}
+          </div>
+        )}
+
         {/* The stake — always in view so the player knows exactly what's committing */}
         {!isError && (
           <div className="txc-stake">
@@ -103,14 +145,7 @@ export function TxCeremony() {
               {fmt(tx.amount)} {tx.chipsToken}
             </span>
             <span className="eyebrow">
-              {isDone
-                ? isCreate
-                  ? 'table is live'
-                  : 'seat secured'
-                : isCreate
-                  ? 'buy-in + entry fee'
-                  : 'buy-in + entry fee'}
-              {tx.seats ? ` · ${tx.seats} seated` : ''}
+              {isDone ? (isCreate ? 'table is live' : 'seat secured') : 'buy-in + entry fee'}
             </span>
           </div>
         )}
@@ -154,7 +189,7 @@ export function TxCeremony() {
         ) : (
           <div className="txc-foot">
             <span className="txc-hint eyebrow">
-              {tx.stage === 'signing'
+              {isSigning
                 ? 'Confirm the transaction in your wallet'
                 : 'Finality on Solana takes a few seconds — keep this open'}
             </span>
@@ -162,6 +197,17 @@ export function TxCeremony() {
               <span className="txc-dots" aria-hidden="true">
                 <i /><i /><i />
               </span>
+            )}
+            {isSigning && stalled && (
+              <span className="txc-nudge">
+                Nothing happening? Open your wallet manually or{' '}
+                <button className="txc-nudge-link" onClick={retryFromStall}>retry</button>.
+              </span>
+            )}
+            {canCancel && (
+              <button className="txc-cancel" onClick={abort}>
+                Cancel
+              </button>
             )}
           </div>
         )}
