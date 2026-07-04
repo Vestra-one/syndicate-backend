@@ -288,6 +288,15 @@ pub async fn get_match(
         return Err(ApiError::not_found("match not found"));
     };
     drop(client);
+    if !m.is_terminal() {
+        let handle = st.registry.spawn(&st, m.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if handle.cmd.send(Cmd::Snapshot(tx)).await.is_ok() {
+            if let Ok(view) = rx.await {
+                return Ok(Json(view));
+            }
+        }
+    }
     Ok(Json(crate::view::match_view(&st, &m, None).await))
 }
 

@@ -133,7 +133,8 @@ surface it via `/v1/wallets/{wallet}/claimables`.
 - **Historical**: `GET /v1/matches/history?cursor=` → settled/voided matches, keyset-paginated.
 - **Detail**: `GET /v1/matches/{id}` → params, phase, seats (wallet, stack, committed,
   folded, sealed flag, engine_seat), timing (street schedule with absolute open/close
-  timestamps), pot, `to_act` + deadline, and after settlement a `reveal` block
+  timestamps), pot, `to_act`, `open_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}`
+  when a live turn is open, and after settlement a `reveal` block
   `{settlement_price, predictions:[{seat, price, source:"sealed"|"spot"}]}`.
 - **Event log**: `GET /v1/matches/{id}/events?after_seq=&limit=` — every action with its
   `feed_price` stamp (§8). Sealed ciphertexts are redacted until reveal.
@@ -180,8 +181,8 @@ tells you the seat. The button advances clockwise every street.
 
 Streets and their durations are exactly what the creator configured. Turn flow over WS:
 
-- `your_turn {seat, to_call, min_raise_to, deadline_ms}` — the fixed per-action timer;
-  `deadline_ms` is absolute and already capped by the street close.
+- `your_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — the fixed
+  per-action timer; `deadline_ms` is absolute and already capped by the street close.
 - Send `act {match_id, seat_index, nonce, prev_head_hex, action, signature}` with
   `action ∈ fold | check | call | bet_to{amount} | raise_to{amount} | all_in`.
   `nonce` increments per seat; `prev_head_hex` is the current action-chain head from the
@@ -201,13 +202,15 @@ All state lives server-side; the socket is stateless.
 
 1. Re-auth (§2).
 2. `GET /v1/wallets/{wallet}/active` → every non-terminal seat/candidacy + settled-unclaimed:
-   `[{match_id, phase, seat_index, your_turn?, deadline_ts}]`. Deep-link the user straight
+   `[{match_id, phase, seat_index, your_turn, deadline_ts, open_turn}]`. Deep-link the user straight
    back to the table.
 3. WS `subscribe {channel:{match:{match_id}}, last_seq:0}` → server sends
    `snapshot {state, last_seq}` (current table view) followed by `event {seq, ...}` for the
    **complete ordered history**, then the live stream — gap-free, dedup by `seq`. Pass your
    last seen `last_seq` instead of 0 to fetch only the delta.
-4. Deadlines are absolute; if the player timed out while away, the default action is
+4. If `snapshot.state.open_turn.seat === your seat_index`, render the action controls from
+   `open_turn`; this is the recoverable form of the transient `your_turn` frame.
+5. Deadlines are absolute; if the player timed out while away, the default action is
    already in the history.
 
 ## 10. Settlement & reveal

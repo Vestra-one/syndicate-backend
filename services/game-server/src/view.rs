@@ -163,6 +163,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "round": engine.map(|e| e.round),
         "current_bet": engine.map(|e| e.current_bet),
         "to_act": engine.and_then(|e| e.to_act),
+        "open_turn": Value::Null,
         "reveal": reveal,
         "last_seq": row.event_count,
         "head": hex::encode(&row.event_head),

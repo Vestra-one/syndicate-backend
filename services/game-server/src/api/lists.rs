@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use crate::app::AppState;
 use crate::db;
 use crate::error::ApiError;
+use crate::runtime::Cmd;
 use crate::util::{now_ms, ts_ms};
 
 #[derive(Deserialize)]
@@ -187,23 +188,45 @@ pub async fn get_active(
             &[&wallet],
         )
         .await?;
-    let active: Vec<Value> = rows
-        .iter()
-        .map(|r| {
-            let status: String = r.get("status");
-            let deadline = match status.as_str() {
-                "filling" => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("fill_deadline_ts"),
-                "sealing" => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("seal_deadline_ts"),
-                _ => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("scheduled_end_ts"),
-            };
-            json!({
-                "match_id": r.get::<_, uuid::Uuid>("id"),
-                "phase": status,
-                "seat_index": r.get::<_, Option<i16>>("seat_index"),
-                "deadline_ts": deadline.map(ts_ms),
-            })
-        })
-        .collect();
+    let mut active = Vec::with_capacity(rows.len());
+    for r in rows {
+        let match_id: uuid::Uuid = r.get("id");
+        let status: String = r.get("status");
+        let seat_index: Option<i16> = r.get("seat_index");
+        let deadline = match status.as_str() {
+            "filling" => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("fill_deadline_ts"),
+            "sealing" => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("seal_deadline_ts"),
+            _ => r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("scheduled_end_ts"),
+        };
+        let mut open_turn = Value::Null;
+        let mut your_turn = false;
+        let mut deadline_ts = deadline.map(ts_ms);
+        if let Some(handle) = st.registry.get(&match_id) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if handle.cmd.send(Cmd::Snapshot(tx)).await.is_ok() {
+                if let Ok(view) = rx.await {
+                    open_turn = view.get("open_turn").cloned().unwrap_or(Value::Null);
+                    if let (Some(seat), Some(turn_seat)) = (
+                        seat_index,
+                        open_turn.get("seat").and_then(Value::as_u64).map(|v| v as i16),
+                    ) {
+                        your_turn = seat == turn_seat;
+                        if your_turn {
+                            deadline_ts = open_turn.get("deadline_ms").and_then(Value::as_u64);
+                        }
+                    }
+                }
+            }
+        }
+        active.push(json!({
+            "match_id": match_id,
+            "phase": status,
+            "seat_index": seat_index,
+            "your_turn": your_turn,
+            "deadline_ts": deadline_ts,
+            "open_turn": open_turn,
+        }));
+    }
     Ok(Json(
         json!({ "v": 1, "server_time_ms": now_ms(), "active": active }),
     ))

@@ -235,6 +235,28 @@ impl Actor {
         Some(self.turn_started_ms.max(street_start_ms) + self.row.action_timeout_ms)
     }
 
+    fn open_turn_value(&self) -> Option<Value> {
+        if self.row.status != "live" {
+            return None;
+        }
+        let rt = self.runtime.as_ref()?;
+        let live_ms = self.row.live_start_ts.map(ts_ms)?;
+        let engine = rt.engine();
+        let idx = engine.to_act?;
+        let turn_deadline = self.turn_deadline_ms(rt, live_ms)?;
+        let street_close = rt.current_street_close_ms(live_ms);
+        let scheduled_end = self.row.scheduled_end_ts.map(ts_ms).unwrap_or(u64::MAX);
+        let deadline = turn_deadline.min(street_close).min(scheduled_end);
+        Some(json!({
+            "seat": idx,
+            "to_call": engine.to_call(idx),
+            "min_raise_to": engine.current_bet + engine.big_blind.max(1),
+            "deadline_ms": deadline,
+            "round": engine.round,
+            "head_hex": hex::encode(rt.head()),
+        }))
+    }
+
     async fn on_deadline(&mut self) {
         match self.row.status.as_str() {
             "filling" => self.on_fill_deadline().await,
@@ -878,27 +900,29 @@ impl Actor {
     }
 
     async fn announce_turn(&mut self) {
-        let Some(rt) = self.runtime.as_ref() else {
+        let Some(mut turn) = self.open_turn_value() else {
             return;
         };
-        if let Some(idx) = rt.engine().to_act {
-            let engine = rt.engine();
-            let to_call = engine.to_call(idx);
-            let deadline = self.turn_started_ms + self.row.action_timeout_ms;
-            self.broadcast(json!({
-                "v": 1, "t": "your_turn", "server_time_ms": now_ms(),
-                "match_id": self.id, "seat": idx,
-                "to_call": to_call,
-                "min_raise_to": engine.current_bet + engine.big_blind.max(1),
-                "deadline_ms": deadline,
-            }));
+        if let Some(obj) = turn.as_object_mut() {
+            obj.insert("v".into(), json!(1));
+            obj.insert("t".into(), json!("your_turn"));
+            obj.insert("server_time_ms".into(), json!(now_ms()));
+            obj.insert("match_id".into(), json!(self.id));
         }
+        self.broadcast(turn);
     }
 
     // ---- views ------------------------------------------------------------------------
 
     async fn view(&self) -> Value {
-        crate::view::match_view(&self.st, &self.row, self.runtime.as_ref()).await
+        let mut view = crate::view::match_view(&self.st, &self.row, self.runtime.as_ref()).await;
+        if let Some(obj) = view.as_object_mut() {
+            obj.insert(
+                "open_turn".into(),
+                self.open_turn_value().unwrap_or(Value::Null),
+            );
+        }
+        view
     }
 
     async fn load_payout_view(&self) -> Result<Vec<Value>, ApiError> {
