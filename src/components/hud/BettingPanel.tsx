@@ -16,16 +16,20 @@ export function BettingPanel() {
   const match = useGameStore((s) => s.match)
   const terms = useGameStore((s) => s.terms)
   const sealStatus = useGameStore((s) => s.sealStatus)
+  const sealClosed = useGameStore((s) => s.sealClosed)
+  const queued = useGameStore((s) => s.queuedPrediction)
   const yourTurn = useGameStore((s) => s.yourTurn)
   const { active: waiting } = useWaiting()
 
   const phase = match?.phase
 
   // Pre-game you may lock in your prediction early; once sealed, a calm "you're set" state.
-  if (phase === 'SEALING' || (waiting && sealStatus === 'unsealed')) {
-    return <SealPanel />
+  if (phase === 'SEALING' || waiting) {
+    if (sealStatus === 'sealed') return <SealedWaitingPanel />
+    if (phase === 'SEALING' && sealClosed) return <SealClosedPanel />
+    if (waiting && queued != null) return <QueuedPanel />
+    return <SealPanel waiting={waiting && phase !== 'SEALING'} />
   }
-  if (waiting) return <SealedWaitingPanel />
   if (phase === 'LIVE') {
     return yourTurn ? <ActionPanel /> : <WaitingPanel />
   }
@@ -56,7 +60,7 @@ function phaseHint(phase: string | undefined): string | null {
   }
 }
 
-function SealPanel() {
+function SealPanel({ waiting }: { waiting?: boolean }) {
   const terms = useGameStore((s) => s.terms)
   const sealStatus = useGameStore((s) => s.sealStatus)
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
@@ -81,11 +85,13 @@ function SealPanel() {
   return (
     <div className="betpanel panel">
       <div className="betpanel-head">
-        <span className="panel-title">Seal your prediction</span>
+        <span className="panel-title">{waiting ? 'Lock in your prediction' : 'Seal your prediction'}</span>
         <span className="eyebrow">{terms?.priceFeedId ?? 'BTC/USD'} at match end</span>
       </div>
       <p className="seal-note eyebrow">
-        Encrypted on your device — no one, not even the server, can read it until the match ends.
+        {waiting
+          ? 'Saved on your device only — it seals automatically the moment the table locks.'
+          : 'Encrypted on your device — no one, not even the server, can read it until the match ends.'}
       </p>
       <div className="seal-input-row">
         <span className="seal-currency mono">$</span>
@@ -98,8 +104,44 @@ function SealPanel() {
         />
       </div>
       <button className="seal-btn" onClick={submit} disabled={!valid || sealing}>
-        {sealing ? 'Sealing…' : 'Seal prediction'}
+        {sealing ? 'Sealing…' : waiting ? 'Lock in prediction' : 'Seal prediction'}
       </button>
+    </div>
+  )
+}
+
+/** An early lock-in is queued — it seals (two quick wallet prompts) once the table locks. */
+function QueuedPanel() {
+  const terms = useGameStore((s) => s.terms)
+  const queued = useGameStore((s) => s.queuedPrediction)
+  const clear = useGameStore((s) => s.clearQueuedPrediction)
+  const decimals = terms?.decimals ?? 2
+  return (
+    <div className="betpanel panel">
+      <div className="betpanel-head">
+        <span className="panel-title">Prediction locked in</span>
+        <span className="seal-lock" aria-hidden="true">🕐</span>
+      </div>
+      <p className="seal-note eyebrow">
+        {queued != null ? `$${(queued / 10 ** decimals).toFixed(decimals)} — ` : ''}
+        saved on this device only. When the table locks, your wallet will ask you to confirm
+        the seal (an on-chain commitment plus a signature).
+      </p>
+      <button className="seal-btn" onClick={clear}>Change prediction</button>
+    </div>
+  )
+}
+
+/** The seal window closed before this seat sealed. */
+function SealClosedPanel() {
+  return (
+    <div className="betpanel panel">
+      <div className="betpanel-head">
+        <span className="panel-title">Seal window closed</span>
+      </div>
+      <p className="seal-note eyebrow">
+        You didn’t seal a prediction in time — the table plays on under its default rules.
+      </p>
     </div>
   )
 }
@@ -113,8 +155,8 @@ function SealedWaitingPanel() {
         <span className="seal-lock" aria-hidden="true">🔒</span>
       </div>
       <p className="seal-note eyebrow">
-        Your call is time-locked on your device. It stays secret from everyone —
-        including the server — until the hand ends. The table begins once it fills.
+        Your call is time-locked and encrypted. It stays secret from everyone —
+        including the server — until the hand ends.
       </p>
     </div>
   )

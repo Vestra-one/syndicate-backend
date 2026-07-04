@@ -99,6 +99,11 @@ interface GameState {
   // self-centric, derived from the feed
   sealStatus: SealStatus
   yourPrediction: FixedPrice | null // plaintext, client-only — never sent in the clear
+  /** Early lock-in made before the table locks — the drand round (and your engine seat)
+   *  only exist once phase → SEALING, so the call is held locally and auto-sealed then. */
+  queuedPrediction: FixedPrice | null
+  /** The server closed the seal window (§6) — no further seals are accepted. */
+  sealClosed: boolean
   defaultAction: DefaultAction
 
   priceHistory: PricePoint[]
@@ -149,6 +154,8 @@ interface GameState {
   createTable: () => Promise<void>
   dismissTxProgress: () => void
   sealPrediction: (price: FixedPrice) => Promise<void>
+  /** Withdraw an early lock-in that hasn't been sealed yet. */
+  clearQueuedPrediction: () => void
   act: (action: BettingAction) => Promise<void>
   setDefault: (def: DefaultAction) => void
   claim: () => Promise<string | null>
@@ -366,6 +373,8 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   sealStatus: 'unsealed',
   yourPrediction: null,
+  queuedPrediction: null,
+  sealClosed: false,
   defaultAction: 'check_fold',
 
   priceHistory: [],
@@ -683,6 +692,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       yourTurn: null,
       sealStatus: 'unsealed',
       yourPrediction: null,
+      queuedPrediction: null,
+      sealClosed: false,
       settlement: null,
       voided: null,
       seated: false,
@@ -868,13 +879,19 @@ export const useGameStore = create<GameState>((set, get) => ({
   dismissInvite: () => set({ pendingInvite: null }),
 
   sealPrediction: async (price) => {
-    const { terms, match, sealStatus } = get()
-    if (!adapters || !terms || !match || sealStatus !== 'unsealed') return // seal-once
+    const { terms, match, sealStatus, sealClosed } = get()
+    if (!adapters || !terms || sealStatus !== 'unsealed' || sealClosed) return // seal-once
+    const targetRound = terms.timelockTargetRound
+    const seatIndex = myEngineSeat ?? match?.yourSeat
+    if (!targetRound || seatIndex == null || !match) {
+      // The drand round + engine seat are assigned when the table locks (phase → SEALING).
+      // Hold the call locally; ensureSealContext auto-seals it the moment the window opens.
+      set({ queuedPrediction: price })
+      return
+    }
     const onchainMatchId = terms.onchainMatchId
     const wallet = adapters.wallet.address()
-    const targetRound = terms.timelockTargetRound
-    const seatIndex = myEngineSeat ?? match.yourSeat
-    if (!onchainMatchId || !wallet || !targetRound || seatIndex == null) {
+    if (!onchainMatchId || !wallet) {
       console.warn('[seal] missing context', { onchainMatchId, targetRound, seatIndex })
       set({ playError: 'Sealing is not ready yet — wait for the seal window to open.' })
       return
@@ -910,18 +927,20 @@ export const useGameStore = create<GameState>((set, get) => ({
       })
       const signature = await adapters.wallet.signBytesBase64(msg)
       const body = { ciphertext_b64: ciphertextB64, commitment_hex: commitmentHex, timelock_target: targetRound, signature, seal_tx_sig: sealTxSig }
-      if (gateway?.isOpen()) {
-        gateway.send({ t: 'seal', match_id: match.matchId, ...body })
-      } else {
-        await api.submitSeal(match.matchId, body)
-      }
+      // REST only (not the WS `seal` frame): the socket's ack/error frames aren't correlated
+      // to this request, so awaiting the HTTP response — same server handler — is the only
+      // way to know the seal was accepted before latching 'sealed'.
+      await api.submitSeal(match.matchId, body)
       // The plaintext stays on the client for the distance-to-conviction chart.
-      set({ sealStatus: 'sealed', yourPrediction: price })
+      set({ sealStatus: 'sealed', yourPrediction: price, queuedPrediction: null })
     } catch (err) {
       console.error('seal failed:', err)
-      set({ sealStatus: 'unsealed', playError: 'Sealing failed — try again before the window closes.' })
+      const msg = err instanceof ApiError ? `Sealing failed — ${err.message}` : 'Sealing failed — try again before the window closes.'
+      set({ sealStatus: 'unsealed', playError: msg })
     }
   },
+
+  clearQueuedPrediction: () => set({ queuedPrediction: null }),
 
   act: async (action) => {
     const { match, yourTurn, terms } = get()
@@ -1012,6 +1031,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       yourTurn: null,
       sealStatus: 'unsealed',
       yourPrediction: null,
+      queuedPrediction: null,
+      sealClosed: false,
       settlement: null,
       voided: null,
       reviewing: false,
@@ -1158,7 +1179,11 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
           : s.terms,
         fillDeadline: t.fill_deadline != null ? toEpochMs(t.fill_deadline) : s.fillDeadline,
         roundStartedAt: t.live_start != null ? toEpochMs(t.live_start) : s.roundStartedAt,
+        sealClosed: s.sealClosed || frame.state.phase === 'sealing_closed',
       }))
+      // Reconnected mid-seal-window: recover the engine seat + our sealed flag, and fire
+      // any early prediction queued before the disconnect.
+      if (frame.state.phase === 'sealing') void ensureSealContext(set, get)
       break
     }
 
@@ -1169,7 +1194,11 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         terms: s.terms && frame.timelock_target != null ? { ...s.terms, timelockTargetRound: frame.timelock_target } : s.terms,
         fillDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.fillDeadline,
         roundStartedAt: frame.live_start != null ? toEpochMs(frame.live_start) : s.roundStartedAt,
+        sealClosed: s.sealClosed || frame.phase === 'sealing_closed',
       }))
+      // The lock broadcast carries no seats — fetch our engine seat (needed to sign the
+      // seal intent) and fire any queued early prediction now that the window is open.
+      if (frame.phase === 'sealing') void ensureSealContext(set, get)
       break
     }
 
@@ -1177,9 +1206,17 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       set({ lobbySeated: frame.confirmed })
       break
 
-    case 'seal_status':
-      if (frame.closed) set({ sealStatus: get().sealStatus === 'sealed' ? 'sealed' : 'unsealed' })
+    case 'seal_status': {
+      // `sealed`/`just_sealed` list engine seats — recognising our own covers the reload
+      // case where the latch was lost (the plaintext is gone, but re-sealing would 409).
+      const mineSealed =
+        myEngineSeat != null && (frame.just_sealed === myEngineSeat || (frame.sealed?.includes(myEngineSeat) ?? false))
+      set((s) => ({
+        sealClosed: s.sealClosed || frame.closed === true,
+        sealStatus: mineSealed ? 'sealed' : s.sealStatus,
+      }))
       break
+    }
 
     case 'your_turn':
       myEngineSeat = frame.seat
@@ -1231,6 +1268,36 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
 
     default:
       break // lobby_delta / default_set / sealed / pong — no store action needed
+  }
+}
+
+/**
+ * The seal window just opened (or we reconnected inside it). The WS lock broadcast carries
+ * only the drand round — the engine seat assignments (needed to sign the seal intent with
+ * the server's seat_index) live in the REST detail, so refetch it, sync our sealed flag,
+ * then auto-seal any prediction the player locked in early from the waiting room.
+ */
+async function ensureSealContext(set: SetState, get: () => GameState): Promise<void> {
+  const matchId = get().match?.matchId ?? joinMatchId
+  if (!matchId) return
+  const wallet = adapters?.wallet.address() ?? get().walletAddress
+  try {
+    const detail = await api.getMatch(matchId)
+    const mine = wallet ? detail.seats.find((x) => x.wallet === wallet) : undefined
+    if (mine) myEngineSeat = mine.seat_index
+    set((s) => ({
+      sealStatus: mine?.sealed && s.sealStatus !== 'sealed' ? 'sealed' : s.sealStatus,
+      terms:
+        s.terms && detail.timing.timelock_target != null
+          ? { ...s.terms, timelockTargetRound: detail.timing.timelock_target }
+          : s.terms,
+    }))
+  } catch (err) {
+    console.warn('[seal] match refresh at lock failed:', err) // the queued seal below may still succeed
+  }
+  const s = get()
+  if (s.queuedPrediction != null && s.sealStatus === 'unsealed' && !s.sealClosed) {
+    void s.sealPrediction(s.queuedPrediction)
   }
 }
 

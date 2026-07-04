@@ -246,12 +246,14 @@ function YourSeatCard() {
   )
 }
 
-/** Optional early lock-in of your sealed prediction (survives the layout change). */
+/** Optional early lock-in of your prediction — held on-device and auto-sealed at table lock. */
 function SealAction() {
   const terms = useGameStore((s) => s.terms)
   const sealStatus = useGameStore((s) => s.sealStatus)
+  const queued = useGameStore((s) => s.queuedPrediction)
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
   const seal = useGameStore((s) => s.sealPrediction)
+  const clearQueued = useGameStore((s) => s.clearQueuedPrediction)
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
 
@@ -259,10 +261,19 @@ function SealAction() {
     if (open && text === '' && lastPrice != null) setText(lastPrice.toFixed(terms?.decimals ?? 2))
   }, [open, lastPrice, terms, text])
 
+  const decimals = terms?.decimals ?? 2
+
   if (sealStatus === 'sealed') {
     return <div className="wr-seal-done"><span className="wr-seal-lock">🔒</span> Prediction sealed</div>
   }
-  const decimals = terms?.decimals ?? 2
+  if (queued != null && !open) {
+    return (
+      <div className="wr-seal-done">
+        <span className="wr-seal-lock">🕐</span> ${(queued / 10 ** decimals).toFixed(decimals)} locked in — seals at table lock{' '}
+        <button className="wr-seal-open" onClick={() => { clearQueued(); setOpen(true) }}>Change</button>
+      </div>
+    )
+  }
   const value = Number(text)
   const valid = Number.isFinite(value) && value > 0
   const sealing = sealStatus === 'sealing'
@@ -270,7 +281,7 @@ function SealAction() {
   if (!open) {
     return (
       <button className="wr-seal-open" onClick={() => setOpen(true)}>
-        Seal your prediction early
+        Lock in your prediction early
       </button>
     )
   }
@@ -289,9 +300,9 @@ function SealAction() {
       <button
         className="wr-seal-btn"
         disabled={!valid || sealing}
-        onClick={() => valid && !sealing && seal(Math.round(value * 10 ** decimals))}
+        onClick={() => { if (valid && !sealing) { seal(Math.round(value * 10 ** decimals)); setOpen(false) } }}
       >
-        {sealing ? 'Sealing…' : 'Seal prediction'}
+        {sealing ? 'Sealing…' : 'Lock in prediction'}
       </button>
     </div>
   )

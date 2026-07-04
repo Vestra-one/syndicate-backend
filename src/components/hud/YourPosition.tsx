@@ -32,7 +32,11 @@ export function YourPosition() {
           <span className="position-pred-value mono">{formatPrice(predFloat)}</span>
         ) : (
           <span className="position-pred-empty eyebrow">
-            {sealStatus === 'sealing' ? 'sealing…' : 'not sealed yet'}
+            {sealStatus === 'sealed'
+              ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
+              : sealStatus === 'sealing'
+                ? 'sealing…'
+                : 'not sealed yet'}
           </span>
         )}
       </div>
