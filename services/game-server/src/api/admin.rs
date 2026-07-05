@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::auth::session::require_admin;
-use crate::config::Overlay;
+use crate::config::{validate_overlay, Overlay};
 use crate::db;
 use crate::error::ApiError;
 use crate::util::now_ms;
@@ -38,6 +38,7 @@ pub async fn put_config(
     merge(&mut merged, &patch);
     let new_overlay: Overlay = serde_json::from_value(merged.clone())
         .map_err(|e| ApiError::bad_request(format!("invalid overlay: {e}")))?;
+    validate_overlay(&new_overlay).map_err(ApiError::bad_request)?;
 
     let client = st.pool.get().await?;
     client

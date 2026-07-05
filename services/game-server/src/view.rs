@@ -115,6 +115,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         Value::Null
     };
     let lock_tx_sig = confirmed_lock_tx_sig(st, row.id).await;
+    let (last_seq, head) = event_cursor(row, rt);
 
     json!({
         "v": 1,
@@ -161,14 +162,43 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "seats": seat_views,
         "pot": engine.map(|e| e.seats.iter().map(|s| s.total_contribution).sum::<u64>()),
         "round": engine.map(|e| e.round),
+        "clock_round": clock_round(row, now_ms()),
         "current_bet": engine.map(|e| e.current_bet),
         "to_act": engine.and_then(|e| e.to_act),
         "open_turn": Value::Null,
+        "turn": Value::Null,
         "reveal": reveal,
-        "last_seq": row.event_count,
-        "head": hex::encode(&row.event_head),
+        "settlement_failure": settlement_failure_view(st, row.id).await,
+        "last_seq": last_seq,
+        "head": head,
         "void_kind": row.void_kind,
     })
+}
+
+fn event_cursor(row: &MatchRow, rt: Option<&FencedMatchRuntime>) -> (u64, String) {
+    match rt {
+        Some(rt) => (rt.events().len() as u64, hex::encode(rt.head())),
+        None => (row.event_count, hex::encode(&row.event_head)),
+    }
+}
+
+fn clock_round(row: &MatchRow, now: u64) -> Option<u8> {
+    let live_start = row.live_start_ts.map(ts_ms)?;
+    if now < live_start || row.round_count == 0 {
+        return None;
+    }
+    let elapsed_sec = now.saturating_sub(live_start) / 1_000;
+    let mut offset = 0u64;
+    for round in 1..=row.round_count {
+        let idx = round.saturating_sub(1) as usize;
+        let duration = row.round_durations_sec.get(idx).copied().unwrap_or(0);
+        let observation = row.observation_windows_sec.get(idx).copied().unwrap_or(0);
+        offset = offset.saturating_add(duration).saturating_add(observation);
+        if elapsed_sec < offset {
+            return Some(round);
+        }
+    }
+    Some(row.round_count)
 }
 
 async fn confirmed_lock_tx_sig(st: &AppState, match_id: uuid::Uuid) -> Option<String> {
@@ -185,6 +215,35 @@ async fn confirmed_lock_tx_sig(st: &AppState, match_id: uuid::Uuid) -> Option<St
         .await
         .ok()??;
     row.get("tx_signature")
+}
+
+pub async fn settlement_failure_view(st: &AppState, match_id: uuid::Uuid) -> Value {
+    let Ok(client) = st.pool.get().await else {
+        return Value::Null;
+    };
+    let row = client
+        .query_opt(
+            r#"SELECT kind::text AS kind, status::text AS status, last_error, oracle_audit
+               FROM chain_jobs
+               WHERE match_id = $1
+                 AND kind IN ('submit_settlement', 'void_live_after_deadline')
+                 AND (last_error IS NOT NULL OR status IN ('dead_letter', 'skipped'))
+               ORDER BY updated_at DESC
+               LIMIT 1"#,
+            &[&match_id],
+        )
+        .await
+        .ok()
+        .flatten();
+    match row {
+        Some(r) => json!({
+            "kind": r.get::<_, String>("kind"),
+            "status": r.get::<_, String>("status"),
+            "error": r.get::<_, Option<String>>("last_error"),
+            "audit": r.get::<_, Option<Value>>("oracle_audit"),
+        }),
+        None => Value::Null,
+    }
 }
 
 /// Post-settlement reveal: predictions + settlement price from the confirmed settle job's
@@ -215,5 +274,120 @@ async fn reveal_view(st: &AppState, row: &MatchRow) -> Value {
             })
         }
         None => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+    use syndicate_engine::service::{MatchConfig, MatchLease};
+    use syndicate_shared::PlayerId;
+    use uuid::Uuid;
+
+    fn match_row() -> MatchRow {
+        MatchRow {
+            id: Uuid::nil(),
+            match_key: "match-1".into(),
+            onchain_match_id: 1,
+            status: "live".into(),
+            visibility: "public".into(),
+            creator_wallet: None,
+            room_code: None,
+            room_commitment: None,
+            feed_symbol: "BTC/USD".into(),
+            config_hash: None,
+            buy_in: 1_000,
+            entry_fee: 0,
+            rake_bps: 0,
+            rake_cap: 0,
+            round_count: 2,
+            round_durations_sec: vec![10, 20],
+            observation_windows_sec: vec![5, 0],
+            action_timeout_ms: 25_000,
+            time_bank_sec: 0,
+            small_blind: 5,
+            big_blind: 10,
+            min_players: 2,
+            max_players: 2,
+            seal_window_sec: 90,
+            begin_live_window_sec: 30,
+            fill_deadline_ts: None,
+            lock_ts: None,
+            seal_deadline_ts: None,
+            live_start_ts: Some(Utc::now()),
+            scheduled_end_ts: None,
+            button: Some(0),
+            button_seed: None,
+            timelock_target: None,
+            void_kind: None,
+            event_count: 0,
+            event_head: vec![0u8; 32],
+            mint: None,
+        }
+    }
+
+    fn runtime() -> FencedMatchRuntime {
+        FencedMatchRuntime::start(
+            MatchConfig {
+                match_id: Uuid::nil().to_string(),
+                onchain_match_id: 1,
+                players: vec![(PlayerId(0), 1_000, 0), (PlayerId(1), 1_000, 1)],
+                button: 0,
+                small_blind: 5,
+                big_blind: 10,
+                round_count: 2,
+                round_durations_sec: vec![10, 20],
+                observation_windows_sec: vec![5, 0],
+                action_timeout_ms: 25_000,
+                time_bank_sec: 0,
+                lease_ttl_ms: 60_000,
+            },
+            MatchLease {
+                match_id: Uuid::nil().to_string(),
+                owner_id: "test".into(),
+                fencing_token: 1,
+                expires_at_ms: u64::MAX,
+            },
+        )
+    }
+
+    #[test]
+    fn event_cursor_prefers_runtime_head_when_active() {
+        let row = match_row();
+        let rt = runtime();
+        let (last_seq, head) = event_cursor(&row, Some(&rt));
+
+        assert_eq!(last_seq, rt.events().len() as u64);
+        assert_eq!(head, hex::encode(rt.head()));
+        assert_ne!(last_seq, row.event_count);
+        assert_ne!(head, hex::encode(&row.event_head));
+    }
+
+    #[test]
+    fn event_cursor_falls_back_to_row_without_runtime() {
+        let row = MatchRow {
+            event_count: 7,
+            event_head: vec![9u8; 32],
+            ..match_row()
+        };
+
+        assert_eq!(event_cursor(&row, None), (7, hex::encode(vec![9u8; 32])));
+    }
+
+    #[test]
+    fn clock_round_tracks_wall_clock_schedule() {
+        let now = Utc::now();
+        let row = MatchRow {
+            live_start_ts: Some(now - Duration::seconds(12)),
+            ..match_row()
+        };
+        assert_eq!(clock_round(&row, now.timestamp_millis() as u64), Some(1));
+
+        let row = MatchRow {
+            live_start_ts: Some(now - Duration::seconds(16)),
+            ..match_row()
+        };
+        assert_eq!(clock_round(&row, now.timestamp_millis() as u64), Some(2));
     }
 }

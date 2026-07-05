@@ -8,6 +8,7 @@ use syndicate_chain::{drand_round_publish_ts, DRAND_GENESIS_TIME, DRAND_PERIOD_S
 /// Must equal the on-chain `MAX_TIMELOCK_SKEW_SEC`.
 pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
 pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 90;
+pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = DEFAULT_SEAL_WINDOW_SEC;
 
 /// League of Entropy quicknet.
 pub const DRAND_CHAIN_HASH_DEFAULT: &str =
@@ -247,6 +248,15 @@ impl Default for Overlay {
     }
 }
 
+pub fn validate_overlay(overlay: &Overlay) -> Result<(), String> {
+    if overlay.seal_window_sec < MIN_SAFE_SEAL_WINDOW_SEC {
+        return Err(format!(
+            "seal_window_sec must be at least {MIN_SAFE_SEAL_WINDOW_SEC}s"
+        ));
+    }
+    Ok(())
+}
+
 /// bb = buy_in/100 (min 2), sb = bb/2 (min 1) — mirrors old config `deriveBlinds`.
 pub fn derive_blinds(buy_in: u64) -> (u64, u64) {
     let bb = (buy_in / 100).max(2);
@@ -468,10 +478,7 @@ mod tests {
             vec!["MintA".to_string(), "MintB".to_string()]
         );
         // Falls back to the single legacy var when the CSV is empty.
-        assert_eq!(
-            resolve_chip_mints("", " MintZ "),
-            vec!["MintZ".to_string()]
-        );
+        assert_eq!(resolve_chip_mints("", " MintZ "), vec!["MintZ".to_string()]);
         // Nothing configured → empty (create will 500 rather than accept any token).
         assert!(resolve_chip_mints("", "").is_empty());
 
@@ -505,6 +512,16 @@ mod tests {
         // Floors: tiny buy-ins clamp to (1, 2).
         assert_eq!(derive_blinds(1), (1, 2));
         assert_eq!(derive_blinds(250), (1, 2));
+    }
+
+    #[test]
+    fn overlay_rejects_short_seal_window() {
+        let mut overlay = Overlay::default();
+        overlay.seal_window_sec = MIN_SAFE_SEAL_WINDOW_SEC - 1;
+        assert!(validate_overlay(&overlay).is_err());
+
+        overlay.seal_window_sec = MIN_SAFE_SEAL_WINDOW_SEC;
+        assert!(validate_overlay(&overlay).is_ok());
     }
 
     #[test]

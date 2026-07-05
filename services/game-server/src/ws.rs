@@ -4,6 +4,8 @@
 //! Every server frame: `{"v":1,"t":"...","server_time_ms":...,...}`. Spectating (lobby +
 //! match channels) needs no auth; gameplay frames and the wallet channel do.
 
+use std::sync::{Arc, RwLock};
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
@@ -68,7 +70,7 @@ enum ClientMsg {
 
 struct Conn {
     st: AppState,
-    wallet: Option<String>,
+    wallet: Arc<RwLock<Option<String>>>,
     nonce: Option<String>,
     /// Per-subscription forwarder tasks, keyed by channel key.
     subs: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
@@ -90,7 +92,7 @@ async fn connection(st: AppState, socket: WebSocket) {
 
     let mut conn = Conn {
         st,
-        wallet: None,
+        wallet: Arc::new(RwLock::new(None)),
         nonce: None,
         subs: Default::default(),
         out: out_tx.clone(),
@@ -125,6 +127,10 @@ async fn connection(st: AppState, socket: WebSocket) {
 }
 
 impl Conn {
+    fn current_wallet(&self) -> Option<String> {
+        self.wallet.read().ok().and_then(|w| w.clone())
+    }
+
     async fn send(&self, frame: Value) {
         let _ = self.out.send(frame.to_string()).await;
     }
@@ -184,7 +190,7 @@ impl Conn {
                 signature,
                 seal_tx_sig,
             } => {
-                let Some(wallet) = self.wallet.clone() else {
+                let Some(wallet) = self.current_wallet() else {
                     return self.error("unauthorized", "auth required to seal").await;
                 };
                 let body = crate::api::matches::SealBody {
@@ -221,7 +227,9 @@ impl Conn {
             crate::auth::session::verify_and_create_session(&self.st, &wallet, &signature)
                 .await
                 .ok();
-        self.wallet = Some(wallet.clone());
+        if let Ok(mut current) = self.wallet.write() {
+            *current = Some(wallet.clone());
+        }
         self.send(json!({
             "v":1, "t":"authenticated", "server_time_ms": now_ms(),
             "wallet": wallet,
@@ -236,8 +244,8 @@ impl Conn {
 
     async fn subscribe(&mut self, channel: Value, last_seq: u64) {
         let key = channel_key(&channel);
-        if self.subs.contains_key(&key) {
-            return;
+        if let Some(task) = self.subs.remove(&key) {
+            task.abort();
         }
         if key == "lobby" {
             let rx = self.st.registry.lobby.sender().subscribe();
@@ -322,11 +330,18 @@ impl Conn {
 
     fn spawn_forwarder(&mut self, key: String, mut rx: broadcast::Receiver<std::sync::Arc<Value>>) {
         let out = self.out.clone();
+        let wallet = self.wallet.clone();
         let task = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(frame) => {
-                        if out.send(frame.to_string()).await.is_err() {
+                        let current = wallet.read().ok().and_then(|w| w.clone());
+                        let Some(outbound) =
+                            prepare_forward_frame(frame.as_ref(), current.as_deref())
+                        else {
+                            continue;
+                        };
+                        if out.send(outbound.to_string()).await.is_err() {
                             break;
                         }
                     }
@@ -360,7 +375,7 @@ impl Conn {
         action: Value,
         signature: String,
     ) {
-        let Some(wallet) = self.wallet.clone() else {
+        let Some(wallet) = self.current_wallet() else {
             return self.error("unauthorized", "auth required to act").await;
         };
         if self.st.limits.check_actions(&wallet).is_err() {
@@ -411,7 +426,7 @@ impl Conn {
         policy: String,
         signature: String,
     ) {
-        let Some(wallet) = self.wallet.clone() else {
+        let Some(wallet) = self.current_wallet() else {
             return self.error("unauthorized", "auth required").await;
         };
         let parsed_policy = match policy.as_str() {
@@ -455,12 +470,36 @@ impl Conn {
     }
 }
 
+fn prepare_forward_frame(frame: &Value, wallet: Option<&str>) -> Option<Value> {
+    let mut outbound = frame.clone();
+    if let Some(target) = outbound.get("_to_wallet").and_then(Value::as_str) {
+        if wallet != Some(target) {
+            return None;
+        }
+        if let Some(obj) = outbound.as_object_mut() {
+            obj.remove("_to_wallet");
+        }
+    }
+    Some(outbound)
+}
+
 fn channel_key(channel: &Value) -> String {
     if channel.as_str() == Some("lobby") {
         return "lobby".into();
     }
     if let Some(m) = channel.get("match") {
-        return format!("match:{}", m.as_str().unwrap_or_default());
+        if let Some(id) = m.as_str().filter(|s| !s.is_empty()) {
+            return format!("match:{id}");
+        }
+        if let Some(id) = m
+            .as_object()
+            .and_then(|o| o.get("match_id"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            return format!("match:{id}");
+        }
+        return format!("match:{m}");
     }
     if channel.as_str() == Some("wallet") {
         return "wallet".into();
@@ -511,5 +550,45 @@ mod tests {
             Some(Action::BetTo(120))
         );
         assert_eq!(parse_action(&json!({"kind":"nope"})), None);
+    }
+
+    #[test]
+    fn match_channel_keys_are_canonical_for_supported_shapes() {
+        let id = "11111111-2222-3333-4444-555555555555";
+        assert_eq!(channel_key(&json!({"match": id})), format!("match:{id}"));
+        assert_eq!(
+            channel_key(&json!({"match": {"match_id": id}})),
+            format!("match:{id}")
+        );
+    }
+
+    #[test]
+    fn malformed_match_channel_keys_do_not_collapse_to_match_empty() {
+        let key = channel_key(&json!({"match": {"bad": "shape"}}));
+        assert!(key.starts_with("match:{"));
+        assert_ne!(key, "match:");
+    }
+
+    #[test]
+    fn private_frames_only_forward_to_target_wallet() {
+        let frame = json!({
+            "v": 1,
+            "t": "your_turn",
+            "seat": 0,
+            "_to_wallet": "wallet-a",
+        });
+
+        assert!(prepare_forward_frame(&frame, None).is_none());
+        assert!(prepare_forward_frame(&frame, Some("wallet-b")).is_none());
+
+        let forwarded = prepare_forward_frame(&frame, Some("wallet-a")).unwrap();
+        assert_eq!(forwarded["t"], "your_turn");
+        assert!(forwarded.get("_to_wallet").is_none());
+    }
+
+    #[test]
+    fn public_frames_forward_to_any_subscriber() {
+        let frame = json!({"v": 1, "t": "turn_update", "seat": 0});
+        assert_eq!(prepare_forward_frame(&frame, None), Some(frame));
     }
 }

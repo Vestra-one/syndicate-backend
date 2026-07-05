@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use syndicate_game_server::app::{router, AppState};
 use syndicate_game_server::auth::rate_limit::RateLimits;
 use syndicate_game_server::auth::session::NonceStore;
-use syndicate_game_server::config::{Overlay, ServerConfig};
+use syndicate_game_server::config::{validate_overlay, Overlay, ServerConfig};
 use syndicate_game_server::price::PriceCache;
 use syndicate_game_server::runtime::Registry;
 use syndicate_game_server::{chainjobs, sweeper, verifier};
@@ -111,7 +111,9 @@ async fn load_overlay(pool: &deadpool_postgres::Pool) -> Option<Overlay> {
         )
         .await
         .ok()??;
-    serde_json::from_value(row.get::<_, serde_json::Value>("value")).ok()
+    let overlay: Overlay = serde_json::from_value(row.get::<_, serde_json::Value>("value")).ok()?;
+    validate_overlay(&overlay).ok()?;
+    Some(overlay)
 }
 
 fn init_tracing() {

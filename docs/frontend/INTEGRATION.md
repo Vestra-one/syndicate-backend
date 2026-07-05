@@ -133,7 +133,8 @@ surface it via `/v1/wallets/{wallet}/claimables`.
 - **Historical**: `GET /v1/matches/history?cursor=` → settled/voided matches, keyset-paginated.
 - **Detail**: `GET /v1/matches/{id}` → params, phase, seats (wallet, stack, committed,
   folded, sealed flag, engine_seat), timing (street schedule with absolute open/close
-  timestamps), pot, `to_act`, `open_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}`
+  timestamps), pot, `to_act`, `round` (engine betting round), `clock_round` (wall-clock
+  schedule round), `open_turn` / `turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}`
   when a live turn is open, and after settlement a `reveal` block
   `{settlement_price, predictions:[{seat, price, source:"sealed"|"spot"}]}`.
 - **Event log**: `GET /v1/matches/{id}/events?after_seq=&limit=` — every action with its
@@ -181,12 +182,14 @@ tells you the seat. The button advances clockwise every street.
 
 Streets and their durations are exactly what the creator configured. Turn flow over WS:
 
-- `your_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — the fixed
-  per-action timer; `deadline_ms` is absolute and already capped by the street close.
+- `turn_update {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — public table
+  state for the current turn; `deadline_ms` is absolute and already capped by the street close.
+- `your_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — same payload,
+  delivered only to the authenticated acting wallet.
 - Send `act {match_id, seat_index, nonce, prev_head_hex, action, signature}` with
   `action ∈ fold | check | call | bet_to{amount} | raise_to{amount} | all_in`.
   `nonce` increments per seat; `prev_head_hex` is the current action-chain head from the
-  last `action` message / snapshot (replay protection). Signature layout in Appendix B.
+  last `action` message / snapshot top-level `head` (replay protection). Signature layout in Appendix B.
 - Acting early passes the turn immediately — the next `your_turn` fires at once.
 - `set_default {policy: check_fold | check_call_any, signature}` — applied automatically
   on timeout (check when free, else fold / call anything).
@@ -254,7 +257,7 @@ Server → client: `challenge {nonce}` · `authenticated {wallet, session}` ·
 `snapshot {match_id, state, last_seq}` · `event {match_id, seq, event}` ·
 `lobby_delta {kind, room}` · `seat_update {match_id, confirmed, candidates, seats}` ·
 `phase {match_id, phase, fill_deadline?, seal_deadline?, timelock_target?, live_start?,
-scheduled_end?, button?}` · `your_turn {…}` · `action {…}` · `seal_status {sealed[],
+scheduled_end?, button?}` · `turn_update {…}` · `your_turn {…}` · `action {…}` · `seal_status {sealed[],
 deadline_ms}` · `reveal {…}` · `settled {…}` · `voided {…}` · `pong` · `error {code, msg}`.
 
 ## 13. Error catalog

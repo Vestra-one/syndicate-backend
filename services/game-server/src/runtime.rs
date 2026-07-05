@@ -108,6 +108,7 @@ impl Registry {
             events: event_tx,
             cmd: cmd_rx,
             turn_started_ms: now_ms(),
+            last_fill_broadcast_confirmed: None,
         };
         tokio::spawn(actor.run());
         handle
@@ -169,6 +170,7 @@ struct Actor {
     cmd: mpsc::Receiver<Cmd>,
     /// Wall-clock anchor of the current turn (per-turn timer base).
     turn_started_ms: u64,
+    last_fill_broadcast_confirmed: Option<usize>,
 }
 
 impl Actor {
@@ -235,7 +237,7 @@ impl Actor {
         Some(self.turn_started_ms.max(street_start_ms) + self.row.action_timeout_ms)
     }
 
-    fn open_turn_value(&self) -> Option<Value> {
+    fn turn_view(&self) -> Option<Value> {
         if self.row.status != "live" {
             return None;
         }
@@ -255,6 +257,40 @@ impl Actor {
             "round": engine.round,
             "head_hex": hex::encode(rt.head()),
         }))
+    }
+
+    async fn wallet_for_engine_seat(&self, seat: usize) -> Option<String> {
+        self.seats()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|s| s.engine_seat as usize == seat)
+            .map(|s| s.wallet)
+    }
+
+    fn clock_round(&self) -> Option<u8> {
+        let live_start = self.row.live_start_ts.map(ts_ms)?;
+        let now = now_ms();
+        if now < live_start || self.row.round_count == 0 {
+            return None;
+        }
+        let elapsed_sec = now.saturating_sub(live_start) / 1_000;
+        let mut offset = 0u64;
+        for round in 1..=self.row.round_count {
+            let idx = round.saturating_sub(1) as usize;
+            let duration = self.row.round_durations_sec.get(idx).copied().unwrap_or(0);
+            let observation = self
+                .row
+                .observation_windows_sec
+                .get(idx)
+                .copied()
+                .unwrap_or(0);
+            offset = offset.saturating_add(duration).saturating_add(observation);
+            if elapsed_sec < offset {
+                return Some(round);
+            }
+        }
+        Some(self.row.round_count)
     }
 
     async fn on_deadline(&mut self) {
@@ -304,15 +340,18 @@ impl Actor {
                 return;
             }
         };
-        self.broadcast(json!({
-            "v": 1, "t": "seat_update", "server_time_ms": now_ms(),
-            "match_id": self.id, "confirmed": confirmed.len(),
-        }));
-        self.st.registry.lobby.publish(json!({
-            "v": 1, "t": "lobby_delta", "server_time_ms": now_ms(),
-            "kind": "upsert", "match_id": self.id, "confirmed": confirmed.len(),
-            "max_players": self.row.max_players,
-        }));
+        if self.last_fill_broadcast_confirmed != Some(confirmed.len()) {
+            self.last_fill_broadcast_confirmed = Some(confirmed.len());
+            self.broadcast(json!({
+                "v": 1, "t": "seat_update", "server_time_ms": now_ms(),
+                "match_id": self.id, "confirmed": confirmed.len(),
+            }));
+            self.st.registry.lobby.publish(json!({
+                "v": 1, "t": "lobby_delta", "server_time_ms": now_ms(),
+                "kind": "upsert", "match_id": self.id, "confirmed": confirmed.len(),
+                "max_players": self.row.max_players,
+            }));
+        }
 
         let full = confirmed.len() >= self.row.max_players as usize;
         let quorum = confirmed.len() >= self.row.min_players as usize;
@@ -445,9 +484,12 @@ impl Actor {
                 }));
             }
             ChainEvent::Voided => {
+                let settlement_failure =
+                    crate::view::settlement_failure_view(&self.st, self.id).await;
                 self.broadcast(json!({
                     "v": 1, "t": "voided", "server_time_ms": now_ms(),
                     "match_id": self.id, "kind": self.row.void_kind,
+                    "settlement_failure": settlement_failure,
                 }));
                 self.st.registry.lobby.publish(json!({
                     "v": 1, "t": "lobby_delta", "server_time_ms": now_ms(),
@@ -693,6 +735,7 @@ impl Actor {
                 warn!(match_id = %self.id, "force_resolve_street: {e:?}");
             }
             self.flush_events(seq_before).await;
+            self.broadcast_action_frame(seq_before).await;
             self.turn_started_ms = now;
             self.announce_turn().await;
             return;
@@ -711,6 +754,7 @@ impl Actor {
                     warn!(match_id = %self.id, seat = idx, "timeout default: {e:?}");
                 }
                 self.flush_events(seq_before).await;
+                self.broadcast_action_frame(seq_before).await;
                 self.turn_started_ms = now;
                 self.announce_turn().await;
             }
@@ -736,6 +780,7 @@ impl Actor {
             (seq_before, rt.head())
         };
         self.flush_events(seq_before).await;
+        self.broadcast_action_frame(seq_before).await;
         let key_suffix = format!("root-{}", hex::encode(root));
         if let Err(e) = self
             .enqueue_job("submit_settlement", json!({}), Some(key_suffix))
@@ -892,6 +937,7 @@ impl Actor {
             "current_bet": engine.current_bet,
             "to_act": engine.to_act,
             "round": engine.round,
+            "clock_round": self.clock_round(),
             "feed_price": tick.as_ref().map(|t| t.price.clone()),
             "feed_price_expo": crate::price::PRICE_EXPO,
             "feed_price_ts": tick.as_ref().map(|t| t.timestamp_ms),
@@ -899,17 +945,44 @@ impl Actor {
         })
     }
 
-    async fn announce_turn(&mut self) {
-        let Some(mut turn) = self.open_turn_value() else {
+    async fn broadcast_action_frame(&self, seq_before: usize) {
+        let Some(rt) = self.runtime.as_ref() else {
             return;
         };
-        if let Some(obj) = turn.as_object_mut() {
+        if rt.events().len() <= seq_before {
+            return;
+        }
+        self.broadcast(self.action_frame(seq_before).await);
+    }
+
+    async fn announce_turn(&mut self) {
+        let Some(turn) = self.turn_view() else {
+            return;
+        };
+        let mut public = turn.clone();
+        if let Some(obj) = public.as_object_mut() {
+            obj.insert("v".into(), json!(1));
+            obj.insert("t".into(), json!("turn_update"));
+            obj.insert("server_time_ms".into(), json!(now_ms()));
+            obj.insert("match_id".into(), json!(self.id));
+        }
+        self.broadcast(public);
+
+        let Some(seat) = turn.get("seat").and_then(Value::as_u64).map(|v| v as usize) else {
+            return;
+        };
+        let Some(wallet) = self.wallet_for_engine_seat(seat).await else {
+            return;
+        };
+        let mut private = turn;
+        if let Some(obj) = private.as_object_mut() {
             obj.insert("v".into(), json!(1));
             obj.insert("t".into(), json!("your_turn"));
             obj.insert("server_time_ms".into(), json!(now_ms()));
             obj.insert("match_id".into(), json!(self.id));
+            obj.insert("_to_wallet".into(), json!(wallet));
         }
-        self.broadcast(turn);
+        self.broadcast(private);
     }
 
     // ---- views ------------------------------------------------------------------------
@@ -917,10 +990,9 @@ impl Actor {
     async fn view(&self) -> Value {
         let mut view = crate::view::match_view(&self.st, &self.row, self.runtime.as_ref()).await;
         if let Some(obj) = view.as_object_mut() {
-            obj.insert(
-                "open_turn".into(),
-                self.open_turn_value().unwrap_or(Value::Null),
-            );
+            let turn = self.turn_view().unwrap_or(Value::Null);
+            obj.insert("open_turn".into(), turn.clone());
+            obj.insert("turn".into(), turn);
         }
         view
     }
