@@ -138,7 +138,9 @@ surface it via `/v1/wallets/{wallet}/claimables`.
   when a live turn is open, and after settlement a `reveal` block
   `{settlement_price, predictions:[{seat, price, source:"sealed"|"spot"}]}`.
 - **Event log**: `GET /v1/matches/{id}/events?after_seq=&limit=` — every action with its
-  `feed_price` stamp (§8). Sealed ciphertexts are redacted until reveal.
+  `feed_price` stamp (§8). Sealed ciphertexts are redacted until reveal. Use
+  `after_seq=-1` or omit `after_seq` to fetch the complete journal including genesis
+  `seq: 0`; use the last observed `seq` for incremental reads.
 
 ## 7. Game start, sealing, dealer
 
@@ -207,10 +209,10 @@ All state lives server-side; the socket is stateless.
 2. `GET /v1/wallets/{wallet}/active` → every non-terminal seat/candidacy + settled-unclaimed:
    `[{match_id, phase, seat_index, your_turn, deadline_ts, open_turn}]`. Deep-link the user straight
    back to the table.
-3. WS `subscribe {channel:{match:{match_id}}, last_seq:0}` → server sends
+3. WS `subscribe {channel:{match:{match_id}}, last_seq:-1}` → server sends
    `snapshot {state, last_seq}` (current table view) followed by `event {seq, ...}` for the
-   **complete ordered history**, then the live stream — gap-free, dedup by `seq`. Pass your
-   last seen `last_seq` instead of 0 to fetch only the delta.
+   **complete ordered history**, including genesis `seq: 0`, then the live stream — gap-free,
+   dedup by `seq`. Pass your last seen `last_seq` to fetch only the delta.
 4. If `snapshot.state.open_turn.seat === your seat_index`, render the action controls from
    `open_turn`; this is the recoverable form of the transient `your_turn` frame.
 5. Deadlines are absolute; if the player timed out while away, the default action is

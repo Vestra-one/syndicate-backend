@@ -302,10 +302,13 @@ pub async fn get_match(
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
-    #[serde(default)]
-    pub after_seq: u64,
+    #[serde(default = "default_after_seq")]
+    pub after_seq: i64,
     #[serde(default = "default_limit")]
     pub limit: i64,
+}
+fn default_after_seq() -> i64 {
+    -1
 }
 fn default_limit() -> i64 {
     500
@@ -326,7 +329,7 @@ pub async fn get_events(
                FROM match_events
                WHERE match_id = $1 AND seq > $2
                ORDER BY seq ASC LIMIT $3"#,
-            &[&id, &(q.after_seq as i64), &q.limit.clamp(1, 1000)],
+            &[&id, &q.after_seq.max(-1), &q.limit.clamp(1, 1000)],
         )
         .await?;
     let events: Vec<Value> = rows
@@ -369,5 +372,21 @@ pub fn redact_event_payload(payload: &mut Value) {
         for v in arr {
             redact_event_payload(v);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_query_defaults_before_genesis_and_accepts_negative_one() {
+        let q: EventsQuery = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(q.after_seq, -1);
+        assert_eq!(q.limit, 500);
+
+        let q: EventsQuery = serde_json::from_value(json!({"after_seq": -1, "limit": 25})).unwrap();
+        assert_eq!(q.after_seq, -1);
+        assert_eq!(q.limit, 25);
     }
 }

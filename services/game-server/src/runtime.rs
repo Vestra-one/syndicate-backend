@@ -464,9 +464,13 @@ impl Actor {
                 }));
             }
             ChainEvent::LiveBegan => {
-                if let Err(e) = self.start_engine().await {
-                    warn!(match_id = %self.id, "engine start failed: {e}");
-                }
+                let started = match self.start_engine().await {
+                    Ok(started) => started,
+                    Err(e) => {
+                        warn!(match_id = %self.id, "engine start failed: {e}");
+                        false
+                    }
+                };
                 self.broadcast(json!({
                     "v": 1, "t": "phase", "server_time_ms": now_ms(),
                     "match_id": self.id, "phase": "live",
@@ -474,6 +478,9 @@ impl Actor {
                     "scheduled_end": self.row.scheduled_end_ts.map(ts_ms),
                     "button": self.row.button,
                 }));
+                if started {
+                    self.broadcast_action_frame(0).await;
+                }
                 self.announce_turn().await;
             }
             ChainEvent::Settled => {
@@ -639,9 +646,9 @@ impl Actor {
 
     // ---- Live -----------------------------------------------------------------------
 
-    async fn start_engine(&mut self) -> Result<(), ApiError> {
+    async fn start_engine(&mut self) -> Result<bool, ApiError> {
         if self.runtime.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let seats = self.seats().await?;
         let players: Vec<(PlayerId, u64, u64)> = seats
@@ -686,14 +693,15 @@ impl Actor {
         }
         self.runtime = Some(runtime);
         self.turn_started_ms = now_ms();
-        Ok(())
+        Ok(true)
     }
 
     /// Recovery after restart: rebuild the engine by replaying the persisted log.
     async fn recover_live(&mut self) -> Result<(), ApiError> {
         let events = crate::chainjobs::load_events(&self.st.pool, self.id).await?;
         if events.is_empty() {
-            return self.start_engine().await;
+            self.start_engine().await?;
+            return Ok(());
         }
         let snapshot = FencedMatchRuntime::replay(&events)
             .map_err(|e| ApiError::internal(format!("{e:?}")))?;
@@ -856,6 +864,7 @@ impl Actor {
             .map_err(|e| ApiError::conflict("bad_default", format!("{e:?}")))?;
         self.defaults.insert(seat, policy.policy);
         self.flush_events(seq_before).await;
+        self.broadcast_action_frame(seq_before).await;
         Ok(())
     }
 
@@ -931,7 +940,7 @@ impl Actor {
         json!({
             "v": 1, "t": "action", "server_time_ms": now_ms(),
             "match_id": self.id,
-            "seq": rt.events().len(),
+            "seq": rt.next_seq(),
             "events": last,
             "pot": engine.seats.iter().map(|s| s.total_contribution).sum::<u64>(),
             "current_bet": engine.current_bet,

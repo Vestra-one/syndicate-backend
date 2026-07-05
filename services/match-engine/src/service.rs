@@ -248,6 +248,7 @@ pub struct FencedMatchRuntime {
     lease: MatchLease,
     engine: Engine,
     events: Vec<EventEnvelope>,
+    next_seq: u64,
     head: [u8; 32],
     seen_intents: HashSet<(usize, u64)>,
     registered_defaults: HashMap<usize, SignedDefaultPolicy>,
@@ -268,6 +269,7 @@ impl FencedMatchRuntime {
             lease,
             engine,
             events: Vec::new(),
+            next_seq: 0,
             head: GENESIS,
             seen_intents: HashSet::new(),
             registered_defaults: HashMap::new(),
@@ -286,6 +288,7 @@ impl FencedMatchRuntime {
             lease,
             engine: snapshot.engine,
             events: Vec::new(),
+            next_seq: snapshot.next_seq,
             head: snapshot.head,
             seen_intents: snapshot.seen_intents.into_iter().collect(),
             registered_defaults: snapshot
@@ -501,7 +504,7 @@ impl FencedMatchRuntime {
         EngineSnapshot {
             config: self.config.clone(),
             engine: self.engine.clone(),
-            next_seq: self.events.last().map(|e| e.seq + 1).unwrap_or(0),
+            next_seq: self.next_seq,
             head: self.head,
             seen_intents,
             registered_defaults,
@@ -668,6 +671,10 @@ impl FencedMatchRuntime {
         &self.events
     }
 
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
     pub fn head(&self) -> [u8; 32] {
         self.head
     }
@@ -771,7 +778,8 @@ impl FencedMatchRuntime {
         let prev_hash = self.head;
         let hash = hash_event(&event, self.lease.fencing_token, &prev_hash);
         self.head = hash;
-        let seq = self.events.len() as u64;
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
         self.events.push(EventEnvelope {
             seq,
             owner_fencing_token: self.lease.fencing_token,
@@ -1064,6 +1072,43 @@ mod tests {
         assert_eq!(replayed.engine.current_bet, snapshot.engine.current_bet);
         assert_eq!(replayed.engine.to_act, snapshot.engine.to_act);
         assert_eq!(replayed.seen_intents, snapshot.seen_intents);
+    }
+
+    #[test]
+    fn runtime_from_snapshot_continues_event_sequence() {
+        let mut leases = InMemoryLeaseCoordinator::new();
+        let cfg = config("match-recovered-seq");
+        let lease_a = leases
+            .acquire(&cfg.match_id, "node-a", 0, cfg.lease_ttl_ms)
+            .unwrap();
+        let mut runtime = FencedMatchRuntime::start(cfg.clone(), lease_a);
+
+        runtime
+            .apply_signed_action(&leases, 10, intent(0, 1, Action::Call, runtime.head()))
+            .unwrap();
+        let snapshot = FencedMatchRuntime::replay(runtime.events()).unwrap();
+        assert_eq!(snapshot.next_seq, 2);
+
+        let lease_b = leases
+            .acquire(
+                &cfg.match_id,
+                "node-b",
+                cfg.lease_ttl_ms + 1,
+                cfg.lease_ttl_ms,
+            )
+            .unwrap();
+        let mut recovered = FencedMatchRuntime::from_snapshot(snapshot, lease_b);
+        let head = recovered.head();
+        let appended = recovered
+            .apply_signed_action(
+                &leases,
+                cfg.lease_ttl_ms + 2,
+                intent(1, 1, Action::Call, head),
+            )
+            .unwrap();
+
+        assert_eq!(appended.seq, 2);
+        assert_eq!(recovered.next_seq(), 3);
     }
 
     #[test]

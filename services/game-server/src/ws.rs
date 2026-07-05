@@ -36,8 +36,8 @@ enum ClientMsg {
     },
     Subscribe {
         channel: Value,
-        #[serde(default)]
-        last_seq: u64,
+        #[serde(default = "default_event_cursor")]
+        last_seq: i64,
     },
     Unsubscribe {
         channel: Value,
@@ -242,7 +242,7 @@ impl Conn {
         self.nonce = Some(nonce);
     }
 
-    async fn subscribe(&mut self, channel: Value, last_seq: u64) {
+    async fn subscribe(&mut self, channel: Value, last_seq: i64) {
         let key = channel_key(&channel);
         if let Some(task) = self.subs.remove(&key) {
             task.abort();
@@ -297,12 +297,13 @@ impl Conn {
             }
 
             // Backfill events > last_seq (redacted).
+            let backfill_after = backfill_cursor(last_seq);
             if let Ok(client) = self.st.pool.get().await {
                 if let Ok(rows) = client
                     .query(
                         r#"SELECT seq, event_type, payload, hash FROM match_events
                            WHERE match_id = $1 AND seq > $2 ORDER BY seq ASC LIMIT 2000"#,
-                        &[&match_id, &(last_seq as i64)],
+                        &[&match_id, &backfill_after],
                     )
                     .await
                 {
@@ -470,6 +471,18 @@ impl Conn {
     }
 }
 
+fn default_event_cursor() -> i64 {
+    -1
+}
+
+fn backfill_cursor(last_seq: i64) -> i64 {
+    if last_seq <= 0 {
+        -1
+    } else {
+        last_seq
+    }
+}
+
 fn prepare_forward_frame(frame: &Value, wallet: Option<&str>) -> Option<Value> {
     let mut outbound = frame.clone();
     if let Some(target) = outbound.get("_to_wallet").and_then(Value::as_str) {
@@ -540,6 +553,26 @@ mod tests {
         let sub: ClientMsg =
             serde_json::from_str(r#"{"t":"subscribe","channel":"lobby"}"#).unwrap();
         assert!(matches!(sub, ClientMsg::Subscribe { .. }));
+    }
+
+    #[test]
+    fn subscribe_cursor_defaults_before_genesis_and_accepts_negative_one() {
+        let sub: ClientMsg = serde_json::from_str(
+            r#"{"t":"subscribe","channel":{"match":"11111111-2222-3333-4444-555555555555"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(sub, ClientMsg::Subscribe { last_seq: -1, .. }));
+
+        let sub: ClientMsg =
+            serde_json::from_str(r#"{"t":"subscribe","channel":"lobby","last_seq":-1}"#).unwrap();
+        assert!(matches!(sub, ClientMsg::Subscribe { last_seq: -1, .. }));
+    }
+
+    #[test]
+    fn ws_bootstrap_cursor_fetches_genesis_for_legacy_zero() {
+        assert_eq!(backfill_cursor(-1), -1);
+        assert_eq!(backfill_cursor(0), -1);
+        assert_eq!(backfill_cursor(7), 7);
     }
 
     #[test]

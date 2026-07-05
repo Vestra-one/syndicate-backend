@@ -177,7 +177,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
 
 fn event_cursor(row: &MatchRow, rt: Option<&FencedMatchRuntime>) -> (u64, String) {
     match rt {
-        Some(rt) => (rt.events().len() as u64, hex::encode(rt.head())),
+        Some(rt) => (rt.next_seq(), hex::encode(rt.head())),
         None => (row.event_count, hex::encode(&row.event_head)),
     }
 }
@@ -358,7 +358,7 @@ mod tests {
         let rt = runtime();
         let (last_seq, head) = event_cursor(&row, Some(&rt));
 
-        assert_eq!(last_seq, rt.events().len() as u64);
+        assert_eq!(last_seq, rt.next_seq());
         assert_eq!(head, hex::encode(rt.head()));
         assert_ne!(last_seq, row.event_count);
         assert_ne!(head, hex::encode(&row.event_head));
