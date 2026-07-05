@@ -114,12 +114,13 @@ function hexToBytes(hex: string, len: number): number[] {
   return out
 }
 
-/** Mint a fresh on-chain match id (random u64 as a decimal string). */
+/** Mint a fresh on-chain match id (random full-width u64 as a decimal string). */
 export function newOnchainMatchId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8))
   let v = 0n
   for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i])
-  // keep it within safe u64 and non-zero
+  // Full u64 range, non-zero. NOTE: ids routinely exceed 2^53, so they MUST be carried as
+  // decimal strings end-to-end — never round-trip an id through `n()`/Number (see `idStr`).
   return (v === 0n ? 1n : v).toString()
 }
 
@@ -131,13 +132,24 @@ export function newOnchainMatchId(): string {
 // unix SECONDS (Solana Clock), NOT the REST ms convention.
 // ---------------------------------------------------------------------------
 
-/** Anchor returns u64/i64 as BN; coerce to a JS number (all our values are < 2^53). */
+/**
+ * Anchor returns u64/i64 as BN; coerce to a JS number for BOUNDED fields only (token base
+ * units, unix-second timestamps — all comfortably < 2^53). Goes via the decimal string so a
+ * value above 2^53 degrades to a lossy float instead of throwing: `BN.toNumber()` throws
+ * ("can only safely store up to 53 bits"), which previously crashed whole account scans.
+ * NEVER use this for ids — they span the full u64; use `idStr` to keep them exact.
+ */
 function n(v: unknown): number {
   if (typeof v === 'number') return v
-  if (v && typeof (v as { toNumber?: () => number }).toNumber === 'function') {
-    return (v as { toNumber: () => number }).toNumber()
-  }
+  const bn = v as { toNumber?: () => number; toString?: () => string } | null
+  if (bn && typeof bn.toNumber === 'function') return Number(bn.toString!())
   return Number(v ?? 0)
+}
+
+/** Exact decimal string for a full-width u64 id (BN or number). No precision loss, never throws. */
+function idStr(v: unknown): string {
+  if (v == null) return '0'
+  return typeof v === 'number' ? String(v) : (v as { toString: () => string }).toString()
 }
 
 /** Anchor decodes Rust enums as `{ <variantLowerCamel>: {} }`; map to our status union. */
@@ -192,7 +204,9 @@ async function simulateSignAndSend(
   const adapter = walletBridge.adapter
   if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash()
+  // 'confirmed' blockhash (not the connection's 'finalized' default) buys the full validity
+  // window before send, cutting spurious "block height exceeded" failures under load.
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed')
   tx.recentBlockhash = blockhash
   tx.lastValidBlockHeight = lastValidBlockHeight
   tx.feePayer = feePayer
@@ -454,31 +468,28 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
-      console.log('[createAndDeposit] ── params ──────────────────────────────────')
-      console.log('  program:           ', PROGRAM_ID.toBase58())
-      console.log('  protocolState:     ', protState.toBase58())
-      console.log('  matchAcct:         ', matchAcct.toBase58())
-      console.log('  mint (chips):      ', mintAddr.toBase58())
-      console.log('  configHash:        ', input.configHash)
-      console.log('  priceTokenHex:     ', input.priceTokenHex)
-      console.log('  matchId:           ', params.matchId.toString())
-      console.log('  buyIn:             ', params.buyIn.toString())
-      console.log('  entryFee:          ', params.entryFee.toString())
-      console.log('  rakeBps:           ', params.rakeBps)
-      console.log('  rakeCap:           ', params.rakeCap.toString())
-      console.log('  minPlayers:        ', params.minPlayers)
-      console.log('  maxPlayers:        ', params.maxPlayers)
-      console.log('  isPrivate:         ', params.isPrivate)
-      console.log('  totalBettingDur:   ', params.totalBettingDurationSec.toString())
-      console.log('  sealWindowSec:     ', params.sealWindowSec.toString())
-      console.log('  beginLiveWindow:   ', params.beginLiveWindowSec.toString())
-      console.log('  fillWindowSec:     ', params.fillWindowSec.toString())
-      console.log('  maxOracleConf:     ', params.maxOracleConfidence.toString())
-      console.log('  oracleExponent:    ', params.oracleExponent)
-      console.log('────────────────────────────────────────────────────────────')
+      if (import.meta.env.DEV) {
+        console.log('[createAndDeposit] params', {
+          program: PROGRAM_ID.toBase58(), protocolState: protState.toBase58(),
+          matchAcct: matchAcct.toBase58(), mint: mintAddr.toBase58(),
+          configHash: input.configHash, priceTokenHex: input.priceTokenHex,
+          matchId: params.matchId.toString(), buyIn: params.buyIn.toString(),
+          entryFee: params.entryFee.toString(), rakeBps: params.rakeBps,
+          rakeCap: params.rakeCap.toString(), minPlayers: params.minPlayers,
+          maxPlayers: params.maxPlayers, isPrivate: params.isPrivate,
+          totalBettingDurationSec: params.totalBettingDurationSec.toString(),
+          sealWindowSec: params.sealWindowSec.toString(),
+          beginLiveWindowSec: params.beginLiveWindowSec.toString(),
+          fillWindowSec: params.fillWindowSec.toString(),
+          maxOracleConfidence: params.maxOracleConfidence.toString(),
+          oracleExponent: params.oracleExponent,
+        })
+      }
 
       // Simulate first via our own RPC to get the actual program logs before MetaMask sees it.
-      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash()
+      // Fetch the send blockhash at 'confirmed' (not the connection's 'finalized' default) so
+      // we don't burn ~15-30s of the ~90s validity window before the tx is even signed.
+      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed')
       tx.recentBlockhash = blockhash
       tx.lastValidBlockHeight = lastValidBlockHeight
       tx.feePayer = authority
@@ -491,7 +502,7 @@ function createLiveChain(): ChainClient {
           (simResult.value.logs ?? []).join('\n')
         )
       }
-      console.log('[createAndDeposit] simulation OK, logs:', simResult.value.logs)
+      if (import.meta.env.DEV) console.log('[createAndDeposit] simulation OK, logs:', simResult.value.logs)
 
       const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection, opts?: object) => Promise<string> }
       let sig: string
@@ -505,7 +516,13 @@ function createLiveChain(): ChainClient {
       }
 
       onProgress?.('confirming', sig) // broadcast — waiting on finality
-      await conn.confirmTransaction(sig, 'finalized')
+      // Bounded confirm: the bare (sig, commitment) form has no expiry and hangs forever if
+      // the RPC's signature-subscribe never fires (see simulateSignAndSend). The blockhash
+      // strategy caps the wait at the blockhash's validity window.
+      const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'finalized')
+      if (confirmation.value.err) {
+        throw new Error(anchorErrorCode(confirmation.value.err) ?? `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`)
+      }
       return { txSig: sig, matchPda: matchAcct.toBase58() }
     },
 
@@ -611,10 +628,10 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
-      const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection) => Promise<string> }
-      const sig = await sender.sendTransaction(tx, conn)
-      await conn.confirmTransaction(sig, 'finalized')
-      return sig
+      // Route through simulateSignAndSend: it simulates first (so an already-settled/second
+      // claim throws a clean `AlreadyClaimed` pre-signature), surfaces the symbolic Anchor
+      // code, and bounds the confirm to the blockhash window instead of hanging.
+      return simulateSignAndSend(conn, tx, player)
     },
 
     async refund(_matchId: string): Promise<string> {
@@ -658,10 +675,8 @@ function createLiveChain(): ChainClient {
       if (createIx) tx.add(createIx)
       tx.add(ix)
 
-      const sender = adapter as unknown as { sendTransaction: (tx: Transaction, conn: Connection) => Promise<string> }
-      const sig = await sender.sendTransaction(tx, conn)
-      await conn.confirmTransaction(sig, 'finalized')
-      return sig
+      // Same as claim(): simulate + clean Anchor code + bounded confirm via simulateSignAndSend.
+      return simulateSignAndSend(conn, tx, player)
     },
 
     /**
@@ -891,7 +906,7 @@ function createLiveChain(): ChainClient {
         if (!reclaimable) continue
         out.push({
           ...status,
-          onchainMatchId: n(matchAcct.matchId).toString(),
+          onchainMatchId: idStr(matchAcct.matchId),
           matchPda: matchKeys[i].toBase58(),
           deposit: seat.deposit,
           entryFeePaid: seat.entryFeePaid,
@@ -929,7 +944,7 @@ function createLiveChain(): ChainClient {
         if (!matchAcct) continue
         if (mapMatchStatus(matchAcct).status !== 'SETTLED') continue
         out.push({
-          onchainMatchId: n(matchAcct.matchId).toString(),
+          onchainMatchId: idStr(matchAcct.matchId),
           matchPda: matchKeys[i].toBase58(),
           payout: seat.payout,
         })

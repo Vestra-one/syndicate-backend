@@ -174,6 +174,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
           value={text}
           onChange={(e) => { setText(e.target.value); if (sealError) useGameStore.setState({ playError: null }) }}
           placeholder="price"
+          aria-label="Sealed prediction price"
           aria-invalid={!!error}
         />
       </div>
@@ -205,7 +206,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
           ? 'Saved on your device only — it seals automatically the moment the table locks.'
           : 'Encrypted on your device — no one, not even the server, can read it until the match ends.'}
         {' '}
-        <a className="seal-how" href="#" onClick={(e) => e.preventDefault()} title="Your call is time-lock encrypted to the match-end drand round, so it stays secret until settlement.">how it works ↗</a>
+        <button type="button" className="seal-how seal-how--btn" title="Your call is time-lock encrypted to the match-end drand round, so it stays secret until settlement.">how it works ↗</button>
       </p>
 
       <button className="seal-btn" onClick={submit} disabled={!valid || working}>
@@ -503,6 +504,7 @@ function ActionPanel() {
             max={maxRaiseTo}
             step={step}
             value={raiseTo}
+            aria-label="Raise-to amount"
             onChange={(e) => setRaiseTo(clampRaise(Number(e.target.value)))}
           />
           <div className="raise-row">
@@ -512,6 +514,7 @@ function ActionPanel() {
               min={minRaiseTo / 1e6}
               step={step / 1e6}
               value={raiseTo / 1e6}
+              aria-label="Raise-to amount"
               onChange={(e) => setRaiseTo(clampRaise(Math.round(Number(e.target.value) * 1e6)))}
             />
             <button

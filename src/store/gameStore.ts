@@ -336,14 +336,60 @@ let unsub: (() => void) | null = null
 let actionHead: Uint8Array = new Uint8Array(32)
 let actionNonce = 0
 let myEngineSeat: number | null = null
+// Highest engine `seq` applied to the store — a watchdog reconnect resubscribes from here so
+// the server replays only the delta (subscribing from 0 re-delivers the whole history, and the
+// transport does no dedup, so every reconnect otherwise reprocessed every past frame).
+let lastAppliedSeq = 0
 // Bounds the on-demand context refresh a Seal click can trigger, so a window that
 // never gets its drand round assigned can't hammer REST in a tight retry loop.
 let sealContextTries = 0
+// One-shot latch for the live-start default registration (mints journal event seq 1).
+let defaultArmed = false
 function resetActionChain() {
   actionHead = new Uint8Array(32)
   actionNonce = 0
   myEngineSeat = null
+  lastAppliedSeq = 0
+  defaultArmed = false
   sealContextTries = 0
+}
+
+/**
+ * Learn the engine's action-chain head from the journal: each event's hash IS the head
+ * after it. Returns false when no event is fetchable — the genesis MatchStarted event is
+ * seq 0 and the events API (`since` is exclusive, floor 0) can NEVER return it, so a fresh
+ * hand's head is unknowable until some seat appends event seq 1.
+ */
+async function syncActionHead(matchId: string): Promise<boolean> {
+  try {
+    const { events } = await api.getEvents(matchId, 0)
+    const last = events.at(-1)
+    if (!last) return false
+    actionHead = hexToBytes32(last.hash)
+    actionNonce = Math.max(actionNonce, last.seq)
+    return true
+  } catch (err) {
+    console.warn('[head] journal sync failed:', err)
+    return false
+  }
+}
+
+/**
+ * Make the action chain signable at live start. On an unpatched server the snapshot's
+ * `head` is a stale DB copy and genesis (seq 0) is unfetchable, so when the journal shows
+ * nothing we register our default policy — the ONLY signed intent with no prev_head
+ * requirement — which appends journal event seq 1; its hash is then the true head and
+ * acts can finally flow. (First act of every match was otherwise rejected with
+ * "prev_head mismatch" — unlearnable head, see BACKEND-HANDOFF.md.)
+ */
+async function armActionChain(get: () => GameState): Promise<void> {
+  const matchId = get().match?.matchId ?? joinMatchId
+  if (!matchId) return
+  if (await syncActionHead(matchId)) return
+  if (defaultArmed) return
+  defaultArmed = true
+  console.log('[head] journal empty — registering default policy to mint a fetchable event')
+  get().setDefault(get().defaultAction)
 }
 
 /** Subscribe the open socket to a match channel — server replies with a snapshot then the
@@ -370,7 +416,8 @@ function startMatchPoll() {
       console.warn('[ws] socket dead — reconnecting and resubscribing')
       void s.connect().then(() => {
         const matchId = useGameStore.getState().match?.matchId ?? joinMatchId
-        if (matchId) gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: 0 })
+        // Resume from the last applied seq — the server replays only what we missed.
+        if (matchId) gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: lastAppliedSeq })
       })
     }
     void refreshMatchSeats(useGameStore.setState as SetState, useGameStore.getState)
@@ -389,8 +436,9 @@ let createCtx: { config: ApiConfig; feed: string; intent: CreateIntentResponse |
 /** The match UUID we resolved to JOIN — target of the deposit POST + candidate polling. */
 let joinMatchId: string | null = null
 
-/** One-shot latch: only auto-resume once per page load (wallet autoConnect can re-fire). */
-let resumeAttempted = false
+/** Auto-resume latch, keyed by wallet: dedupes autoConnect re-fires for the SAME wallet, but
+ *  a wallet switch (new address) re-attempts instead of being stuck on the first wallet. */
+let resumedForWallet: string | null = null
 
 /** Reconnect priority — a live game outranks a still-filling one if the wallet holds both. */
 const RESUME_PHASE_RANK: Record<string, number> = {
@@ -618,8 +666,8 @@ export const useGameStore = create<GameState>((set, get) => ({
    * challenge only — no Bearer handshake, so no signature prompt on page load.
    */
   resumeActiveTable: async (wallet) => {
-    if (resumeAttempted) return
-    resumeAttempted = true
+    if (resumedForWallet === wallet) return
+    resumedForWallet = wallet
     // Don't hijack an explicit flow: a ?table=… invite, or a join/create in progress.
     const s = get()
     if (s.view !== 'discovery' || s.seated || s.playResolving || s.pendingInvite) return
@@ -1133,6 +1181,25 @@ export const useGameStore = create<GameState>((set, get) => ({
       const commitmentHex = bytesToHex(commitment)
 
       // 2. Register the commitment on-chain (the strong seal proof).
+      // The program only accepts a commitment while the account is Sealing. Two races make a
+      // raw `BadStatus` here otherwise: the `phase:sealing` WS push can beat the lock tx's
+      // propagation to our RPC node (status still Filling), and a slow seal can miss the
+      // window (status already Live). Poll briefly for Sealing and give a clear message.
+      let chainStatus = (await adapters.chain.getMatchStatus(onchainMatchId))?.status
+      for (let i = 0; chainStatus === 'FILLING' && i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 1000))
+        chainStatus = (await adapters.chain.getMatchStatus(onchainMatchId))?.status
+      }
+      if (chainStatus !== 'SEALING') {
+        console.warn('[seal] on-chain not Sealing at register time', { chainStatus })
+        set({
+          sealStatus: 'unsealed',
+          playError: chainStatus === 'FILLING'
+            ? 'The table is still locking on-chain — wait a moment and seal again.'
+            : 'The on-chain seal window has already closed for this match.',
+        })
+        return
+      }
       let sealTxSig: string
       try {
         sealTxSig = await adapters.chain.registerPredictionCommitment(onchainMatchId, commitmentHex, targetRound)
@@ -1143,6 +1210,14 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
 
       // 3. Sign the seal-intent message and submit the ciphertext to the backend (§7 / App. B).
+      // TEMP DIAGNOSTIC — the backend rebuilds this message from match_seats.seat_index + its
+      // session wallet; log what WE sign so a mismatch (seat_index, or connected wallet ≠ the
+      // session wallet the backend verifies against) is visible when submit returns 401.
+      console.log('[seal] signing intent', {
+        onchainMatchId, seatIndex, myEngineSeat, yourSeat: match.yourSeat,
+        connectedWallet: wallet, sessionWallet: get().walletAddress,
+        targetRound, commitmentHex,
+      })
       const msg = predictionCommitmentMessage({
         matchId: BigInt(onchainMatchId),
         onchainMatchId: BigInt(onchainMatchId),
@@ -1175,14 +1250,19 @@ export const useGameStore = create<GameState>((set, get) => ({
     const wallet = adapters.wallet.address()
     const seatIndex = myEngineSeat ?? match.yourSeat
     if (!wallet || seatIndex == null) return
+    // Instant feedback: flip the panel to "Sending…" now, before the (slow) wallet sign —
+    // otherwise the button looks dead for the whole signature round-trip.
+    set({ actPending: action })
+    // Freshen the action-chain head from the journal at the last moment: the engine rejects
+    // any intent whose prev_head isn't its CURRENT head, and another seat's event (default
+    // registration, timeout) may have moved it since we last heard. ~1 RTT before the wallet
+    // prompt — worth it, a stale head costs the whole turn.
+    await syncActionHead(match.matchId)
     // Signed action intent (§8): both u64 slots carry onchain_match_id; nonce increments per
     // seat; prev_head is the current action-chain head. Sign the byte-exact message.
     const { tag, amount, wire } = bettingActionToWire(action)
     const nonce = ++actionNonce
     const prevHead = actionHead
-    // Instant feedback: flip the panel to "Sending…" now, before the (slow) wallet sign —
-    // otherwise the button looks dead for the whole signature round-trip.
-    set({ actPending: action })
     try {
       const msg = actionIntentMessage({
         matchId: BigInt(terms.onchainMatchId),
@@ -1418,6 +1498,7 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // Seed the action-chain head + nonce from the snapshot so the first `act` chains correctly.
       try { actionHead = hexToBytes32(frame.state.head) } catch { /* keep zero head */ }
       actionNonce = Math.max(actionNonce, frame.state.last_seq)
+      lastAppliedSeq = Math.max(lastAppliedSeq, frame.state.last_seq)
       const t = frame.state.timing
       set((s) => ({
         match: view,
@@ -1432,6 +1513,15 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // Reconnected mid-seal-window: recover the engine seat + our sealed flag, and fire
       // any early prediction queued before the disconnect.
       if (frame.state.phase === 'sealing') void ensureSealContext(set, get)
+      // Mid-turn refresh recovery: a patched server puts the open turn (with its TRUE
+      // deadline) in the snapshot — latch it if it's ours and still live.
+      const turn = frame.state.turn
+      if (turn && turn.seat === view.yourSeat && Date.now() < turn.deadline_ms) {
+        set({ yourTurn: { toCall: turn.to_call, minRaiseTo: turn.min_raise_to, deadline: turn.deadline_ms }, actPending: null })
+      }
+      // Reconnected mid-hand: pull seats immediately — this also reconstructs an open turn
+      // (see refreshMatchSeats) so a refresh during your turn no longer means a timeout fold.
+      if (frame.state.phase === 'live') void refreshMatchSeats(set, get)
       break
     }
 
@@ -1450,7 +1540,12 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       if (frame.phase === 'sealing') void ensureSealContext(set, get)
       // No live frame carries per-seat stacks, so pull them once the hand starts (blinds
       // posted) — otherwise stack/committed/all-in stay 0 for the whole match.
-      if (frame.phase === 'live') void refreshMatchSeats(set, get)
+      if (frame.phase === 'live') {
+        // Bootstrap the action chain: the genesis event (seq 0) is unfetchable, so learn
+        // the head from the journal — or mint event seq 1 via our default policy if empty.
+        void armActionChain(get)
+        void refreshMatchSeats(set, get)
+      }
       break
     }
 
@@ -1459,6 +1554,13 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       break
 
     case 'event': {
+      // Each journaled event's hash IS the action-chain head after it — track it so `act`
+      // signs the right prev_head. The engine appends genesis/blind events at live start
+      // (moving the head) with no other frame carrying the new value; signing against the
+      // snapshot's stale copy rejected EVERY act with "prev_head mismatch".
+      try { actionHead = hexToBytes32(frame.hash) } catch { /* keep */ }
+      actionNonce = Math.max(actionNonce, frame.seq)
+      lastAppliedSeq = Math.max(lastAppliedSeq, frame.seq)
       // Standalone engine events. Timer-driven street transitions land HERE, not inside an
       // `action` broadcast — when a street closes with nobody acting there is no action frame
       // to carry the new round, so ignoring these froze the round counter until the next bet.
@@ -1502,8 +1604,6 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // the panel if the seat verifiably matches our wallet-resolved engine seat.
       const turn = { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms }
       const mySeat = myEngineSeat ?? get().match?.yourSeat ?? null
-      // TEMP DIAGNOSTIC — confirms whether turn frames arrive and how the seat resolves.
-      console.log('[ws] your_turn — frame.seat', frame.seat, 'mySeat', mySeat, 'deadline in', Math.round((frame.deadline_ms - Date.now()) / 1000), 's')
       // Whoever it's for, the frame names the acting seat — keep the banner/pods honest.
       set((s) => ({ match: s.match ? { ...s.match, toActSeat: frame.seat } : s.match }))
       if (mySeat == null) {
@@ -1516,6 +1616,9 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         break
       }
       set({ yourTurn: frame.seat === mySeat ? turn : null, actPending: null })
+      // Freshen the action-chain head from the journal before the user can click — an
+      // opponent's default registration may have moved it since our last sync.
+      if (frame.seat === mySeat) void syncActionHead(frame.match_id)
       // Make sure our own stack/committed are populated before the action panel opens — the
       // turn frame carries to_call/min_raise_to but no stacks.
       void refreshMatchSeats(set, get)
@@ -1526,6 +1629,7 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // Advance the action-chain head + nonce so the next signed `act` uses the right prev_head.
       try { actionHead = hexToBytes32(frame.head_hex) } catch { /* keep */ }
       actionNonce = Math.max(actionNonce, frame.seq)
+      lastAppliedSeq = Math.max(lastAppliedSeq, frame.seq)
       const decimals = get().terms?.decimals ?? 2
       const priceNum = frame.feed_price != null ? wadStringToFixed(frame.feed_price, frame.feed_price_expo, decimals) : 0
       const feedItems = frame.events
@@ -1547,30 +1651,38 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
     }
 
     case 'settled':
-      set({
-        settlement: {
-          matchId: frame.match_id,
-          settlementPrice: 0,
-          awards: frame.payouts.map((p) => ({ seat: p.seat, amount: 0 })),
-          uncalledReturns: [],
-          rakeCollected: 0,
-          revealedPredictions: [],
-        },
-        yourTurn: null,
-        actPending: null,
-      })
+      // The frame carries only {seat, wallet} — no price, predictions, or amounts. Clear the
+      // turn immediately for responsiveness, then hydrate the real ceremony from REST + chain.
+      set({ yourTurn: null, actPending: null })
+      void recoverSettlement(set, get, frame.payouts.map((p) => p.seat))
       break
 
     case 'voided':
       set({ voided: { reason: (frame.kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })
       break
 
+    case 'default_set': {
+      // Registering a default policy appended a journal event — adopt its hash as the
+      // action-chain head (this is the live-start bootstrap completing; see armActionChain).
+      void syncActionHead(frame.match_id)
+      break
+    }
+
     case 'error':
       console.warn('[ws] error frame:', frame.code, frame.msg)
+      // A rejected act otherwise leaves a silently dead table (yourTurn was optimistically
+      // cleared on send). Resync the chain head + table so the turn is restored and the
+      // retry signs against the real head.
+      if (frame.code === 'bad_action' || frame.code === 'unauthorized' || frame.code === 'rate_limited') {
+        set({ playError: `Action rejected — ${frame.msg}` })
+        const mid = get().match?.matchId ?? joinMatchId
+        if (mid) void syncActionHead(mid)
+        void refreshMatchSeats(set, get)
+      }
       break
 
     default:
-      break // lobby_delta / default_set / sealed / pong — no store action needed
+      break // lobby_delta / sealed / pong — no store action needed
   }
 }
 
@@ -1612,6 +1724,101 @@ async function ensureSealContext(set: SetState, get: () => GameState): Promise<v
 }
 
 /**
+ * Build the full `SettlementView` from a REST match detail's `reveal` block. The WS `settled`
+ * frame and the REST detail both carry the settlement PRICE + every revealed prediction, but
+ * NEITHER view carries per-seat payout AMOUNTS — those live on-chain (seat.payout). So the
+ * caller reads the connected wallet's on-chain payout separately and passes it in as `myPayout`
+ * (the one award the player actually needs, to light the Claim button). `winnerSeats` (from the
+ * WS payouts list) crowns the in-the-money seats even when only our own amount is known.
+ */
+function settlementFromDetail(
+  detail: MatchDetail,
+  decimals: number,
+  myPayout: { seat: number; amount: number } | null,
+  winnerSeats?: number[],
+): SettlementView {
+  const reveal = detail.reveal as {
+    settlement_price_wad?: string | null
+    predictions?: { engine_seat: number; prediction_wad: string }[] | null
+    rake?: number | null
+  } | null
+  const awards =
+    winnerSeats && winnerSeats.length
+      ? winnerSeats.map((seat) => ({ seat, amount: myPayout && myPayout.seat === seat ? myPayout.amount : 0 }))
+      : myPayout
+        ? [myPayout]
+        : []
+  return {
+    matchId: detail.match_id,
+    settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
+    awards,
+    uncalledReturns: [],
+    rakeCollected: reveal?.rake ?? 0,
+    revealedPredictions: (reveal?.predictions ?? []).map((p) => ({
+      seat: p.engine_seat,
+      prediction: wadToFixed(p.prediction_wad, decimals),
+    })),
+  }
+}
+
+/**
+ * Land the resolution ceremony with REAL data (settlement price, every reveal, and the
+ * player's own on-chain payout). Used by BOTH the WS `settled` frame and the REST self-heal —
+ * the frame alone carries only seats+wallets, which previously rendered a blank $0 ceremony
+ * with the winner's Claim button hidden. Idempotent + poll-stopping; safe to fire from either.
+ */
+async function recoverSettlement(set: SetState, get: () => GameState, winnerSeats?: number[]): Promise<void> {
+  if (get().settlement) return
+  const matchId = get().match?.matchId ?? joinMatchId
+  if (!matchId) return
+  const decimals = get().terms?.decimals ?? 2
+
+  let detail: MatchDetail
+  try {
+    detail = await api.getMatch(matchId)
+  } catch (err) {
+    // REST unreachable — still surface a settled ceremony (empty reveal) so the table doesn't
+    // sit on "LIVE" forever; the on-chain claim path stays available via the dashboard.
+    console.warn('[settle] detail fetch failed — showing minimal ceremony:', err)
+    set((s) =>
+      s.settlement
+        ? {}
+        : {
+            settlement: {
+              matchId,
+              settlementPrice: 0,
+              awards: (winnerSeats ?? []).map((seat) => ({ seat, amount: 0 })),
+              uncalledReturns: [],
+              rakeCollected: 0,
+              revealedPredictions: [],
+            },
+            yourTurn: null,
+            actPending: null,
+          },
+    )
+    stopMatchPoll()
+    return
+  }
+
+  // Per-seat payout amounts aren't in any server view — read our own from the seat account.
+  let myPayout: { seat: number; amount: number } | null = null
+  const onchainId = get().terms?.onchainMatchId
+  if (adapters && onchainId) {
+    try {
+      const seat = await adapters.chain.getMySeat(onchainId)
+      if (seat && seat.payout > 0) myPayout = { seat: seat.engineSeat, amount: seat.payout }
+    } catch (err) {
+      console.warn('[settle] on-chain payout read failed:', err) // ceremony still shows, minus own award
+    }
+  }
+
+  set((s) =>
+    s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, myPayout, winnerSeats), yourTurn: null, actPending: null },
+  )
+  stopMatchPoll()
+}
+
+/**
  * Refresh per-seat stacks/committed/folded from REST detail and merge them into `match`.
  *
  * Engine seats (and their buy-in stacks) are assigned at lock, and NO live frame carries
@@ -1633,27 +1840,20 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
     // Terminal phases are supposed to arrive as WS `settled`/`voided` frames, but the
     // gateway can stay silent — recover them from the detail so the resolution shows.
     if (phase === 'SETTLED' && !get().settlement) {
+      // Reuse the shared recovery so the REST self-heal and the WS `settled` frame land an
+      // identical ceremony (price + reveals + the player's own on-chain payout).
       const decimals = get().terms?.decimals ?? 2
-      const reveal = detail.reveal as {
-        settlement_price_wad?: string | null
-        predictions?: { engine_seat: number; prediction_wad: string }[] | null
-        rake?: number | null
-      } | null
-      set({
-        settlement: {
-          matchId: detail.match_id,
-          settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
-          awards: [],
-          uncalledReturns: [],
-          rakeCollected: reveal?.rake ?? 0,
-          revealedPredictions: (reveal?.predictions ?? []).map((p) => ({
-            seat: p.engine_seat,
-            prediction: wadToFixed(p.prediction_wad, decimals),
-          })),
-        },
-        yourTurn: null,
-        actPending: null,
-      })
+      let myPayout: { seat: number; amount: number } | null = null
+      const onchainId = get().terms?.onchainMatchId
+      if (adapters && onchainId) {
+        try {
+          const seat = await adapters.chain.getMySeat(onchainId)
+          if (seat && seat.payout > 0) myPayout = { seat: seat.engineSeat, amount: seat.payout }
+        } catch (err) {
+          console.warn('[settle] on-chain payout read failed:', err)
+        }
+      }
+      set((s) => (s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, myPayout), yourTurn: null, actPending: null }))
       stopMatchPoll()
     } else if (phase === 'VOID' && !get().voided) {
       set({ voided: { reason: (detail.void_kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })
@@ -1703,6 +1903,37 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
           }
         : {},
     )
+
+    // Refresh-proof turns: `your_turn` fires ONCE and is never re-sent — a reload or socket
+    // blip during your turn used to mean a guaranteed timeout fold. If the detail says our
+    // seat is to act and no turn is latched, recover it. A patched server includes the open
+    // turn verbatim (`detail.turn`, TRUE deadline); otherwise reconstruct: to_call derives
+    // exactly; min_raise_to is a floor approximation (the server rejects an under-raise,
+    // and fold/check/call/all-in stay valid regardless); the deadline is an ESTIMATE.
+    const st = get()
+    if (
+      phase === 'LIVE' &&
+      mine != null &&
+      detail.to_act === mine.seat_index &&
+      st.yourTurn == null &&
+      st.actPending == null
+    ) {
+      const t = detail.turn
+      if (t && t.seat === mine.seat_index) {
+        if (Date.now() < t.deadline_ms) {
+          if (import.meta.env.DEV) console.log('[turn] recovered from detail — to_call', t.to_call, 'deadline_ms', t.deadline_ms)
+          set({ yourTurn: { toCall: t.to_call, minRaiseTo: t.min_raise_to, deadline: t.deadline_ms } })
+        }
+      } else {
+        const currentBet = detail.current_bet ?? 0
+        const toCall = Math.max(0, currentBet - (mine.committed ?? 0))
+        const bigBlind = st.terms?.bigBlind ?? 0
+        const minRaiseTo = Math.max(currentBet * 2, currentBet + bigBlind, bigBlind)
+        const timeoutMs = (st.terms?.actionTimerSec ?? 25) * 1000
+        if (import.meta.env.DEV) console.log('[turn] reconstructed from REST detail — to_call', toCall, 'minRaiseTo', minRaiseTo)
+        set({ yourTurn: { toCall, minRaiseTo, deadline: Date.now() + timeoutMs } })
+      }
+    }
   } catch (err) {
     console.warn('[seats] refresh failed:', err)
   }

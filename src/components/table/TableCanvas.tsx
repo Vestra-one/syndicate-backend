@@ -47,21 +47,22 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     const handle = createTableScene(el)
     handleRef.current = handle
 
+    // DEV console helpers — cleared on unmount so they don't retain a disposed scene (and
+    // invoking them post-dispose can't drive a torn-down composer).
+    let clearDev = () => {}
     if (import.meta.env.DEV) {
-      const w = window as unknown as {
-        __setPot?: (n: number) => void
-        __knock?: (seat: number) => void
-        __awardPot?: (seat: number) => void
-      }
-      w.__setPot = (n) => handle.setPot(n)
-      w.__knock = (seat) => handle.knock(seat)
-      w.__awardPot = (seat) => handle.awardPot(seat)
+      const w = window as unknown as Record<string, unknown>
+      w.__setPot = (n: number) => handle.setPot(n)
+      w.__knock = (seat: number) => handle.knock(seat)
+      w.__awardPot = (seat: number) => handle.awardPot(seat)
+      clearDev = () => { delete w.__setPot; delete w.__knock; delete w.__awardPot }
     }
 
     // Decorative mode: a fixed heap, no store coupling.
     if (pot !== undefined) {
       handle.setPot(pot)
       return () => {
+        clearDev()
         handle.dispose()
         handleRef.current = null
       }
@@ -121,6 +122,7 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     })
 
     return () => {
+      clearDev()
       unsub()
       handle.dispose()
       handleRef.current = null

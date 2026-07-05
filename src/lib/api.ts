@@ -158,9 +158,15 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
  * JSON.parse silently rounds to a float (→ wrong Borsh bytes on-chain, and BN.js throws
  * a bare "Assertion failed" for numbers ≥ 2^53). Quote any ≥16-digit integer value into
  * a string pre-parse; consumers (BN) accept decimal strings losslessly.
+ *
+ * A u64 value is a digit run sitting in JSON value position: right after `:` (object value)
+ * or `[`/`,` (array element), and right before `,`/`}`/`]`. The trailing delimiter is a
+ * LOOKAHEAD so it isn't consumed — otherwise adjacent big integers in an array (`[a,b]`)
+ * would share a delimiter and every other element would be missed. Digits inside a string
+ * (e.g. a base58 signature) are preceded by `"` or an alnum char, so they never match.
  */
 export function parseJsonU64Safe(text: string): unknown {
-  const quoted = text.replace(/("[^"]+"\s*:\s*)(\d{16,})(\s*[,}\]])/g, '$1"$2"$3')
+  const quoted = text.replace(/([:,[]\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"')
   return JSON.parse(quoted)
 }
 
@@ -402,6 +408,8 @@ export interface MatchDetail {
   round: number | null
   current_bet: number | null
   to_act: number | null
+  /** The open turn (server ≥ turn-recovery patch) — carries the TRUE action deadline. */
+  turn?: { seat: number; to_call: number; min_raise_to: number; deadline_ms: number } | null
   reveal: unknown | null
   last_seq: number
   head: string
@@ -448,6 +456,12 @@ export const api = {
 
   // — detail / lists —
   getMatch: (matchId: string) => request<MatchDetail>(`/matches/${encodeURIComponent(matchId)}`),
+  /** Journal page (`since` is EXCLUSIVE — and the genesis event is seq 0, so it is never
+   *  returned; an empty result on a live match means only genesis exists). */
+  getEvents: (matchId: string, since = 0) =>
+    request<{ events: { seq: number; type: string; body: Record<string, unknown>; hash: string }[] }>(
+      `/matches/${encodeURIComponent(matchId)}/events${qs({ since })}`,
+    ),
   getLobby: (opts: { feed?: string; buyInMin?: number; buyInMax?: number; cursor?: string; limit?: number } = {}) =>
     request<{ v: number; server_time_ms: number; rooms: LobbyRoom[] }>(
       `/lobby${qs({ feed: opts.feed, buy_in_min: opts.buyInMin, buy_in_max: opts.buyInMax, cursor: opts.cursor, limit: opts.limit })}`,

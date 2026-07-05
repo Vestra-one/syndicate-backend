@@ -3320,6 +3320,11 @@
 .ceremony-claim {
   width: 100%;
 }
+.ceremony-error {
+  margin-top: 10px;
+  color: #e07777;
+  text-align: center;
+}
 .ceremony-actions {
   display: flex;
   gap: 10px;
@@ -5079,6 +5084,8 @@
 }
 .seal-offset-chip:disabled { opacity: 0.4; }
 .seal-how { color: var(--gold-line); text-decoration: none; border-bottom: 1px dotted var(--hairline); }
+/* Real <button> (was a fake <a href="#">) — strip the native chrome so it reads as inline text. */
+.seal-how--btn { background: none; border: none; border-bottom: 1px dotted var(--hairline); padding: 0; font: inherit; cursor: help; }
 .seal-btn-lock { margin-right: 6px; }
 /* Wax-seal ritual — a stamp that presses over the panel while the seal commits. */
 .seal-ritual {

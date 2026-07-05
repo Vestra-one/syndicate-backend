@@ -121,6 +121,16 @@ describe('parseJsonU64Safe — u64 fields survive JSON.parse', () => {
     expect(j.expires_at).toBe(1_783_080_695_231) // 13 digits — stays numeric
     expect(j.sig).toBe('5K1x')
   })
+  it('quotes consecutive u64s inside an array (each element, not just the first)', async () => {
+    const { parseJsonU64Safe } = await import('./api')
+    const j = parseJsonU64Safe('{"ids":[18446744073709551615,12345678901234567890]}') as { ids: unknown[] }
+    expect(j.ids).toEqual(['18446744073709551615', '12345678901234567890'])
+  })
+  it('does not touch a long digit-run inside a string value', async () => {
+    const { parseJsonU64Safe } = await import('./api')
+    const j = parseJsonU64Safe('{"sig":"1234567890123456789012345"}') as Record<string, unknown>
+    expect(j.sig).toBe('1234567890123456789012345')
+  })
 })
 
 describe('hex helpers', () => {

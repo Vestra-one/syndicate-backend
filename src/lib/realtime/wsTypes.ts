@@ -46,6 +46,9 @@ export interface WsMatchState {
   round: number | null
   current_bet: number | null
   to_act: number | null
+  /** The open turn (server ≥ turn-recovery patch) — lets a mid-turn refresh recover the
+   *  action panel with the TRUE deadline instead of being silently timeout-folded. */
+  turn?: { seat: number; to_call: number; min_raise_to: number; deadline_ms: number } | null
   reveal: {
     settlement_price_wad: string | null
     predictions: { seat: number; price: string; source: string }[] | null

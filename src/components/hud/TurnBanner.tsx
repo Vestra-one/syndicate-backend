@@ -35,7 +35,12 @@ export function TurnBanner() {
       <div className="turn-banner turn-banner--you" role="status" aria-live="polite">
         <span className="turn-banner-label">Your turn</span>
         <span className="turn-banner-sub">
-          choose an action below ↓{remaining != null ? ` · ${Math.ceil(remaining / 1000)}s left` : ''}
+          choose an action below ↓
+          {/* aria-hidden: the countdown ticks every 500ms — keeping it out of the live region
+              stops screen readers from re-announcing the whole banner twice a second. */}
+          {remaining != null && (
+            <span aria-hidden="true">{` · ${Math.ceil(remaining / 1000)}s left`}</span>
+          )}
         </span>
       </div>
     )

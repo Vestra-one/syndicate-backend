@@ -127,6 +127,10 @@ function buildSeatPlan(max: number, yourSeat: number, realSeats: SeatView[], fil
 function useJoins(plan: SeatCell[], yourSeat: number) {
   const seatedKey = plan.filter((c) => c.kind === 'seated').map((c) => c.seat).join(',')
   const prev = useRef<Set<number> | null>(null)
+  // Each join batch un-flashes independently. A single shared timer whose cleanup ran on every
+  // deps change meant a second player joining within 1200ms cancelled the FIRST batch's
+  // un-flash, leaving that seat stuck highlighted. Track timers in a ref; clear only on unmount.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
   const [flash, setFlash] = useState<Set<number>>(() => new Set())
   const [log, setLog] = useState<{ seat: number; ts: number }[]>([])
 
@@ -141,9 +145,12 @@ function useJoins(plan: SeatCell[], yourSeat: number) {
     setFlash((f) => { const n = new Set(f); added.forEach((s) => n.add(s)); return n })
     const t = setTimeout(() => {
       setFlash((f) => { const n = new Set(f); added.forEach((s) => n.delete(s)); return n })
+      timers.current = timers.current.filter((x) => x !== t)
     }, 1200)
-    return () => clearTimeout(t)
+    timers.current.push(t)
   }, [seatedKey])
+
+  useEffect(() => () => { timers.current.forEach(clearTimeout) }, [])
 
   return { flash, log: log.map((j) => ({ ...j, name: seatAlias(j.seat, yourSeat) })) }
 }
@@ -404,6 +411,7 @@ function SealAction() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="price"
+          aria-label="Prediction price"
         />
       </div>
       <button
@@ -559,14 +567,22 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   const terms = useGameStore((s) => s.terms)
   const matchId = terms?.onchainMatchId ?? terms?.matchPda ?? null
   const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
   if (!matchId || filled >= max) return null
   // Sign the link with a stable table alias so the invitee sees "<name> invited you".
   const url = buildInviteUrl(matchId, hostAlias(matchId))
 
   const copy = () => {
-    void navigator.clipboard?.writeText(url)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    // Only show "copied" if the write actually succeeded — a denied/insecure-context clipboard
+    // rejects, and confirming success there is a lie. Timer is tracked + cleared on unmount.
+    navigator.clipboard?.writeText(url)
+      .then(() => {
+        setCopied(true)
+        if (copiedTimer.current) clearTimeout(copiedTimer.current)
+        copiedTimer.current = setTimeout(() => setCopied(false), 2000)
+      })
+      .catch(() => { /* clipboard unavailable — leave the button in its default state */ })
   }
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
   const share = () => {

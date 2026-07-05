@@ -616,6 +616,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   renderer.domElement.style.display = 'block'
 
   const scene = new THREE.Scene()
+  // Set true in dispose() — guards async continuations (image load) from touching a torn-down scene.
+  let disposed = false
 
   // ---- photographic room backdrop ----
   // The room (chandelier, chairs, panelling, ETH crest) is the reference image,
@@ -672,7 +674,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     bgTex.needsUpdate = true
   }
   drawBackdrop()
-  roomImgReady.then(drawBackdrop)
+  // roomImgReady is a module-level promise; guard so a late resolve after unmount is a no-op.
+  roomImgReady.then(() => { if (!disposed) drawBackdrop() })
 
   // procedural warm environment for metal reflections
   function buildEnvTexture() {
@@ -712,7 +715,10 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     return t
   }
   const pmrem = new THREE.PMREMGenerator(renderer)
-  const envRT = pmrem.fromEquirectangular(buildEnvTexture())
+  // Keep the source equirectangular texture referenced so we can dispose it — PMREM uploads it
+  // to the GPU but doesn't own it, and `Material.dispose()` never reaches it.
+  const envSrc = buildEnvTexture()
+  const envRT = pmrem.fromEquirectangular(envSrc)
   scene.environment = envRT.texture
 
   const camera = new THREE.PerspectiveCamera(
@@ -933,7 +939,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   // ---------- post ----------
   const composer = new EffectComposer(renderer)
-  composer.addPass(new RenderPass(scene, camera))
+  const renderPass = new RenderPass(scene, camera)
+  composer.addPass(renderPass)
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(container.clientWidth, container.clientHeight),
     0.3,
@@ -955,6 +962,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
       h = container.clientHeight
     camera.aspect = w / h
     camera.updateProjectionMatrix()
+    // Re-read DPR each resize so dragging the window to a different-density monitor re-scales.
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
     renderer.setSize(w, h)
     composer.setSize(w, h)
     drawBackdrop() // re-fit the room cover to the new aspect
@@ -1026,7 +1035,19 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   }
 
   // ---------- disposal ----------
+  // Material.dispose() does NOT free the textures a material references, so dispose each
+  // texture-valued property (map/metalnessMap/roughnessMap/bumpMap/emissiveMap/…) too —
+  // otherwise every CanvasTexture built for the felt/rim/side/table materials leaks GPU
+  // memory until the context is GC'd (which renderer.dispose alone does not force).
+  function disposeMaterial(m: THREE.Material) {
+    for (const val of Object.values(m as unknown as Record<string, unknown>)) {
+      if (val && (val as THREE.Texture).isTexture) (val as THREE.Texture).dispose()
+    }
+    m.dispose()
+  }
   function dispose() {
+    if (disposed) return
+    disposed = true
     running = false
     cancelAnimationFrame(raf)
     unbindTableView()
@@ -1038,19 +1059,33 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
+    // EffectComposer.dispose() only frees its own targets — the passes we added own render
+    // targets/materials that must be disposed explicitly (bloom owns a whole mip pyramid).
+    bloom.dispose()
+    renderPass.dispose()
     composer.dispose()
     envRT.dispose()
+    envSrc.dispose()
     pmrem.dispose()
+    bgTex.dispose() // scene.background — never visited by traverse()
     scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh
       if (mesh.geometry) mesh.geometry.dispose()
       const mat = mesh.material
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
-      else if (mat) mat.dispose()
+      if (Array.isArray(mat)) mat.forEach(disposeMaterial)
+      else if (mat) disposeMaterial(mat)
     })
     renderer.dispose()
+    // dispose() frees caches but not the WebGL context; force it so repeated mounts don't
+    // pile up live contexts and trip the browser's ~16-context cap (killing older canvases).
+    renderer.forceContextLoss()
     if (renderer.domElement.parentNode === container) {
       container.removeChild(renderer.domElement)
+    }
+    if (import.meta.env.DEV) {
+      const w = window as unknown as Record<string, unknown>
+      delete w.__tableStep
+      delete w.__inspect
     }
   }
 

@@ -76,6 +76,7 @@ function SettledCeremony() {
   const claim = useGameStore((s) => s.claim)
   const [tx, setTx] = useState<string | null>(null)
   const [claiming, setClaiming] = useState(false)
+  const [claimError, setClaimError] = useState<string | null>(null)
 
   const decimals = terms?.decimals ?? 2
   const toFloat = (p: number) => p / 10 ** decimals
@@ -83,7 +84,6 @@ function SettledCeremony() {
   const yourSeat = match?.yourSeat
   const yourAward = settlement.awards.find((a) => a.seat === yourSeat)?.amount ?? 0
   const won = yourAward > 0
-  const winnerSeat = settlement.awards[0]?.seat
 
   const token = terms?.chipsToken ?? 'USDC'
   const payoutBySeat = new Map(settlement.awards.map((a) => [a.seat, a.amount]))
@@ -106,6 +106,10 @@ function SettledCeremony() {
   const active = ranked.filter((r) => !r.folded)
   const folded = ranked.filter((r) => r.folded)
 
+  // Crown the paid seat when payout amounts are known; otherwise the closest active
+  // conviction (the REST/on-chain recovery may know the reveal but not every seat's amount).
+  const winnerSeat = settlement.awards[0]?.seat ?? active[0]?.seat
+
   // Rake transparency: the pot everyone contributed, what the house took, what was paid out.
   const paid = settlement.awards.reduce((s, a) => s + a.amount, 0)
   const rake = settlement.rakeCollected ?? 0
@@ -113,8 +117,15 @@ function SettledCeremony() {
 
   const onClaim = async () => {
     setClaiming(true)
-    setTx(await claim())
-    setClaiming(false)
+    setClaimError(null)
+    try {
+      setTx(await claim())
+    } catch (e) {
+      // A declined wallet prompt or failed tx must never brick the button on "Claiming…".
+      setClaimError(e instanceof Error ? e.message : 'Claim failed — please try again.')
+    } finally {
+      setClaiming(false)
+    }
   }
 
   return (
@@ -166,6 +177,7 @@ function SettledCeremony() {
             {tx ? 'Claimed ✓' : claiming ? 'Claiming…' : `Claim ${formatMoney(yourAward, token)}`}
           </button>
         )}
+        {claimError && <div className="ceremony-error eyebrow" role="alert">{claimError}</div>}
 
         <CeremonyActions />
       </div>
@@ -233,6 +245,7 @@ function VoidCeremony({ reason }: { reason: VoidReason }) {
   const terms = useGameStore((s) => s.terms)
   const [tx, setTx] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [refundError, setRefundError] = useState<string | null>(null)
 
   const token = terms?.chipsToken ?? 'USDC'
   const buyIn = terms?.buyIn ?? 0
@@ -241,8 +254,14 @@ function VoidCeremony({ reason }: { reason: VoidReason }) {
 
   const onRefund = async () => {
     setBusy(true)
-    setTx(await refund())
-    setBusy(false)
+    setRefundError(null)
+    try {
+      setTx(await refund())
+    } catch (e) {
+      setRefundError(e instanceof Error ? e.message : 'Refund failed — please try again.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -267,6 +286,7 @@ function VoidCeremony({ reason }: { reason: VoidReason }) {
         <button className="seal-btn ceremony-claim" onClick={onRefund} disabled={busy || !!tx}>
           {tx ? 'Refunded ✓' : busy ? 'Refunding…' : `Claim refund · ${formatMoney(total, token)}`}
         </button>
+        {refundError && <div className="ceremony-error eyebrow" role="alert">{refundError}</div>}
 
         <CeremonyActions />
       </div>
