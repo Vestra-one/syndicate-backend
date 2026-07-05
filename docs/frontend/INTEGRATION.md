@@ -297,11 +297,13 @@ server target.
 ## Appendix B — off-chain intent signatures
 
 Domain `syndicate/action/v1` (see `services/shared/src/intent.rs` for the byte-exact
-builders; the backend rejects anything else):
+builders; the backend rejects anything else). Browser wallets should sign the UTF-8
+bytes of `base58(message_bytes)` and send the resulting signature as base64; the backend
+also accepts raw `message_bytes` signatures for CLI/bot signers.
 
 - **Action**: `action_intent_message(match_id, onchain_match_id, seat_index, seat_pubkey,
-  nonce, prev_head, action_tag, amount)` — sign the message bytes with the seat wallet
-  (ed25519 `signMessage`), send hex/base64 in `act.signature`.
+  nonce, prev_head, action_tag, amount)` — sign `base58(message_bytes)` with the seat wallet
+  (ed25519 `signMessage`), send base64 in `act.signature`.
 - **Default policy**: `default_policy_message(match_id, onchain_match_id, seat_index,
   seat_pubkey, policy_tag)`.
 - **Seal**: the prediction-commitment message binds `(match, seat, commitment,

@@ -36,8 +36,12 @@ pub fn verify_ed25519(
     )
     .map_err(|_| VerifyError::BadEncoding)?;
     let sig = Signature::from_slice(&sig_bytes).map_err(|_| VerifyError::InvalidSignature)?;
+    if verifying_key.verify(message, &sig).is_ok() {
+        return Ok(());
+    }
+    let wallet_safe_message = bs58::encode(message).into_string();
     verifying_key
-        .verify(message, &sig)
+        .verify(wallet_safe_message.as_bytes(), &sig)
         .map_err(|_| VerifyError::InvalidSignature)
 }
 
@@ -140,5 +144,62 @@ mod tests {
         )
         .unwrap();
         let _ = sig;
+    }
+
+    #[test]
+    fn action_intent_accepts_wallet_safe_base58_text_signature() {
+        let (wallet, sk) = test_wallet();
+        let pk = decode_wallet_pubkey(&wallet).unwrap();
+        let head = [3u8; 32];
+        let msg =
+            intent::action_intent_message(1, 42, 0, &pk, 7, &head, intent::ACTION_TAG_RAISE_TO, 40);
+        let wallet_safe_msg = bs58::encode(&msg).into_string();
+        let sig_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            sk.sign(wallet_safe_msg.as_bytes()).to_bytes(),
+        );
+
+        verify_action_intent(
+            &wallet,
+            &sig_b64,
+            1,
+            42,
+            0,
+            7,
+            &head,
+            intent::ACTION_TAG_RAISE_TO,
+            40,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn default_policy_accepts_wallet_safe_base58_text_signature() {
+        let (wallet, sk) = test_wallet();
+        let pk = decode_wallet_pubkey(&wallet).unwrap();
+        let msg = intent::default_policy_message(1, 42, 0, &pk, intent::DEFAULT_TAG_CHECK_FOLD);
+        let wallet_safe_msg = bs58::encode(&msg).into_string();
+        let sig_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            sk.sign(wallet_safe_msg.as_bytes()).to_bytes(),
+        );
+
+        verify_default_policy(&wallet, &sig_b64, 1, 42, 0, intent::DEFAULT_TAG_CHECK_FOLD).unwrap();
+    }
+
+    #[test]
+    fn unrelated_wallet_safe_text_signature_is_rejected() {
+        let (wallet, sk) = test_wallet();
+        let pk = decode_wallet_pubkey(&wallet).unwrap();
+        let head = [0u8; 32];
+        let msg =
+            intent::action_intent_message(1, 42, 0, &pk, 1, &head, intent::ACTION_TAG_CALL, 0);
+        let sig_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            sk.sign(bs58::encode(b"not this intent").into_string().as_bytes())
+                .to_bytes(),
+        );
+
+        assert!(verify_ed25519(&wallet, &msg, &sig_b64).is_err());
     }
 }
