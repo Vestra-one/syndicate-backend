@@ -44,7 +44,7 @@ export function Seats() {
           actionSecs={actionSecs}
         />
       ))}
-      {match.pot > 0 && <Pot amount={match.pot} token={token} />}
+      {match.pot > 0n && <Pot amount={match.pot} token={token} />}
     </div>
   )
 }
@@ -288,7 +288,7 @@ const SIGILS: Record<string, ReactElement> = {
   ),
 }
 
-function Pot({ amount, token }: { amount: number; token: string }) {
+function Pot({ amount, token }: { amount: bigint; token: string }) {
   const ref = useAnchor(useCallback(() => projectPot(), []))
   // The chips themselves are real 3D coins in the Three.js scene (see pot.ts);
   // the HUD only carries the amount label, floated just above the pile.

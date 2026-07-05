@@ -38,9 +38,11 @@ function moneyDecimals(token: string): number {
  * that render `{formatChips(x)} {token}` keep working; use `formatMoney` to get
  * the suffix bundled in.
  */
-export function formatChips(base: number, token = 'USDC'): string {
+export function formatChips(base: bigint | number, token = 'USDC'): string {
   const digits = moneyDecimals(token)
-  return (base / 1e6).toLocaleString('en-US', {
+  // Chips are bigint u64 base units; convert at the display edge (values are bounded well
+  // under 2^53 for real amounts, so the float is exact here).
+  return (Number(base) / 1e6).toLocaleString('en-US', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })
@@ -51,8 +53,8 @@ export function formatChips(base: number, token = 'USDC'): string {
  * way an amount should read anywhere in the product: "1,234.50 USDC".
  * `signed` prefixes a `+` on positive values (for deltas / deposits).
  */
-export function formatMoney(base: number, token = 'USDC', opts?: { signed?: boolean }): string {
-  const sign = opts?.signed && base > 0 ? '+' : ''
+export function formatMoney(base: bigint | number, token = 'USDC', opts?: { signed?: boolean }): string {
+  const sign = opts?.signed && Number(base) > 0 ? '+' : ''
   return `${sign}${formatChips(base, token)} ${token}`
 }
 

@@ -43,7 +43,7 @@ export const GATEWAY_PRICE_PHASES: MatchPhase[] = [
   'LIVE', 'SETTLEMENT_WINDOW', 'DECRYPT', 'SETTLED', 'VOID',
 ]
 
-export type Chips = number      // integer, token base units
+export type Chips = bigint      // integer, token base units (u64 — exact, no float rounding)
 export type FixedPrice = number // integer fixed-point at feed `decimals`
 export type Wallet = string     // base58 Solana pubkey
 export type SeatIndex = number  // 0..maxPlayers-1

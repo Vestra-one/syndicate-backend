@@ -3,7 +3,7 @@ import { api, type LiveMatch, type LobbyRoom } from './api'
 
 /** "Hot" popularity score — the default dashboard sort (§8). */
 export function ratedScore(g: LiveGame): number {
-  return g.spectators * 2 + g.actionsPerMin + g.potSize / 1000
+  return g.spectators * 2 + g.actionsPerMin + Number(g.potSize) / 1000
 }
 
 /** REST timestamps are ms epoch (§1), but on-chain-derived values can leak seconds; normalize. */
@@ -21,8 +21,8 @@ function liveMatchToGame(m: LiveMatch): LiveGame {
   return {
     matchId: m.match_id,
     feed: m.feed,
-    buyIn: m.buy_in,
-    potSize: 0,
+    buyIn: BigInt(m.buy_in),
+    potSize: 0n,
     spectators: 0,
     actionsPerMin: 0,
     startedAt: toEpochMs(m.live_start) ?? 0,
@@ -35,7 +35,7 @@ function lobbyRoomToGame(r: LobbyRoom): UpcomingGame {
     matchId: r.match_id,
     onchainMatchId: String(r.onchain_match_id),
     feed: r.feed,
-    buyIn: r.buy_in,
+    buyIn: BigInt(r.buy_in),
     seated: r.confirmed,
     maxPlayers: r.max_players ?? 0,
     minPlayers: r.min_players ?? undefined,

@@ -3,7 +3,7 @@ import { createAdapters } from '@/lib/adapters'
 import { useGameStore } from '@/store/gameStore'
 
 // USDC has 6 decimals — mirrors the fmt() convention used across Lobby/Dashboard/Reclaim.
-const fmt = (base: number) => (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+const fmt = (base: bigint | number) => (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
 
 type Phase = 'idle' | 'claiming' | 'done' | 'error'
 
@@ -23,7 +23,7 @@ export function ClaimWinningsCard({
   onDone,
 }: {
   onchainMatchId: string
-  payout: number
+  payout: bigint
   onDone?: (onchainMatchId: string) => void
 }) {
   const chain = useMemo(() => createAdapters().chain, [])

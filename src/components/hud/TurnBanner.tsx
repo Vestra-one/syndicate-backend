@@ -2,6 +2,7 @@ import { useGameStore } from '@/store/gameStore'
 import { seatAlias } from '@/lib/seats'
 import { useNow } from '@/lib/useNow'
 import { useWaiting } from './WaitingRoom'
+import { useRoundGate } from './useRoundGate'
 
 /**
  * The single, unmistakable "whose move is it" banner — pinned top-centre over the
@@ -18,6 +19,7 @@ export function TurnBanner() {
   const match = useGameStore((s) => s.match)
   const yourTurn = useGameStore((s) => s.yourTurn)
   const { active: waiting } = useWaiting()
+  const gate = useRoundGate()
   const now = useNow(500)
 
   if (!match || match.phase !== 'LIVE' || waiting) return null
@@ -30,6 +32,20 @@ export function TurnBanner() {
   const mine = yourTurn != null || (toAct != null && yourSeat != null && toAct === yourSeat)
 
   if (mine) {
+    // Turn assigned but the round's betting window hasn't opened — the server would
+    // reject an act right now, and the turn deadline is clamped to the window opening.
+    // A 300s+ "decide now" countdown reads as broken; say what's actually happening.
+    if (!gate.open && gate.opensAt != null) {
+      return (
+        <div className="turn-banner turn-banner--you" role="status" aria-live="polite">
+          <span className="turn-banner-label">Your turn — queued</span>
+          <span className="turn-banner-sub">
+            round {gate.round} betting opens
+            <span aria-hidden="true">{` in ${Math.ceil(Math.max(0, gate.opensAt - now) / 1000)}s`}</span>
+          </span>
+        </div>
+      )
+    }
     const remaining = yourTurn ? Math.max(0, yourTurn.deadline - now) : null
     return (
       <div className="turn-banner turn-banner--you" role="status" aria-live="polite">

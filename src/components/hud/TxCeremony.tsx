@@ -96,8 +96,8 @@ export function TxCeremony() {
   const isError = tx.stage === 'error'
   const isDone = tx.stage === 'confirmed'
 
-  const fmt = (base: number) =>
-    (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+  const fmt = (base: bigint | number) =>
+    (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
 
   const railState = (i: number): RailState => {
     if (isError) return i === 0 ? 'done' : 'pending'
@@ -149,14 +149,14 @@ export function TxCeremony() {
   // ---- Error view derivation (only meaningful when isError) ----------------
   const code: TxErrorCode = tx.errorCode ?? 'unknown'
   const required = tx.amount
-  const actual = tx.walletBalance ?? chipBalance ?? 0
+  const actual = tx.walletBalance ?? chipBalance ?? 0n
   const token = tx.chipsToken
   // An `insufficient` failure splits two ways: short on the chips token (top up USDC), or
   // the token covers it but there's no SOL left for network fees (top up SOL). We only claim
   // a USDC shortfall when the numbers actually prove it.
   const usdcShort = code === 'insufficient' && actual < required
   const solShort = code === 'insufficient' && actual >= required
-  const shortfall = Math.max(0, required - actual)
+  const shortfall = required > actual ? required - actual : 0n
   const errorTitle = errorHeadline(code, isCreate)
   const errorSub = usdcShort
     ? `You need ${formatChips(required, token)} ${token} to sit down — your wallet has ${formatChips(actual, token)}.`

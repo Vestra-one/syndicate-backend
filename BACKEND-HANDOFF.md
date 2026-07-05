@@ -1,5 +1,29 @@
 # Game-server bug report + patch handoff
 
+## CRITICAL #0 (found last, blocks everything): browser wallets cannot produce verifiable intent signatures
+
+Even with every other fix in place, **no gameplay intent (act / default policy / seal) can
+verify**: MetaMask's Solana `signMessage` does not sign raw binary payloads faithfully. We
+proved it empirically — local ed25519 verification of the wallet's signature against the
+exact intent bytes:
+
+- 36-byte ASCII auth nonce → **verifies** (this is why session auth works)
+- 72-byte binary default-policy intent → **fails** ("WALLET DID NOT SIGN THE RAW BYTES"),
+  and the server rejects it: `bad_default InvalidIntent("invalid ed25519 signature")`
+
+So the intent-signing scheme (`shared/src/intent.rs`, raw binary message → raw ed25519) is
+incompatible with at least one major browser wallet, and gameplay is impossible for those
+users regardless of client correctness. Options, short → long term:
+
+1. **Devnet unblock:** set `SYNDICATE_ALLOW_DEV_SIGNATURES=1` on the devnet game-server.
+   The frontend already supports `VITE_DEV_SIGNATURES=1` (sends `sig-…` placeholders).
+2. **Wallet-safe encoding:** verify the signature over the UTF-8 bytes of a text encoding
+   of the intent (e.g. base58/hex string, or the Solana off-chain message envelope) —
+   wallets sign display-safe text faithfully. The frontend logs which transform the wallet
+   actually signed (`[sign] wallet actually signed: …`) to guide the choice.
+3. Keep raw-bytes verification as an additional accepted form for signers that do sign raw
+   (CLI bots, some wallets).
+
 Date: 2026-07-05 · Found while debugging live-table play on devnet (`api.devnet.satoshitable.fun`).
 Patch file: `backend-fixes.patch` (same directory), based on `syndicate-backend` commit `82895e9`.
 All three fixes are in `services/game-server`; `cargo check -p syndicate-game-server` passes.

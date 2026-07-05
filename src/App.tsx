@@ -59,26 +59,26 @@ export default function App() {
         view: 'table',
         status: 'live',
         seated: true,
-        chipBalance: 42_000_000,
+        chipBalance: 42_000_000n,
         walletAddress: 'H9Qoft4c9k2rXexampleWaitingRoomDevMock98of',
         fillDeadline: Date.now() + secs * 1000,
         terms: {
           tableId: 'sat-btc-lo', priceFeedId: 'BTC/USD', supportedFeeds: ['BTC/USD'],
           chipsToken: 'USDC', decimals: 2, oracleAdapter: 'signed-price',
           settlementMode: 'exact-timestamp', oracleUnavailableMessage: '',
-          buyIn: 10_000_000, entryFee: 500_000, rakeBps: 250, rakeCap: 1_000_000,
-          smallBlind: 5_000, bigBlind: 10_000, minPlayers: min, maxPlayers: max,
+          buyIn: 10_000_000n, entryFee: 500_000n, rakeBps: 250, rakeCap: 1_000_000n,
+          smallBlind: 5_000n, bigBlind: 10_000n, minPlayers: min, maxPlayers: max,
           roundCount: 4, roundDurationsSec: [30, 30, 30, 30], actionTimerSec: 20,
           timeBankSec: 30, settlementWindowSec: 20, geofenceBlocklist: [],
           allowDuplicateWalletPerMatch: false, fillWindowSec: secs, timelockTargetRound: 0,
           onchainMatchId: '77',
         },
         match: {
-          matchId: 'mock', phase: 'FILLING', round: 0, pot: 0, currentBet: 0,
+          matchId: 'mock', phase: 'FILLING', round: 0, pot: 0n, currentBet: 0n,
           buttonSeat: 0, toActSeat: null, feedPrice: 5862200, yourSeat: 0,
-          yourStack: 10_000_000, yourExposure: 0,
+          yourStack: 10_000_000n, yourExposure: 0n,
           seats: Array.from({ length: filled }, (_, i) => ({
-            seat: i, stack: 10_000_000, committedThisStreet: 0, totalContribution: 0,
+            seat: i, stack: 10_000_000n, committedThisStreet: 0n, totalContribution: 0n,
             folded: false, allIn: false,
           })),
         },
@@ -92,20 +92,21 @@ export default function App() {
   useEffect(() => {
     if (!import.meta.env.DEV) return
     ;(window as unknown as { __mockLive?: (actingSeat?: number) => void }).__mockLive = (actingSeat = 0) => {
-      const U = (n: number) => Math.round(n * 1e6) // USDC base units (6 dp)
+      const U = (n: number) => BigInt(Math.round(n * 1e6)) // USDC base units (6 dp) → Chips bigint
       const BTC = 6_251_400 // BTC/USD at the table's 2-dp fixed point (~$62,514)
-      const ev = (seat: number, action: string, amount: number) => ({
+      const ev = (seat: number, action: string, amount: bigint) => ({
         kind: 'action' as const, matchId: 'mock', seat, action, amount, feedPrice: BTC, pot: U(18.75), ts: Date.now(),
       })
       useGameStore.setState({
         view: 'table', status: 'live', seated: true,
-        chipBalance: 42_000_000,
+        chipBalance: 42_000_000n,
         walletAddress: 'H9Qoft4c9k2rXexampleLiveTablePodsDevMock98of',
         fillDeadline: null,
-        yourTurn: actingSeat === 0 ? { toCall: U(0.75), minRaiseTo: U(1.25), deadline: Date.now() + 12_000 } : null,
+        // yourTurn amounts are plain numbers (they mirror the wire your_turn frame).
+        yourTurn: actingSeat === 0 ? { toCall: 750_000, minRaiseTo: 1_250_000, deadline: Date.now() + 12_000 } : null,
         feed: [
-          ev(5, 'fold', 0),
-          ev(4, 'fold', 0),
+          ev(5, 'fold', 0n),
+          ev(4, 'fold', 0n),
           ev(3, 'call', U(0.75)),
           ev(1, 'call', U(0.75)),
           ev(2, 'raiseTo', U(0.75)),
@@ -124,14 +125,14 @@ export default function App() {
         match: {
           matchId: 'mock', phase: 'LIVE', round: 3, pot: U(18.75), currentBet: U(0.75),
           buttonSeat: 1, toActSeat: actingSeat, feedPrice: BTC, yourSeat: 0,
-          yourStack: U(2.35), yourExposure: 0,
+          yourStack: U(2.35), yourExposure: 0n,
           seats: [
-            { seat: 0, stack: U(2.35), committedThisStreet: 0, totalContribution: U(0.5), folded: false, allIn: false },
+            { seat: 0, stack: U(2.35), committedThisStreet: 0n, totalContribution: U(0.5), folded: false, allIn: false },
             { seat: 1, stack: U(2.80), committedThisStreet: U(0.75), totalContribution: U(0.75), folded: false, allIn: false },
             { seat: 2, stack: U(2.12), committedThisStreet: U(0.75), totalContribution: U(0.75), folded: false, allIn: false },
             { seat: 3, stack: U(1.85), committedThisStreet: U(0.75), totalContribution: U(0.75), folded: false, allIn: false },
-            { seat: 4, stack: U(1.60), committedThisStreet: 0, totalContribution: U(0.25), folded: true, allIn: false },
-            { seat: 5, stack: U(2.00), committedThisStreet: 0, totalContribution: 0, folded: true, allIn: false },
+            { seat: 4, stack: U(1.60), committedThisStreet: 0n, totalContribution: U(0.25), folded: true, allIn: false },
+            { seat: 5, stack: U(2.00), committedThisStreet: 0n, totalContribution: 0n, folded: true, allIn: false },
           ],
         },
       })

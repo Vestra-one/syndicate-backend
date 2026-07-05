@@ -25,8 +25,8 @@ const SORTS: { key: DashboardSortKey; label: string; icon: string }[] = [
 function sortGames(games: LiveGame[], key: DashboardSortKey): LiveGame[] {
   const g = [...games]
   switch (key) {
-    case 'potSize': return g.sort((a, b) => b.potSize - a.potSize)
-    case 'buyIn':   return g.sort((a, b) => a.buyIn - b.buyIn)   // lowest first
+    case 'potSize': return g.sort((a, b) => Number(b.potSize - a.potSize))
+    case 'buyIn':   return g.sort((a, b) => Number(a.buyIn - b.buyIn))   // lowest first
     case 'newest':  return g.sort((a, b) => b.startedAt - a.startedAt)
     case 'gameTime': default: return g.sort((a, b) => ratedScore(b) - ratedScore(a))
   }
@@ -55,8 +55,8 @@ function fillDeadlineLabel(ts: number | undefined, now: number): string {
   return `${Math.round(secs / 60)}m left`
 }
 
-function fmt(amount: number) {
-  return (amount / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })
+function fmt(amount: number | bigint) {
+  return (Number(amount) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
 
 /** Human "updated Xs ago" for the live discovery ticker. */
@@ -583,7 +583,7 @@ function MyClaimableWinnings() {
 
   const pendingTotal = winnings
     .filter((w) => !collected.has(w.onchainMatchId))
-    .reduce((sum, w) => sum + w.payout, 0)
+    .reduce((sum, w) => sum + w.payout, 0n)
 
   return (
     <section className="dash-section">
@@ -591,8 +591,8 @@ function MyClaimableWinnings() {
         <span className="dash-section-dot dash-section-dot--win" />
         <span className="dash-section-label">Winnings to collect</span>
         <span className="dash-section-sub">
-          {pendingTotal > 0
-            ? `${(pendingTotal / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC waiting for you`
+          {pendingTotal > 0n
+            ? `${(Number(pendingTotal) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC waiting for you`
             : 'all collected'}
         </span>
       </div>

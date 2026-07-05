@@ -6,6 +6,7 @@ import { seatAlias } from '@/lib/seats'
 import type { BettingAction } from '@/lib/protocol'
 import { TimerRing } from './TimerRing'
 import { useWaiting } from './WaitingRoom'
+import { useRoundGate } from './useRoundGate'
 
 /** A pre-selected action armed while it's not your turn — auto-fires when the turn lands (§13.3). */
 type Armed = 'fold' | 'check_call' | null
@@ -28,19 +29,21 @@ export function BettingPanel() {
   const yourTurn = useGameStore((s) => s.yourTurn)
   const act = useGameStore((s) => s.act)
   const { active: waiting } = useWaiting()
+  const gate = useRoundGate()
 
   const [armed, setArmed] = useState<Armed>(null)
 
-  // The turn just opened and something is armed: fire it once, then disarm.
+  // The turn just opened and something is armed: fire it once, then disarm. Held while
+  // the round's betting window is still closed — the server rejects acts in that gap.
   const firedFor = useRef<number | null>(null)
   useEffect(() => {
-    if (!yourTurn || !armed) return
+    if (!yourTurn || !armed || !gate.open) return
     if (firedFor.current === yourTurn.deadline) return
     firedFor.current = yourTurn.deadline
     if (armed === 'fold') act({ type: 'fold' })
     else act(yourTurn.toCall === 0 ? { type: 'check' } : { type: 'call' })
     setArmed(null)
-  }, [yourTurn, armed, act])
+  }, [yourTurn, armed, act, gate.open])
 
   const phase = match?.phase
 
@@ -52,6 +55,11 @@ export function BettingPanel() {
     return <SealPanel waiting={waiting && phase !== 'SEALING'} />
   }
   if (phase === 'LIVE') {
+    // Turn assigned but the round's wall-clock window hasn't opened: acting now would be
+    // rejected ("betting_closed"), so present the queued state instead of live buttons.
+    if (yourTurn && !gate.open && gate.opensAt != null) {
+      return <RoundGapPanel round={gate.round} opensAt={gate.opensAt} />
+    }
     return yourTurn ? <ActionPanel /> : <WaitingPanel armed={armed} setArmed={setArmed} />
   }
   return (
@@ -60,6 +68,23 @@ export function BettingPanel() {
       <div className="betpanel-locked eyebrow">
         {phaseHint(phase) || (terms ? 'waiting for the table…' : 'connecting…')}
       </div>
+    </div>
+  )
+}
+
+/** Your turn is queued but the round's betting window hasn't opened yet. */
+function RoundGapPanel({ round, opensAt }: { round: number; opensAt: number }) {
+  const now = useNow(500)
+  return (
+    <div className="betpanel panel">
+      <div className="betpanel-head">
+        <span className="panel-title">Live</span>
+        <span className="betpanel-locked eyebrow">round {round} betting hasn’t opened yet</span>
+      </div>
+      <p className="seal-note eyebrow">
+        Your turn is queued — betting opens in{' '}
+        <b className="mono">{formatCountdown(Math.max(0, opensAt - now))}</b>. Nothing to do until then.
+      </p>
     </div>
   )
 }
@@ -414,26 +439,31 @@ function ActionPanel() {
   const now = useNow()
 
   const token = terms?.chipsToken ?? 'USDC'
-  const stack = match.yourStack ?? 0
+  // The raise slider math runs in NUMBER base units (bounded USDC-6, exact as a float); the
+  // Chips bigints (stack/pot/currentBet) convert here at the edge, and the chosen raise-to
+  // converts back to bigint when the signed action is built.
+  const stack = Number(match.yourStack ?? 0n)
+  const currentBet = Number(match.currentBet)
+  const potNum = Number(match.pot)
   const { toCall, minRaiseTo, deadline } = yourTurn
   const remaining = Math.max(0, deadline - now)
   const totalMs = (terms?.actionTimerSec ?? 20) * 1000
 
-  const maxRaiseTo = match.currentBet + stack // shove level
+  const maxRaiseTo = currentBet + stack // shove level
   const clampRaise = (v: number) => Math.max(minRaiseTo, Math.min(maxRaiseTo, v))
 
   // raiseTo is kept in token base units (what the engine speaks); the input
   // edits it in whole-token terms so the player types "0.02", never "20000".
   const [raiseTo, setRaiseTo] = useState(minRaiseTo)
   useEffect(() => setRaiseTo(clampRaise(minRaiseTo)), [minRaiseTo, maxRaiseTo]) // eslint-disable-line react-hooks/exhaustive-deps
-  const step = terms?.bigBlind ?? 10_000
+  const step = Number(terms?.bigBlind ?? 10_000n)
 
   const presetValue = useMemo(() => ({
     min: minRaiseTo,
-    half: clampRaise(match.currentBet + Math.round(match.pot * 0.5)),
-    pot: clampRaise(match.currentBet + match.pot),
+    half: clampRaise(currentBet + Math.round(potNum * 0.5)),
+    pot: clampRaise(currentBet + potNum),
     max: maxRaiseTo,
-  }), [minRaiseTo, maxRaiseTo, match.currentBet, match.pot]) // eslint-disable-line react-hooks/exhaustive-deps
+  }), [minRaiseTo, maxRaiseTo, currentBet, potNum]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // While an action is being signed+sent, lock the panel and narrate it — clicking again
   // would burn a nonce. `pending` is set the instant a button is tapped (before the wallet).
@@ -453,7 +483,7 @@ function ActionPanel() {
 
       <div className="exposure">
         <Exposure label="to call" value={toCall} token={token} accent />
-        <Exposure label="committed" value={match.yourExposure ?? 0} token={token} />
+        <Exposure label="committed" value={Number(match.yourExposure ?? 0n)} token={token} />
         <Exposure label="stack" value={stack} token={token} />
       </div>
 
@@ -519,7 +549,7 @@ function ActionPanel() {
             />
             <button
               className="pk-btn pk-raise"
-              onClick={() => send(isShove ? { type: 'allIn' } : { type: 'raiseTo', amount: raiseTo })}
+              onClick={() => send(isShove ? { type: 'allIn' } : { type: 'raiseTo', amount: BigInt(raiseTo) })}
               disabled={!raiseValid || pending}
             >
               {pendingType === 'raiseTo' || (pendingType === 'allIn' && isShove)

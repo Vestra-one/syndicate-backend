@@ -7,6 +7,7 @@
 import type { Adapters } from '@/lib/adapters'
 import type { Gateway, GatewayListener } from './gateway'
 import type { ClientFrame, ServerFrame } from './wsTypes'
+import { log } from '@/lib/log'
 
 const HEARTBEAT_MS = 30_000
 const CONNECT_TIMEOUT_MS = 12_000
@@ -23,7 +24,7 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
       try {
         l(frame)
       } catch (err) {
-        console.error('[ws] listener threw:', err)
+        log.error('[ws] listener threw:', err)
       }
     }
   }
@@ -88,7 +89,7 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
                 const signature = await adapters.wallet.signMessageBase64(frame.nonce)
                 sock.send(JSON.stringify({ t: 'auth', wallet: address, signature } satisfies ClientFrame))
               } catch (err) {
-                console.warn('[ws] auth sign failed:', err)
+                log.warn('[ws] auth sign failed:', err)
               }
               break
             }

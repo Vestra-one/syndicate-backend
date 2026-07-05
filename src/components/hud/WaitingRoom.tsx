@@ -49,7 +49,7 @@ export function useWaiting() {
 export function WaitingRoom() {
   const w = useWaiting()
   const yourSeat = w.match?.yourSeat ?? 0
-  const buyIn = w.terms?.buyIn ?? 0
+  const buyIn = w.terms?.buyIn ?? 0n
   // One canonical seating plan drives the ring, the join feed, and the join
   // animation, so every part of the screen agrees on who sits where.
   const plan = buildSeatPlan(w.max, yourSeat, w.match?.seats ?? [], w.filled)
@@ -168,7 +168,7 @@ function SeatRing({
 }: {
   plan: SeatCell[]
   match: ReturnType<typeof useWaiting>['match']
-  buyIn: number
+  buyIn: bigint
   joining: Set<number>
 }) {
   const yourSeat = match?.yourSeat ?? 0
@@ -226,7 +226,7 @@ export function SeatSlot({ angle, side, children }: { angle: number; side: 'left
   )
 }
 
-function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack: number; token: string; yourSeat: number; side: 'left' | 'right' }) {
+function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack: bigint; token: string; yourSeat: number; side: 'left' | 'right' }) {
   const addr = useGameStore((s) => s.walletAddress)
   const short = addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : 'You'
   return (
@@ -531,11 +531,11 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
  * table (every seat, its persona read) plus the pot-to-play preview, so the last
  * window before the deal reads as "everyone's here" rather than "still inviting" (§11).
  */
-function TableFullCard({ plan, match, buyIn }: { plan: SeatCell[]; match: ReturnType<typeof useWaiting>['match']; buyIn: number }) {
+function TableFullCard({ plan, match, buyIn }: { plan: SeatCell[]; match: ReturnType<typeof useWaiting>['match']; buyIn: bigint }) {
   const terms = useGameStore((s) => s.terms)
   const token = terms?.chipsToken ?? 'USDC'
   const yourSeat = match?.yourSeat ?? 0
-  const potPreview = buyIn * plan.length
+  const potPreview = buyIn * BigInt(plan.length)
   return (
     <section className="wr-card wr-card--full">
       <div className="wr-card-title">Table full</div>

@@ -94,7 +94,7 @@ export function WalletMenu() {
     )
   }
 
-  const usdcFmt = usdcBalance != null ? (usdcBalance / 1e6).toFixed(2) : '—'
+  const usdcFmt = usdcBalance != null ? (Number(usdcBalance) / 1e6).toFixed(2) : '—'
   const solFmt  = solBalance  != null ? solBalance.toFixed(4) : '—'
 
   return (

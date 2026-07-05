@@ -66,7 +66,7 @@ interface RankedRow {
   dist: number
   dir: 'above' | 'below' | 'exact'
   folded: boolean
-  payout: number
+  payout: bigint
 }
 
 function SettledCeremony() {
@@ -82,8 +82,8 @@ function SettledCeremony() {
   const toFloat = (p: number) => p / 10 ** decimals
   const settlePrice = toFloat(settlement.settlementPrice)
   const yourSeat = match?.yourSeat
-  const yourAward = settlement.awards.find((a) => a.seat === yourSeat)?.amount ?? 0
-  const won = yourAward > 0
+  const yourAward = settlement.awards.find((a) => a.seat === yourSeat)?.amount ?? 0n
+  const won = yourAward > 0n
 
   const token = terms?.chipsToken ?? 'USDC'
   const payoutBySeat = new Map(settlement.awards.map((a) => [a.seat, a.amount]))
@@ -98,7 +98,7 @@ function SettledCeremony() {
         dist: Math.abs(predFloat - settlePrice),
         dir: (predFloat > settlePrice ? 'above' : predFloat < settlePrice ? 'below' : 'exact') as RankedRow['dir'],
         folded: foldedSeats.has(r.seat),
-        payout: payoutBySeat.get(r.seat) ?? 0,
+        payout: payoutBySeat.get(r.seat) ?? 0n,
       }
     })
     .sort((a, b) => a.dist - b.dist)
@@ -111,8 +111,8 @@ function SettledCeremony() {
   const winnerSeat = settlement.awards[0]?.seat ?? active[0]?.seat
 
   // Rake transparency: the pot everyone contributed, what the house took, what was paid out.
-  const paid = settlement.awards.reduce((s, a) => s + a.amount, 0)
-  const rake = settlement.rakeCollected ?? 0
+  const paid = settlement.awards.reduce((s, a) => s + a.amount, 0n)
+  const rake = settlement.rakeCollected ?? 0n
   const pot = paid + rake
 
   const onClaim = async () => {
@@ -214,7 +214,7 @@ function RevealRow({
           : `${r.dist.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${r.dir}`}
       </span>
       <span className="reveal-pay mono reveal-col-pay">
-        {r.folded ? '—' : r.payout > 0 ? formatChips(r.payout, token) : '—'}
+        {r.folded ? '—' : r.payout > 0n ? formatChips(r.payout, token) : '—'}
       </span>
     </li>
   )
@@ -248,8 +248,8 @@ function VoidCeremony({ reason }: { reason: VoidReason }) {
   const [refundError, setRefundError] = useState<string | null>(null)
 
   const token = terms?.chipsToken ?? 'USDC'
-  const buyIn = terms?.buyIn ?? 0
-  const entry = terms?.entryFee ?? 0
+  const buyIn = terms?.buyIn ?? 0n
+  const entry = terms?.entryFee ?? 0n
   const total = buyIn + entry
 
   const onRefund = async () => {
@@ -273,7 +273,7 @@ function VoidCeremony({ reason }: { reason: VoidReason }) {
           {voidReasonCopy(reason)} Your buy-in and entry fee are returned in full — this is not a loss.
         </p>
 
-        {total > 0 && (
+        {total > 0n && (
           <div className="ceremony-refund-breakdown eyebrow">
             <span>Buy-in <span className="mono">{formatChips(buyIn, token)}</span></span>
             <span className="ceremony-rake-sep">+</span>

@@ -126,7 +126,7 @@ export function Lobby() {
   }
 
   // Display amounts in whole tokens (USDC has 6 decimals; price decimals differ).
-  const fmt = (base: number) => (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+  const fmt = (base: bigint | number) => (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
 
   const preview = { filled, max: terms.maxPlayers, yourSeatIndex: Math.min(filled, Math.max(0, terms.maxPlayers - 1)), terms, match: match ?? null }
 
@@ -288,7 +288,7 @@ function DerivedTerms({
   fmt,
 }: {
   terms: ReturnType<typeof useGameStore.getState>['terms']
-  fmt: (base: number) => string
+  fmt: (base: bigint | number) => string
 }) {
   if (!terms) return null
   return (
@@ -364,12 +364,12 @@ function CreateSummary({
   fmt,
 }: {
   terms: NonNullable<ReturnType<typeof useGameStore.getState>['terms']>
-  fmt: (base: number) => string
+  fmt: (base: bigint | number) => string
 }) {
   const parts = [
     `${terms.maxPlayers} seats`,
     `${fmt(terms.buyIn)} ${terms.chipsToken}`,
-    `pot up to ${fmt(terms.buyIn * terms.maxPlayers)} ${terms.chipsToken}`,
+    `pot up to ${fmt(terms.buyIn * BigInt(terms.maxPlayers))} ${terms.chipsToken}`,
     `rake ${terms.rakeBps / 100}%`,
   ]
   return (
@@ -392,7 +392,7 @@ function TableRules({
   fmt,
 }: {
   terms: NonNullable<ReturnType<typeof useGameStore.getState>['terms']>
-  fmt: (base: number) => string
+  fmt: (base: bigint | number) => string
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -510,7 +510,7 @@ function BuyInField({
   onError,
 }: {
   token: string
-  valueBase: number
+  valueBase: bigint | number
   limits: Limits
   onChange: (baseUnits: number) => void
   onError: (msg: string | null) => void
@@ -520,10 +520,11 @@ function BuyInField({
   const maxTok = limits.buyInMax / 1e6
   const rangeMsg = `Enter ${money(limits.buyInMin)}–${money(limits.buyInMax)} ${token}`
 
-  const [text, setText] = useState(() => String(valueBase / 1e6))
+  const valueTok = Number(valueBase) / 1e6
+  const [text, setText] = useState(() => String(valueTok))
   const [error, setError] = useState<string | null>(null)
   // Keep the field in sync when the store changes the value under us (e.g. presets).
-  useEffect(() => { setText(String(valueBase / 1e6)); setError(null); onError(null) }, [valueBase, onError])
+  useEffect(() => { setText(String(Number(valueBase) / 1e6)); setError(null); onError(null) }, [valueBase, onError])
   // Clear any lingering error when the field unmounts (switching to join, etc.).
   useEffect(() => () => onError(null), [onError])
 
@@ -540,7 +541,7 @@ function BuyInField({
   }
 
   const presets = BUYIN_PRESETS.filter((p) => p >= minTok && p <= maxTok)
-  const activePreset = valueBase / 1e6
+  const activePreset = valueTok
 
   return (
     <label className="lobby-field">

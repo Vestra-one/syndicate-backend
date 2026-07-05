@@ -1,7 +1,7 @@
 import { useReclaimMatch } from '@/hooks/useReclaimMatch'
 
 // USDC has 6 decimals — mirrors the fmt() convention used across Lobby/Dashboard.
-const fmt = (base: number) => (base / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
+const fmt = (base: bigint | number) => (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
 
 function fmtCountdown(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -27,7 +27,7 @@ export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null 
       <div className="reclaim-card reclaim-card--done panel">
         <span className="reclaim-icon" aria-hidden="true">✓</span>
         <div className="reclaim-done-body">
-          <div className="reclaim-title">Refunded {fmt(refundedAmount ?? 0)} USDC</div>
+          <div className="reclaim-title">Refunded {fmt(refundedAmount ?? 0n)} USDC</div>
           <div className="reclaim-sub eyebrow">+ reclaimed seat rent · room cancelled</div>
           {txSig && (
             <a

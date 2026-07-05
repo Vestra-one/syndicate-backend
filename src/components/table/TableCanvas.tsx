@@ -16,8 +16,8 @@ function seatChipStates(match: MatchStateView | null | undefined): SeatChipState
   return match.seats.map((s) => ({
     seat: s.seat,
     angle: angleFor.get(s.seat) ?? 0,
-    stack: s.stack / 1e6,
-    committed: s.committedThisStreet / 1e6,
+    stack: Number(s.stack) / 1e6,
+    committed: Number(s.committedThisStreet) / 1e6,
     folded: s.folded,
     allIn: s.allIn,
   }))
@@ -72,8 +72,8 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     // `match.pot` is in token base units (6 dp); the coin pile scales off the
     // human token amount, so a real ~18 USDC pot builds a modest heap rather than
     // saturating the 115-coin cap (which buried the pot label under the coins).
-    const readPot = (p: number) => handle.setPot(p / 1e6)
-    readPot(useGameStore.getState().match?.pot ?? 0)
+    const readPot = (p: bigint) => handle.setPot(Number(p) / 1e6)
+    readPot(useGameStore.getState().match?.pot ?? 0n)
 
     // Seed the per-seat coin stacks, then follow them as the hand plays out.
     const pushSeats = (m: MatchStateView | null | undefined) => handle.setSeats(seatChipStates(m))
@@ -82,7 +82,7 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     // Price board is only visible in-match — on discovery the chart has no context yet.
     handle.setPriceBoardVisible(useGameStore.getState().view === 'table')
 
-    let last = useGameStore.getState().match?.pot ?? 0
+    let last = useGameStore.getState().match?.pot ?? 0n
     let lastView = useGameStore.getState().view
     // A cheap signature of the seat state (≤6 seats) so we only re-push the 3D
     // chips when a stack, bet, fold or seating actually changes.
@@ -96,7 +96,7 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
     let feedLen = useGameStore.getState().feed?.length ?? 0
     let awarded = useGameStore.getState().match?.phase === 'SETTLED'
     const unsub = useGameStore.subscribe((s) => {
-      const next = s.match?.pot ?? 0
+      const next = s.match?.pot ?? 0n
       if (next !== last) { last = next; readPot(next) }
       const sig = seatSig(s.match)
       if (sig !== lastSeatSig) { lastSeatSig = sig; pushSeats(s.match) }

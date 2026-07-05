@@ -40,16 +40,19 @@ export function RoundStatus() {
   }
 
   const live = match.phase === 'LIVE'
-  const roundCount = terms?.roundCount ?? match.round
   const token = terms?.chipsToken ?? 'USDC'
   // Streets advance purely on the schedule fixed at lock, so the schedule is the honest
-  // round clock — the server's `round` field can lag it (observed frozen at 1 on devnet
-  // while its own schedule was in street 3), and no WS frame marks the transition.
+  // round clock — the server's `round` field drifts out of sync with it on devnet (seen
+  // frozen at 1 while the schedule was in street 3, and seen leading past the final street,
+  // which produced the impossible "Round 4 of 3"), and no WS frame marks the transition.
+  // When we have a schedule, trust it for BOTH the total and the current round, and never
+  // let either overflow it.
+  const roundCount = live && schedule?.length ? schedule.length : (terms?.roundCount ?? match.round)
   const scheduleRound =
     live && schedule?.length
       ? ((schedule.find((e) => now < e.end) ?? schedule[schedule.length - 1]).street + 1)
       : 0
-  const round = Math.max(match.round, scheduleRound)
+  const round = Math.min(roundCount, Math.max(match.round, scheduleRound))
   const label = live ? `Round ${round} of ${roundCount}` : PHASE_COPY[match.phase]
 
   // Whose move it is, phrased from your side of the felt.

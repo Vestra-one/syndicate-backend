@@ -6,6 +6,7 @@
  * from inside the React tree.  All code outside React reads from here.
  */
 import type { WalletAdapter } from '@solana/wallet-adapter-base'
+import { log } from '@/lib/log'
 
 interface Bridge {
   /** Currently connected adapter (Phantom, Solflare, …); null if not connected. */
@@ -20,7 +21,7 @@ interface Bridge {
 export const walletBridge: Bridge = {
   adapter: null,
   showModal: () => {
-    console.warn('[walletBridge] showModal called before WalletBridgeSync mounted')
+    log.warn('[walletBridge] showModal called before WalletBridgeSync mounted')
   },
   onConnected: null,
   onConnectError: null,
