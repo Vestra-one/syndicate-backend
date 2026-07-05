@@ -234,7 +234,11 @@ impl Actor {
         let street_start_ms = live_ms
             + rt.street_start_offset_sec(rt.engine().round)
                 .saturating_mul(1_000);
-        Some(self.turn_started_ms.max(street_start_ms) + self.row.action_timeout_ms)
+        Some(turn_deadline_ms(
+            self.turn_started_ms,
+            street_start_ms,
+            self.row.action_timeout_ms,
+        ))
     }
 
     fn turn_view(&self) -> Option<Value> {
@@ -732,12 +736,15 @@ impl Actor {
             self.finish_live().await;
             return;
         }
-        let Some(rt) = self.runtime.as_mut() else {
+        let Some(rt) = self.runtime.as_ref() else {
             return;
         };
         // Street close: force-resolve outstanding turns.
         let street_close = rt.current_street_close_ms(live_start);
         if now >= street_close {
+            let Some(rt) = self.runtime.as_mut() else {
+                return;
+            };
             let seq_before = rt.events().len();
             if let Err(e) = rt.force_resolve_street(&ActorLease, now) {
                 warn!(match_id = %self.id, "force_resolve_street: {e:?}");
@@ -749,23 +756,30 @@ impl Actor {
             return;
         }
         // Per-turn timeout → default action.
-        if let Some(idx) = rt.engine().to_act {
-            let deadline = self.turn_started_ms + self.row.action_timeout_ms;
-            if now >= deadline {
-                let policy = self
-                    .defaults
-                    .get(&idx)
-                    .copied()
-                    .unwrap_or(DefaultAction::CheckFold);
-                let seq_before = rt.events().len();
-                if let Err(e) = rt.apply_timeout_default(&ActorLease, now, idx, policy, deadline) {
-                    warn!(match_id = %self.id, seat = idx, "timeout default: {e:?}");
-                }
-                self.flush_events(seq_before).await;
-                self.broadcast_action_frame(seq_before).await;
-                self.turn_started_ms = now;
-                self.announce_turn().await;
+        let timeout = rt.engine().to_act.and_then(|idx| {
+            self.turn_deadline_ms(rt, live_start)
+                .map(|deadline| (idx, deadline))
+        });
+        if let Some((idx, deadline)) = timeout {
+            if now < deadline {
+                return;
             }
+            let policy = self
+                .defaults
+                .get(&idx)
+                .copied()
+                .unwrap_or(DefaultAction::CheckFold);
+            let Some(rt) = self.runtime.as_mut() else {
+                return;
+            };
+            let seq_before = rt.events().len();
+            if let Err(e) = rt.apply_timeout_default(&ActorLease, now, idx, policy, deadline) {
+                warn!(match_id = %self.id, seat = idx, "timeout default: {e:?}");
+            }
+            self.flush_events(seq_before).await;
+            self.broadcast_action_frame(seq_before).await;
+            self.turn_started_ms = now;
+            self.announce_turn().await;
         }
     }
 
@@ -1017,5 +1031,28 @@ impl Actor {
 
     fn broadcast(&self, frame: Value) {
         let _ = self.events.send(Arc::new(frame));
+    }
+}
+
+fn turn_deadline_ms(turn_started_ms: u64, street_start_ms: u64, action_timeout_ms: u64) -> u64 {
+    turn_started_ms
+        .max(street_start_ms)
+        .saturating_add(action_timeout_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_timeout_waits_for_street_open_after_early_advance() {
+        let turn_started_ms = 1_000;
+        let raw_deadline = turn_started_ms + 25_000;
+        let next_street_open_ms = 200_000;
+
+        let deadline = turn_deadline_ms(turn_started_ms, next_street_open_ms, 25_000);
+
+        assert!(raw_deadline < next_street_open_ms);
+        assert_eq!(deadline, 225_000);
     }
 }
