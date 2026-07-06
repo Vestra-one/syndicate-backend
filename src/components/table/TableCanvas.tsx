@@ -58,9 +58,11 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
       clearDev = () => { delete w.__setPot; delete w.__knock; delete w.__awardPot }
     }
 
-    // Decorative mode: a fixed heap, no store coupling.
+    // Decorative mode: a fixed heap, no store coupling. The price cabinet has no
+    // context here (coming-soon landing), so keep it hidden — table as showpiece only.
     if (pot !== undefined) {
       handle.setPot(pot)
+      handle.setPriceBoardVisible(false)
       return () => {
         clearDev()
         handle.dispose()
