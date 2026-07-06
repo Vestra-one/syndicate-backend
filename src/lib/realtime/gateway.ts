@@ -25,7 +25,9 @@ export interface Gateway {
 
 /** Open a real v2 WebSocket gateway. Requires VITE_WS_URL (or the dev WS proxy). */
 export function createGateway(adapters: Adapters): Gateway {
-  const devUser = import.meta.env.VITE_DEVNET_USER as string | undefined
+  // The `/ws-proxy` path only exists in the Vite dev server — gate it on import.meta.env.DEV
+  // so production builds always use the direct VITE_WS_URL (never the nonexistent proxy).
+  const devUser = import.meta.env.DEV ? (import.meta.env.VITE_DEVNET_USER as string | undefined) : undefined
   // In local dev with Basic Auth, use the Vite WS proxy so the auth header is injected
   // server-side (the browser WebSocket API cannot set Authorization headers directly).
   const url = devUser

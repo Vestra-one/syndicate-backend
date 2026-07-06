@@ -109,6 +109,22 @@
   filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.55));
   animation: cs-flicker 7s ease-in-out infinite;
 }
+/* Tagline sits just beneath the wordmark, at 0.6× its size — bridges the
+ * headline down into the table below. */
+.cs-tagline {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  /* 0.35× the wordmark's clamp(38px, 8.6vw, 104px) */
+  font-size: clamp(13px, 3.01vw, 36px);
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  color: #e7c678; /* softer champagne-gold — secondary to the wordmark */
+  text-shadow:
+    0 1px 8px rgba(0, 0, 0, 0.5),
+    0 0 18px rgba(231, 198, 120, 0.14);
+}
+
 /* candlelit warmth pooling on the engraving — echoes the scene's flame flicker */
 @keyframes cs-flicker {
   0%,
@@ -128,27 +144,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(18px, 2.4vw, 28px);
+  gap: clamp(40px, 6vw, 84px);
   width: 100%;
   max-width: 880px;
-}
-
-/* Baroque divider */
-.cs-rule {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: min(420px, 70%);
-}
-.cs-rule-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(to right, transparent, var(--hairline-strong), transparent);
-}
-.cs-rule-gem {
-  color: var(--gold);
-  font-size: 9px;
-  text-shadow: 0 0 10px rgba(202, 162, 63, 0.6);
 }
 
 /* ── Waitlist + socials ────────────────────────────────────────────────── */
@@ -156,34 +154,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(18px, 2.4vw, 28px);
+  gap: clamp(28px, 3vw, 36px);
   width: 100%;
-}
-
-.cs-join {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-.cs-join-lead {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(22px, 2.7vw, 31px);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  line-height: 1.05;
-  color: var(--gold-bright);
-  text-shadow:
-    0 1px 8px rgba(0, 0, 0, 0.6),
-    0 0 24px rgba(255, 184, 96, 0.22);
-}
-.cs-join-sub {
-  margin: 0;
-  font-size: clamp(12.5px, 1.5vw, 14px);
-  letter-spacing: 0.01em;
-  line-height: 1.4;
-  color: var(--text-dim);
 }
 
 /* Social tiles — equal-width, struck from the same brass as the seat coins.
@@ -198,14 +170,14 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  width: clamp(108px, 16vw, 136px);
-  padding: 18px 12px 16px;
+  gap: 11px;
+  width: clamp(94px, 13.5vw, 118px);
+  padding: 15px 10px 13px;
   border-radius: var(--radius);
-  border: 1px solid var(--hairline);
+  border: 1px solid rgba(243, 217, 138, 0.1);
   background: var(--bg-panel);
   box-shadow:
-    inset 0 1px 0 rgba(243, 217, 138, 0.08),
+    inset 0 1px 0 rgba(243, 217, 138, 0.06),
     var(--shadow-panel);
   backdrop-filter: blur(10px) saturate(1.1);
   text-decoration: none;
@@ -215,19 +187,18 @@
     box-shadow 0.18s var(--ease);
 }
 .cs-social:hover {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   border-color: var(--hairline-strong);
   box-shadow:
-    inset 0 1px 0 rgba(243, 217, 138, 0.12),
-    var(--glow-warm),
+    inset 0 1px 0 rgba(243, 217, 138, 0.1),
     var(--shadow-panel);
 }
 .cs-social-coin {
   position: relative;
   display: grid;
   place-items: center;
-  width: 58px;
-  height: 58px;
+  width: 50px;
+  height: 50px;
   border-radius: 50%;
   background:
     radial-gradient(circle at 50% 30%, rgba(255, 244, 208, 0.55), rgba(255, 244, 208, 0) 50%),
@@ -254,8 +225,8 @@
 .cs-social-coin svg {
   position: relative;
   z-index: 1;
-  width: 24px;
-  height: 24px;
+  width: 21px;
+  height: 21px;
   color: var(--gold-bright);
   filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.85)) drop-shadow(0 -0.5px 0 rgba(255, 244, 208, 0.4));
 }
@@ -264,7 +235,7 @@
     inset 0 1px 1px rgba(255, 246, 214, 0.65),
     inset 0 -3px 6px rgba(28, 15, 4, 0.7),
     0 0 0 1px var(--gold),
-    0 0 20px rgba(243, 217, 138, 0.45),
+    0 0 12px rgba(231, 198, 120, 0.28),
     0 4px 11px rgba(0, 0, 0, 0.6);
 }
 .cs-social-meta {
@@ -307,6 +278,68 @@
   opacity: 0.5;
 }
 
+/* ── Sound toggle ──────────────────────────────────────────────────────── */
+/* A struck-gold coin button, in kind with the social coins and the felt heap. */
+.cs-mute {
+  position: fixed;
+  right: clamp(16px, 3vw, 34px);
+  bottom: clamp(16px, 3vw, 34px);
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255, 244, 208, 0.55), rgba(255, 244, 208, 0) 50%),
+    radial-gradient(circle at 50% 118%, rgba(20, 11, 3, 0.6), rgba(20, 11, 3, 0) 58%),
+    conic-gradient(from 212deg, #b8923a, #f3d98a 24%, #8a6a22 52%, #e6c163 76%, #b8923a);
+  border: 1px solid rgba(38, 24, 9, 0.85);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 214, 0.65),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 4px 11px rgba(0, 0, 0, 0.6);
+  transition:
+    transform 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+.cs-mute::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 36%, #3a2410, #150c04 82%);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.85),
+    inset 0 -1px 1px rgba(243, 217, 138, 0.16);
+}
+.cs-mute svg {
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  color: var(--gold-bright);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.85)) drop-shadow(0 -0.5px 0 rgba(255, 244, 208, 0.4));
+}
+.cs-mute:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 214, 0.65),
+    inset 0 -3px 6px rgba(28, 15, 4, 0.7),
+    0 0 0 1px var(--gold),
+    0 0 12px rgba(231, 198, 120, 0.28),
+    0 4px 11px rgba(0, 0, 0, 0.6);
+}
+.cs-mute:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 3px;
+}
+.cs-mute[aria-pressed='true'] svg {
+  color: var(--text-faint);
+}
+
 /* ── Entrance choreography ─────────────────────────────────────────────── */
 .cs-rise {
   opacity: 0;
@@ -333,9 +366,9 @@
     gap: 10px;
   }
   .cs-social {
-    width: clamp(96px, 30vw, 116px);
-    padding: 14px 8px 13px;
-    gap: 10px;
+    width: clamp(84px, 27vw, 102px);
+    padding: 12px 7px 11px;
+    gap: 9px;
   }
 }
 

@@ -8,7 +8,9 @@
  *
  * Auto-reconnects with a short backoff; silently no-ops if no WS URL is set.
  */
-const WS_URL = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+// The same-origin `/price-ws-proxy` path only exists in the Vite dev server. Gate it on
+// import.meta.env.DEV so production builds always use the direct VITE_PRICE_WS_URL.
+const WS_URL = (import.meta.env.DEV && (import.meta.env.VITE_DEVNET_USER as string | undefined))
   ? `${window.location.origin.replace(/^http/, 'ws')}/price-ws-proxy`
   : import.meta.env.VITE_PRICE_WS_URL as string | undefined
 

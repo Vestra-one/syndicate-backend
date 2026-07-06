@@ -45,22 +45,32 @@ export interface TableSceneHandle {
   tableRadius: number
   /** World-space Y of the felt playing surface. */
   feltY: number
-  /** Drive the 3D coin pile at the centre of the felt from the live pot value. */
-  setPot: (amount: number) => void
-  /** Drive the per-seat coin stacks + committed piles from live seat state. */
-  setSeats: (seats: SeatChipState[]) => void
+  /**
+   * Drive the 3D coin pile at the centre of the felt from the live pot value.
+   * `instant` places the heap at rest with no drop-in — used to hydrate an
+   * already-running match (joining mid-hand) so it doesn't replay its build-up.
+   */
+  setPot: (amount: number, instant?: boolean) => void
+  /**
+   * Drive the per-seat coin stacks + committed piles from live seat state.
+   * `instant` snaps every stack and committed pile to rest with no travel/drop —
+   * used for the first hydration so existing bets don't animate in from nowhere.
+   */
+  setSeats: (seats: SeatChipState[], instant?: boolean) => void
   /** A check at `seat`: ripple the felt (no coins move). */
   knock: (seat: number) => void
-  /** Award the pot to `seat`: stream coins from the pot into their stack. */
-  awardPot: (seat: number) => void
+  /** Award the pot to `seat`: stream coins from the pot into their stack. `amount` (whole tokens) scales the stream. */
+  awardPot: (seat: number, amount?: number) => void
   /** Show or hide the price-board cabinet (hidden on discovery, shown in-match). */
   setPriceBoardVisible: (visible: boolean) => void
+  /** Re-drop the pot heap from above as a fresh cascade (decorative landing). */
+  replayPour: () => void
   dispose: () => void
 }
 
 export function createTableScene(
   container: HTMLElement,
-  opts: { autoSpin?: boolean } = {},
+  opts: { autoSpin?: boolean; onCoinLand?: () => void } = {},
 ): TableSceneHandle {
   // ---------- helpers ----------
   const rand = (a: number, b: number) => a + Math.random() * (b - a)
@@ -890,7 +900,7 @@ export function createTableScene(
 
   // ---- pot (3D coin heap, centre-front of the felt) ----
   // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit })
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit, onLand: opts.onCoinLand })
   scene.add(potPile.group)
 
   // ---- per-seat chips (personal stacks + committed piles on the felt) ----
@@ -992,10 +1002,15 @@ export function createTableScene(
 
   let raf = 0
   let running = true
+  let lastNow = 0 // wall-clock (ms) of the previous rendered frame
   // DEV: a fixed camera override so the pot/coins can be inspected up close
   let inspect: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null
-  function frame() {
-    t += 0.016
+  // `dt` is real elapsed seconds so every coin animation runs at wall-clock
+  // speed regardless of the display's refresh rate (60 vs 120/144 Hz) or frame
+  // drops. The headless screenshot pump (__tableStep) passes a fixed 0.016 so
+  // captures stay deterministic.
+  function frame(dt: number) {
+    t += dt
     // Coming-soon showpiece: turn the whole table slowly on its axis (~2 min a
     // revolution). Time-based so it's smooth regardless of frame cadence.
     if (opts.autoSpin) tableGroup.rotation.y = t * 0.05
@@ -1029,8 +1044,15 @@ export function createTableScene(
   function animate() {
     if (!running) return
     raf = requestAnimationFrame(animate)
-    frame()
+    const now = performance.now()
+    let dt = (now - lastNow) / 1000
+    lastNow = now
+    // First frame and background-tab resume (RAF pauses, then a huge gap): clamp
+    // so animations advance by one nominal step instead of teleporting to their end.
+    if (!(dt > 0) || dt > 0.1) dt = 0.016
+    frame(dt)
   }
+  lastNow = performance.now()
   animate()
   // dev-only: headless throttles RAF, so screenshots need manual frame pumps,
   // plus a camera override to study the coin pile up close.
@@ -1040,7 +1062,7 @@ export function createTableScene(
       __inspect?: (x: number, y: number, z: number, lx?: number, ly?: number, lz?: number) => void
     }
     w.__tableStep = (n = 1) => {
-      for (let i = 0; i < n; i++) frame()
+      for (let i = 0; i < n; i++) frame(0.016)
     }
     w.__inspect = (x, y, z, lx = 0, ly = 0.12, lz = 1.1) => {
       inspect = { pos: new THREE.Vector3(x, y, z), look: new THREE.Vector3(lx, ly, lz) }
@@ -1107,11 +1129,12 @@ export function createTableScene(
     camera,
     tableRadius: R_OUTER,
     feltY: yFelt,
-    setPot: (amount: number) => potPile.setAmount(amount),
-    setSeats: (s: SeatChipState[]) => seatChips.setSeats(s),
+    setPot: (amount: number, instant?: boolean) => potPile.setAmount(amount, instant),
+    setSeats: (s: SeatChipState[], instant?: boolean) => seatChips.setSeats(s, instant),
     knock: (seat: number) => seatChips.knock(seat),
-    awardPot: (seat: number) => seatChips.awardPot(seat),
+    awardPot: (seat: number, amount?: number) => seatChips.awardPot(seat, amount),
     setPriceBoardVisible: (v: boolean) => { priceBoard.group.visible = v },
+    replayPour: () => potPile.restart(),
     dispose,
   }
 }

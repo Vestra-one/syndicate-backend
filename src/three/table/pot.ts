@@ -24,10 +24,16 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 
 export interface PotPile {
   group: THREE.Group
-  /** Set the live pot value; coins animate toward the new amount. */
-  setAmount: (amount: number) => void
+  /**
+   * Set the live pot value; coins animate toward the new amount. Pass
+   * `instant` to place newly-revealed coins at rest (no drop-in) — used to
+   * hydrate an in-progress pot without replaying its build-up.
+   */
+  setAmount: (amount: number, instant?: boolean) => void
   /** Advance animations. `t` is the scene clock (seconds-ish). */
   update: (t: number) => void
+  /** Clear the placed coins and re-pour the current target as a fresh cascade. */
+  restart: () => void
   dispose: () => void
 }
 
@@ -37,9 +43,25 @@ const GAP = 0.001 // hairline between stacked coins so edges separate
 const MAX_CHIPS = 115 // total coin budget in the heap
 const HEAP_R = 0.74 // radius of the mound footprint on the felt
 const DOME = 5 // height bias: how much taller the centre piles than the rim
-const DROP = 1.5 // how far above home a new coin starts
-const DROP_DUR = 0.4 // seconds for a coin to settle
 const LEAVE_DUR = 0.3 // seconds for a swept coin to vanish
+
+// ── coin drop physics ──────────────────────────────────────────────────────
+// Coins are poured onto the heap like a tossed handful: each is released from a
+// scattered point in the air above the mound, falls under constant gravity while
+// its slight sideways throw eases onto its rest column, tumbling as it goes, and
+// lands flat with a barely-there metal-on-felt hop. Vertical fall time is fixed
+// (independent of the sideways glide) and coins are revealed in slot order —
+// which builds each column bottom-up — so a coin always touches down onto its
+// own (x,z) slot AFTER the one it rests on, never onto empty air. The pour is
+// collision-free by construction; no simulation needed.
+const DROP_H = 1.9 // height above each coin's rest that it is released from
+const DROP_SCATTER = 0.34 // sideways throw radius the coin glides in from
+const GRAV = 15 // gravity (world units/s²) — a weighty but lively fall
+const BOUNCE_E = 0.16 // restitution: a subtle hop; struck gold is dead on felt
+const REVEAL_STAGGER = 0.03 // seconds between coins entering the pour (cascade)
+const FALL_DUR = Math.sqrt((2 * DROP_H) / GRAV) // free-fall time to touchdown
+const BOUNCE_V = BOUNCE_E * GRAV * FALL_DUR // rebound speed at impact
+const BOUNCE_DUR = (2 * BOUNCE_V) / GRAV // duration of the single settle hop
 
 /** coins ≈ 1.5·√amount — a satisfying heap that scales gently with the pot. */
 function chipsFor(amount: number): number {
@@ -59,6 +81,7 @@ export const easeOutBack = (x: number) => {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2)
 }
 export const easeInCubic = (x: number) => x * x * x
+export const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3)
 export const easeInOutCubic = (x: number) =>
   x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
 
@@ -577,11 +600,18 @@ export function createCoinKit(): CoinKit {
 
 interface Chip {
   mesh: THREE.Mesh
+  homeX: number
   homeY: number
-  born: number
+  homeZ: number
+  offX: number // sideways throw the coin glides in from, eased out by landing
+  offZ: number
+  born: number // scene-clock time the coin was released into the pour
   leaving: boolean
   leaveStart: number
-  spin: number // residual settle wobble seed
+  restQuat: THREE.Quaternion // orientation at rest (the slot's slight lean)
+  tumbleAxis: THREE.Vector3 // axis the coin tumbles about as it falls
+  tumbleAng: number // radians of tumble, eased to 0 by touchdown
+  landed: boolean // has fired its touchdown (used to ping the clink once)
 }
 
 interface Slot {
@@ -594,7 +624,13 @@ interface Slot {
   matIdx: number
 }
 
-export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?: CoinKit }): PotPile {
+export function createPotPile(opts: {
+  feltY: number
+  center: THREE.Vector3
+  kit?: CoinKit
+  /** Fired once the moment a poured coin touches down — used to sync a clink. */
+  onLand?: () => void
+}): PotPile {
   const group = new THREE.Group()
   group.position.copy(opts.center)
   group.position.y = opts.feltY
@@ -714,27 +750,68 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
   const chips: Chip[] = []
   let target = 0
   let lastT = -1
+  let instantNext = false // next reveal drops straight to rest (mid-hand hydrate)
+  let nextReveal = -1 // scene-clock time the next coin may enter the pour
+  const _q = new THREE.Quaternion() // scratch — reused each frame, never allocates
 
-  function grow(to: number, t: number) {
+  function grow(to: number, t: number, instant: boolean) {
     for (let i = chips.length; i < to; i++) {
       const sl = slots[i]
       const mesh = new THREE.Mesh(geom, matSets[sl.matIdx])
       mesh.castShadow = true
       mesh.receiveShadow = true
-      mesh.position.set(sl.x, sl.homeY, sl.z)
-      // lean the coin off-axis a touch so stacks aren't perfectly columnar
-      mesh.rotation.set(
-        Math.cos(sl.leanAxis) * sl.lean,
-        sl.rotY,
-        Math.sin(sl.leanAxis) * sl.lean,
+      // rest orientation — the slot's slight lean so stacks aren't columnar.
+      const restQuat = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          Math.cos(sl.leanAxis) * sl.lean,
+          sl.rotY,
+          Math.sin(sl.leanAxis) * sl.lean,
+        ),
       )
+      // a gentle tumble while airborne — a near-horizontal axis so the coin
+      // flips like a tossed sovereign, unwinding to flat exactly at touchdown.
+      const tumbleAxis = new THREE.Vector3(
+        hash(i, 20) - 0.5,
+        (hash(i, 21) - 0.5) * 0.35,
+        hash(i, 22) - 0.5,
+      ).normalize()
+      const tumbleAng = (0.55 + hash(i, 23) * 0.9) * Math.PI // 0.55π–1.45π
+      // sideways throw it glides in from — uniform over a disc (√ for area)
+      const oa = hash(i, 24) * Math.PI * 2
+      const om = Math.sqrt(hash(i, 25)) * DROP_SCATTER
+      const offX = Math.cos(oa) * om
+      const offZ = Math.sin(oa) * om
+      if (instant) {
+        mesh.position.set(sl.x, sl.homeY, sl.z)
+        mesh.quaternion.copy(restQuat)
+      } else {
+        // start at the released pose so the coin never flashes at rest for a frame
+        mesh.position.set(sl.x + offX, sl.homeY + DROP_H, sl.z + offZ)
+      }
       group.add(mesh)
-      chips.push({ mesh, homeY: sl.homeY, born: t, leaving: false, leaveStart: 0, spin: hash(i, 6) })
+      // born:-Infinity makes the drop-in maths resolve to "already settled",
+      // so a hydrated coin sits at rest on its first frame with no pour.
+      chips.push({
+        mesh,
+        homeX: sl.x,
+        homeY: sl.homeY,
+        homeZ: sl.z,
+        offX,
+        offZ,
+        born: instant ? -Infinity : t,
+        leaving: false,
+        leaveStart: 0,
+        restQuat,
+        tumbleAxis,
+        tumbleAng,
+        landed: instant, // hydrated coins are born at rest — no clink
+      })
     }
   }
 
-  function setAmount(amount: number) {
+  function setAmount(amount: number, instant = false) {
     target = chipsFor(amount)
+    if (instant) instantNext = true
   }
 
   function update(t: number) {
@@ -742,15 +819,29 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
 
     const live = chips.filter((c) => !c.leaving).length
     if (target > live) {
-      grow(target, t)
-    } else if (target < live) {
-      let excess = live - target
-      for (let i = chips.length - 1; i >= 0 && excess > 0; i--) {
-        const c = chips[i]
-        if (!c.leaving) {
-          c.leaving = true
-          c.leaveStart = t
-          excess--
+      if (instantNext) {
+        grow(target, t, true) // hydrate: reveal the whole heap at rest, no pour
+        nextReveal = -1
+      } else {
+        // Pour coins in on a fixed cadence so the heap rains down and builds up
+        // over ~2–3s, instead of the whole pile blinking in on a single frame.
+        if (nextReveal < 0) nextReveal = t
+        while (chips.length < target && t >= nextReveal) {
+          grow(chips.length + 1, t, false)
+          nextReveal += REVEAL_STAGGER
+        }
+      }
+    } else {
+      nextReveal = -1
+      if (target < live) {
+        let excess = live - target
+        for (let i = chips.length - 1; i >= 0 && excess > 0; i--) {
+          const c = chips[i]
+          if (!c.leaving) {
+            c.leaving = true
+            c.leaveStart = t
+            excess--
+          }
         }
       }
     }
@@ -768,14 +859,49 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
         }
       } else {
         const age = t - c.born
-        const p = Math.min(1, age / DROP_DUR)
-        const settle = easeOutBack(p)
-        c.mesh.position.y = c.homeY + (1 - settle) * DROP
-        const sc = Math.min(1, age / (DROP_DUR * 0.5))
-        c.mesh.scale.setScalar(0.6 + 0.4 * sc)
+        if (age >= FALL_DUR + BOUNCE_DUR) {
+          // settled — flat on its slot at rest orientation
+          c.mesh.position.set(c.homeX, c.homeY, c.homeZ)
+          c.mesh.quaternion.copy(c.restQuat)
+        } else if (age < FALL_DUR) {
+          // free fall from DROP_H up (accelerating down) while the sideways
+          // throw decelerates onto the slot — a shallow toss arc that flattens
+          // out right as it lands, so it settles instead of stopping dead
+          const glide = 1 - easeOutCubic(age / FALL_DUR) // 1 → 0 by touchdown
+          c.mesh.position.set(
+            c.homeX + c.offX * glide,
+            c.homeY + DROP_H - 0.5 * GRAV * age * age,
+            c.homeZ + c.offZ * glide,
+          )
+          // tumble spins fast at first, unwinding to flat exactly at touchdown
+          _q.setFromAxisAngle(c.tumbleAxis, c.tumbleAng * glide)
+          c.mesh.quaternion.copy(c.restQuat).multiply(_q)
+        } else {
+          // one small hop after impact, then it comes to rest
+          const at = age - FALL_DUR
+          const h = BOUNCE_V * at - 0.5 * GRAV * at * at
+          c.mesh.position.set(c.homeX, c.homeY + Math.max(0, h), c.homeZ)
+          c.mesh.quaternion.copy(c.restQuat)
+        }
+        if (!c.landed && age >= FALL_DUR) {
+          c.landed = true
+          opts.onLand?.() // touchdown — clink in sync with the impact
+        }
       }
     }
+    instantNext = false // consumed: only the reveal right after setAmount snaps
     lastT = t
+  }
+
+  function restart() {
+    // Re-drop the heap from scratch: clear the placed coins and reset the reveal
+    // clock so `update` pours the same target in again as a fresh cascade. The
+    // meshes share the kit's geometry/materials, so removing them frees nothing
+    // to dispose — they're simply dereferenced and rebuilt on the next grow.
+    for (const c of chips) group.remove(c.mesh)
+    chips.length = 0
+    nextReveal = -1
+    instantNext = false
   }
 
   function dispose() {
@@ -784,5 +910,5 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
     ownKit?.dispose()
   }
 
-  return { group, setAmount, update, dispose }
+  return { group, setAmount, update, restart, dispose }
 }

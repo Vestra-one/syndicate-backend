@@ -1,3 +1,4 @@
+import './polyfills.ts' // must run before any Solana/Anchor import — sets global Buffer
 import React, { StrictMode, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
