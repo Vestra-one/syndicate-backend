@@ -473,6 +473,11 @@ function ActionPanel() {
   const canRaise = stack > toCall
   const raiseValid = raiseTo >= minRaiseTo && raiseTo <= maxRaiseTo
   const isShove = raiseTo >= maxRaiseTo
+  // No chips wagered this round → the aggressive action opens betting and must be a `bet_to`;
+  // otherwise it raises an existing bet (`raise_to`). Sending the wrong one is rejected by the
+  // engine (MustBetNotRaise / MustRaiseNotBet). Note this is `currentBet === 0`, NOT `toCall === 0`:
+  // preflop the big blind has toCall 0 but a posted blind, so its aggressive action is still a raise.
+  const isOpen = currentBet === 0
 
   return (
     <div className="betpanel panel action-panel">
@@ -549,12 +554,12 @@ function ActionPanel() {
             />
             <button
               className="pk-btn pk-raise"
-              onClick={() => send(isShove ? { type: 'allIn' } : { type: 'raiseTo', amount: BigInt(raiseTo) })}
+              onClick={() => send(isShove ? { type: 'allIn' } : { type: isOpen ? 'betTo' : 'raiseTo', amount: BigInt(raiseTo) })}
               disabled={!raiseValid || pending}
             >
-              {pendingType === 'raiseTo' || (pendingType === 'allIn' && isShove)
+              {pendingType === 'betTo' || pendingType === 'raiseTo' || (pendingType === 'allIn' && isShove)
                 ? 'Sending…'
-                : isShove ? `All-in ${formatChips(stack)}` : `Raise to ${formatChips(raiseTo)}`}
+                : isShove ? `All-in ${formatChips(stack)}` : isOpen ? `Bet ${formatChips(raiseTo)}` : `Raise to ${formatChips(raiseTo)}`}
             </button>
           </div>
         </div>
