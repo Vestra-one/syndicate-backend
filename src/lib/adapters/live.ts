@@ -146,6 +146,21 @@ function n(v: unknown): number {
   return Number(v ?? 0)
 }
 
+/**
+ * Exact `bigint` for a token base-unit amount (BN, number, or string). Unlike `n()`, this
+ * keeps the full u64 range — chips amounts (buy-in, deposit, payout) span the whole width and
+ * must not degrade to a lossy float. Use for every `Chips` field; never for display-only ints.
+ */
+function big(v: unknown): bigint {
+  if (typeof v === 'bigint') return v
+  const bn = v as { toString?: () => string } | null
+  if (bn && typeof bn.toString === 'function' && bn.toString !== Object.prototype.toString) {
+    try { return BigInt(bn.toString()) } catch { return 0n }
+  }
+  if (typeof v === 'number') return BigInt(Math.trunc(v))
+  return 0n
+}
+
 /** Exact decimal string for a full-width u64 id (BN or number). No precision loss, never throws. */
 function idStr(v: unknown): string {
   if (v == null) return '0'
@@ -167,17 +182,17 @@ function mapMatchStatus(acct: any): OnchainMatchStatus {
   return {
     status: MATCH_STATUS[key] ?? 'FILLING',
     fillDeadlineTs: n(acct.fillDeadlineTs),
-    buyIn: n(acct.buyIn),
-    entryFee: n(acct.entryFee),
+    buyIn: big(acct.buyIn),
+    entryFee: big(acct.entryFee),
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapSeat(acct: any): OnchainSeatInfo {
   return {
-    deposit: n(acct.deposit),
-    entryFeePaid: n(acct.entryFeePaid),
-    payout: n(acct.payout),
+    deposit: big(acct.deposit),
+    entryFeePaid: big(acct.entryFeePaid),
+    payout: big(acct.payout),
     claimed: !!acct.claimed,
     confirmed: !!acct.confirmed,
     engineSeat: n(acct.engineSeat),
@@ -388,17 +403,17 @@ function createLiveChain(): ChainClient {
   return {
     async chipBalance(): Promise<Chips> {
       const adapter = walletBridge.adapter
-      if (!adapter?.publicKey) return 0
+      if (!adapter?.publicKey) return 0n
       const mint = getChipsMint()
-      if (!mint) return 0
+      if (!mint) return 0n
       const conn = getConnection()
       try {
         const ata = getAssociatedTokenAddressSync(mint, adapter.publicKey)
         const info = await conn.getTokenAccountBalance(ata)
         // Return raw integer base units (e.g. 1_000_000 for 1 USDC at 6 decimals)
-        return Number(info.value.amount)
+        return BigInt(info.value.amount)
       } catch {
-        return 0
+        return 0n
       }
     },
 
@@ -533,7 +548,7 @@ function createLiveChain(): ChainClient {
      * instruction needs the on-chain u64 for PDA derivation). `joinCommitmentHex` binds a
      * private-room join (`sha256(roomcode ‖ joiner)`); public rooms pass 32 zero bytes.
      */
-    async deposit(_matchId: string, joinCommitmentHex?: string, _amount?: number, onProgress?: TxProgressFn): Promise<string> {
+    async deposit(_matchId: string, joinCommitmentHex?: string, _amount?: Chips, onProgress?: TxProgressFn): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
