@@ -16,7 +16,11 @@ import type { Chips } from '@/lib/protocol'
 // basic auth, and the session's `Authorization: Bearer` must reach it untouched. The
 // legacy VITE_DEVNET_USER proxy branch remains only for local backends that still need
 // header injection; the proxy passes Bearer through (vite.config.ts) when set.
-const API_BASE = (import.meta.env.VITE_DEVNET_USER as string | undefined)
+// The `/api-proxy` branch is a LOCAL-DEV-ONLY convenience (Vite dev server injects auth
+// and rewrites to the backend). It must never activate in a production build — Netlify has
+// no such proxy — so gate it on import.meta.env.DEV even if VITE_DEVNET_USER leaks into the
+// build env. Production always talks to VITE_API_URL directly (backend has open CORS).
+const API_BASE = (import.meta.env.DEV && (import.meta.env.VITE_DEVNET_USER as string | undefined))
   ? '/api-proxy'
   : (import.meta.env.VITE_API_URL as string | undefined)
 
