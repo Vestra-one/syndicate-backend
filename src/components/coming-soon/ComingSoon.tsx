@@ -40,7 +40,7 @@ const SOCIALS: Array<{
 
 export function ComingSoon() {
   useEffect(() => {
-    document.title = "Satoshi's Table — coming soon"
+    document.title = "Satoshi's Table"
   }, [])
 
   return (
