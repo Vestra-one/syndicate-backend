@@ -348,8 +348,27 @@ async function signBytesBase64(bytes: Uint8Array): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Time-lock sealer (stub — tlock-js integration is a follow-up)
+// Time-lock sealer (drand tlock)
 // ---------------------------------------------------------------------------
+
+/**
+ * Strip age ASCII armor (`-----BEGIN/END AGE ENCRYPTED FILE-----` + base64 body) back to the
+ * raw binary age file. tlock-js emits armored text by default, but the settlement worker's
+ * Rust `tlock_age` reader parses BINARY age only — handed the armored form it can't read the
+ * header and `decrypt` returns `None`, voiding the match ("ciphertext failed to decrypt").
+ * The armor body is exactly base64(binary age), so de-armoring is: drop the markers, join the
+ * wrapped lines, base64-decode. Byte-verified equal to tlock-js's own `decodeArmor`.
+ */
+function deArmorAge(armored: string): Uint8Array {
+  const body = armored
+    .replace('-----BEGIN AGE ENCRYPTED FILE-----', '')
+    .replace('-----END AGE ENCRYPTED FILE-----', '')
+    .replace(/\s+/g, '')
+  const bin = atob(body)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
 
 function createLiveTlock(): Tlock {
   return {
@@ -362,9 +381,10 @@ function createLiveTlock(): Tlock {
       // Plaintext is the i128-LE WAD price (16 bytes). Real drand tlock gates the reveal on
       // the round itself (unlike the mock scheme, no round bytes go in the plaintext).
       const armored = await timelockEncrypt(targetRound, Buffer.from(i128le(priceWad)), client)
-      // The stored/committed ciphertext bytes are the UTF-8 bytes of the age-armored string;
-      // the settlement worker (drand tlock) decrypts these same bytes.
-      return new TextEncoder().encode(armored)
+      // Return the BINARY age bytes (de-armored) — the form the settlement worker decrypts.
+      // The caller commits `sha256(these bytes)` and sends `base64(these bytes)`, so what we
+      // commit, send, and the worker decrypts are all the same binary payload.
+      return deArmorAge(armored)
     },
   }
 }
@@ -739,6 +759,25 @@ function createLiveChain(): ChainClient {
       return acct ? mapSeat(acct) : null
     },
 
+    async getSeatPayouts(onchainMatchId, wallets): Promise<{ wallet: string; engineSeat: number; payout: Chips }[]> {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram() as any
+      const mAcct = matchPda(onchainMatchId)
+      const results = await Promise.all(
+        wallets.map(async (wallet) => {
+          try {
+            const acct = await program.account.seatAccount.fetchNullable(seatPda(mAcct, new PublicKey(wallet)))
+            if (!acct) return null
+            const s = mapSeat(acct)
+            return { wallet, engineSeat: s.engineSeat, payout: s.payout }
+          } catch {
+            return null // a single unreadable seat must not sink the whole ceremony
+          }
+        }),
+      )
+      return results.filter((r): r is { wallet: string; engineSeat: number; payout: Chips } => r !== null)
+    },
+
     /** Permissionless: anyone can send this once `now >= fill_deadline_ts`; only pays the fee. */
     async voidBeforeStart(onchainMatchId: string): Promise<string> {
       const adapter = walletBridge.adapter
@@ -957,11 +996,13 @@ function createLiveChain(): ChainClient {
         if (seat.claimed || seat.payout <= 0) continue // already pulled, or nothing to collect
         const matchAcct = matchAccts[i]
         if (!matchAcct) continue
-        if (mapMatchStatus(matchAcct).status !== 'SETTLED') continue
+        const status = mapMatchStatus(matchAcct)
+        if (status.status !== 'SETTLED') continue
         out.push({
           onchainMatchId: idStr(matchAcct.matchId),
           matchPda: matchKeys[i].toBase58(),
           payout: seat.payout,
+          staked: status.buyIn + status.entryFee,
         })
       }
       return out

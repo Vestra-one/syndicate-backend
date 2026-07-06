@@ -1892,30 +1892,71 @@ async function ensureSealContext(set: SetState, get: () => GameState): Promise<v
 }
 
 /**
- * Build the full `SettlementView` from a REST match detail's `reveal` block. The WS `settled`
- * frame and the REST detail both carry the settlement PRICE + every revealed prediction, but
- * NEITHER view carries per-seat payout AMOUNTS — those live on-chain (seat.payout). So the
- * caller reads the connected wallet's on-chain payout separately and passes it in as `myPayout`
- * (the one award the player actually needs, to light the Claim button). `winnerSeats` (from the
- * WS payouts list) crowns the in-the-money seats even when only our own amount is known.
+ * Resolve the per-seat payout AWARDS for a settled match. No server view carries per-seat
+ * payout amounts — they live on-chain (`seat.payout`) — and a conviction match pays MULTIPLE
+ * seats (winner + partial returns), not just the winner. So read EVERY seat's on-chain payout
+ * (the seat wallets come from the match view) and return the full award set, ordered
+ * top-payout-first so the ceremony crowns the actual winner and totals the real pot.
+ *
+ * Degraded fallback (chain unreachable / no seat wallets): read only the connected wallet's own
+ * payout and crown the WS `winnerSeats` at amount 0 — enough to light the Claim button and mark
+ * a winner, even when the full distribution is unknown.
+ */
+async function computeSettlementAwards(
+  detail: MatchDetail,
+  onchainId: string | undefined,
+  winnerSeats?: number[],
+): Promise<{ seat: number; amount: Chips }[]> {
+  if (adapters && onchainId) {
+    const seatWallets = (detail.seats ?? [])
+      .filter((s) => !!s.wallet)
+      .map((s) => ({ wallet: s.wallet, seat: s.seat_index }))
+    if (seatWallets.length) {
+      try {
+        const payouts = await adapters.chain.getSeatPayouts(onchainId, seatWallets.map((s) => s.wallet))
+        const byWallet = new Map(payouts.map((p) => [p.wallet, p.payout]))
+        const awards = seatWallets.map(({ wallet, seat }) => ({ seat, amount: byWallet.get(wallet) ?? 0n }))
+        // Only trust the full read if it actually found amounts; otherwise fall through to the
+        // degraded path (a settled match always pays someone, so all-zero means the read missed).
+        if (awards.some((a) => a.amount > 0n)) {
+          return awards.sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0))
+        }
+      } catch (err) {
+        log.warn('[settle] all-seat payout read failed, falling back:', err)
+      }
+    }
+  }
+  // Degraded: only our own amount is knowable.
+  let myPayout: { seat: number; amount: Chips } | null = null
+  if (adapters && onchainId) {
+    try {
+      const seat = await adapters.chain.getMySeat(onchainId)
+      if (seat && seat.payout > 0n) myPayout = { seat: seat.engineSeat, amount: seat.payout }
+    } catch (err) {
+      log.warn('[settle] on-chain payout read failed:', err)
+    }
+  }
+  return winnerSeats && winnerSeats.length
+    ? winnerSeats.map((seat) => ({ seat, amount: myPayout && myPayout.seat === seat ? myPayout.amount : 0n }))
+    : myPayout
+      ? [myPayout]
+      : []
+}
+
+/**
+ * Build the full `SettlementView` from a REST match detail's `reveal` block (settlement price +
+ * every revealed prediction) and the pre-resolved per-seat `awards` (see `computeSettlementAwards`).
  */
 function settlementFromDetail(
   detail: MatchDetail,
   decimals: number,
-  myPayout: { seat: number; amount: Chips } | null,
-  winnerSeats?: number[],
+  awards: { seat: number; amount: Chips }[],
 ): SettlementView {
   const reveal = detail.reveal as {
     settlement_price_wad?: string | null
     predictions?: { engine_seat: number; prediction_wad: string }[] | null
     rake?: number | null
   } | null
-  const awards =
-    winnerSeats && winnerSeats.length
-      ? winnerSeats.map((seat) => ({ seat, amount: myPayout && myPayout.seat === seat ? myPayout.amount : 0n }))
-      : myPayout
-        ? [myPayout]
-        : []
   return {
     matchId: detail.match_id,
     settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
@@ -1968,20 +2009,12 @@ async function recoverSettlement(set: SetState, get: () => GameState, winnerSeat
     return
   }
 
-  // Per-seat payout amounts aren't in any server view — read our own from the seat account.
-  let myPayout: { seat: number; amount: Chips } | null = null
+  // Per-seat payout amounts aren't in any server view — read every seat's from the chain.
   const onchainId = get().terms?.onchainMatchId
-  if (adapters && onchainId) {
-    try {
-      const seat = await adapters.chain.getMySeat(onchainId)
-      if (seat && seat.payout > 0n) myPayout = { seat: seat.engineSeat, amount: seat.payout }
-    } catch (err) {
-      log.warn('[settle] on-chain payout read failed:', err) // ceremony still shows, minus own award
-    }
-  }
+  const awards = await computeSettlementAwards(detail, onchainId, winnerSeats)
 
   set((s) =>
-    s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, myPayout, winnerSeats), yourTurn: null, actPending: null },
+    s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, awards), yourTurn: null, actPending: null },
   )
   stopMatchPoll()
 }
@@ -2008,20 +2041,12 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
     // Terminal phases are supposed to arrive as WS `settled`/`voided` frames, but the
     // gateway can stay silent — recover them from the detail so the resolution shows.
     if (phase === 'SETTLED' && !get().settlement) {
-      // Reuse the shared recovery so the REST self-heal and the WS `settled` frame land an
-      // identical ceremony (price + reveals + the player's own on-chain payout).
+      // Reuse the shared award resolution so the REST self-heal and the WS `settled` frame land
+      // an identical ceremony (price + reveals + every seat's real on-chain payout).
       const decimals = get().terms?.decimals ?? 2
-      let myPayout: { seat: number; amount: Chips } | null = null
       const onchainId = get().terms?.onchainMatchId
-      if (adapters && onchainId) {
-        try {
-          const seat = await adapters.chain.getMySeat(onchainId)
-          if (seat && seat.payout > 0n) myPayout = { seat: seat.engineSeat, amount: seat.payout }
-        } catch (err) {
-          log.warn('[settle] on-chain payout read failed:', err)
-        }
-      }
-      set((s) => (s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, myPayout), yourTurn: null, actPending: null }))
+      const awards = await computeSettlementAwards(detail, onchainId)
+      set((s) => (s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, awards), yourTurn: null, actPending: null }))
       stopMatchPoll()
     } else if (phase === 'VOID' && !get().voided) {
       set({ voided: { reason: (detail.void_kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })

@@ -100,6 +100,9 @@ export interface ClaimableWinning {
   onchainMatchId: string
   matchPda: string
   payout: Chips
+  /** What this seat put in (buy-in + entry fee), so the UI can show real net P&L — a conviction
+   *  match returns a partial payout to non-winning seats, so `payout > 0` is NOT the same as "won". */
+  staked: Chips
 }
 
 /**
@@ -145,6 +148,14 @@ export interface ChainClient {
   getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null>
   /** Read the connected wallet's own seat for a match, if any. */
   getMySeat(onchainMatchId: string): Promise<OnchainSeatInfo | null>
+  /**
+   * Read the on-chain payout for EVERY seat in a settled match, given the seat wallets (from
+   * the server match view). Per-seat payout amounts live only on-chain — no server view carries
+   * them — and a conviction match pays multiple seats, not just the winner, so the settlement
+   * ceremony needs all of them, not just the connected wallet's own. Missing/unreadable seats
+   * are omitted. Returns `{ wallet, engineSeat, payout }` per readable seat.
+   */
+  getSeatPayouts(onchainMatchId: string, wallets: string[]): Promise<{ wallet: string; engineSeat: number; payout: Chips }[]>
   /** Permissionless `void_before_start` — anyone can call once past the fill deadline; just pays the fee. */
   voidBeforeStart(onchainMatchId: string): Promise<string>
   /**

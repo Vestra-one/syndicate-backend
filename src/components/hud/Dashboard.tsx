@@ -589,7 +589,7 @@ function MyClaimableWinnings() {
     <section className="dash-section">
       <div className="dash-section-head">
         <span className="dash-section-dot dash-section-dot--win" />
-        <span className="dash-section-label">Winnings to collect</span>
+        <span className="dash-section-label">Payouts to collect</span>
         <span className="dash-section-sub">
           {pendingTotal > 0n
             ? `${(Number(pendingTotal) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC waiting for you`
@@ -602,6 +602,7 @@ function MyClaimableWinnings() {
             key={w.onchainMatchId}
             onchainMatchId={w.onchainMatchId}
             payout={w.payout}
+            staked={w.staked}
             onDone={onDone}
           />
         ))}

@@ -115,6 +115,10 @@ function SettledCeremony() {
   const rake = settlement.rakeCollected ?? 0n
   const pot = paid + rake
 
+  // You may receive a payout without being the winner: a conviction match returns a partial
+  // share to non-winning seats too. Only the top-paid seat "won the pot".
+  const isWinner = yourSeat != null && yourSeat === winnerSeat
+
   const onClaim = async () => {
     setClaiming(true)
     setClaimError(null)
@@ -169,7 +173,9 @@ function SettledCeremony() {
         </div>
 
         <div className={`ceremony-result ${won ? 'ceremony-result--win' : ''}`}>
-          {won ? `You won the pot — ${formatMoney(yourAward, token)}` : 'No award this match'}
+          {won
+            ? `${isWinner ? 'You won the pot' : 'Your payout'} — ${formatMoney(yourAward, token)}`
+            : 'No award this match'}
         </div>
 
         {won && (

@@ -20,10 +20,13 @@ const FRIENDLY_ERRORS: Record<string, string> = {
 export function ClaimWinningsCard({
   onchainMatchId,
   payout,
+  staked,
   onDone,
 }: {
   onchainMatchId: string
   payout: bigint
+  /** Buy-in + entry fee this seat put in, for honest net P&L. Optional: absent → collect-only copy. */
+  staked?: bigint
   onDone?: (onchainMatchId: string) => void
 }) {
   const chain = useMemo(() => createAdapters().chain, [])
@@ -79,13 +82,25 @@ export function ClaimWinningsCard({
 
   const busy = phase === 'claiming'
 
+  // A conviction match returns a partial payout to non-winning seats, so `payout` alone doesn't
+  // mean "won". Compute net P&L (payout − stake) to label honestly: only a profit is a win.
+  const net = staked != null ? payout - staked : null
+  const won = net != null && net > 0n
+
   return (
     <div className="reclaim-card claim-card panel">
       <div className="reclaim-head">
         <div className="reclaim-title">
-          <span className="claim-won">You won {fmt(payout)} USDC</span>
+          <span className="claim-won">
+            {won || net == null ? 'You won' : 'Your payout'} {fmt(payout)} USDC
+          </span>
         </div>
         <div className="reclaim-sub eyebrow">Match #{onchainMatchId} · settled &amp; ready to collect</div>
+        {net != null && net !== 0n && (
+          <div className="reclaim-sub eyebrow">
+            {net > 0n ? `Net +${fmt(net)} USDC` : `Net −${fmt(-net)} USDC`}
+          </div>
+        )}
       </div>
       {error && <div className="reclaim-error eyebrow">{error}</div>}
       <button className="seal-btn reclaim-btn claim-btn" onClick={() => void collect()} disabled={busy}>
