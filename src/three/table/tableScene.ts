@@ -63,12 +63,14 @@ export interface TableSceneHandle {
   awardPot: (seat: number, amount?: number) => void
   /** Show or hide the price-board cabinet (hidden on discovery, shown in-match). */
   setPriceBoardVisible: (visible: boolean) => void
+  /** Re-drop the pot heap from above as a fresh cascade (decorative landing). */
+  replayPour: () => void
   dispose: () => void
 }
 
 export function createTableScene(
   container: HTMLElement,
-  opts: { autoSpin?: boolean } = {},
+  opts: { autoSpin?: boolean; onCoinLand?: () => void } = {},
 ): TableSceneHandle {
   // ---------- helpers ----------
   const rand = (a: number, b: number) => a + Math.random() * (b - a)
@@ -898,7 +900,7 @@ export function createTableScene(
 
   // ---- pot (3D coin heap, centre-front of the felt) ----
   // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit })
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit, onLand: opts.onCoinLand })
   scene.add(potPile.group)
 
   // ---- per-seat chips (personal stacks + committed piles on the felt) ----
@@ -1065,19 +1067,6 @@ export function createTableScene(
     w.__inspect = (x, y, z, lx = 0, ly = 0.12, lz = 1.1) => {
       inspect = { pos: new THREE.Vector3(x, y, z), look: new THREE.Vector3(lx, ly, lz) }
     }
-    ;(w as unknown as { __potInfo?: () => unknown }).__potInfo = () => {
-      const g = potPile.group
-      const first = g.children[0] as THREE.Mesh | undefined
-      const wp = new THREE.Vector3()
-      if (first) first.getWorldPosition(wp)
-      return {
-        groupPos: g.position.toArray(),
-        children: g.children.length,
-        firstLocalY: first?.position.y,
-        firstWorldY: wp.y,
-        firstVisible: first?.visible, userData: g.userData,
-      }
-    }
   }
 
   // ---------- disposal ----------
@@ -1145,6 +1134,7 @@ export function createTableScene(
     knock: (seat: number) => seatChips.knock(seat),
     awardPot: (seat: number, amount?: number) => seatChips.awardPot(seat, amount),
     setPriceBoardVisible: (v: boolean) => { priceBoard.group.visible = v },
+    replayPour: () => potPile.restart(),
     dispose,
   }
 }

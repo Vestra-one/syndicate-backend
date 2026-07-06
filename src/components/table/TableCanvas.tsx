@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createTableScene, type TableSceneHandle } from '@/three/table/tableScene'
+import { playCoinClink, onReplayRequest } from '@/lib/coinAudio'
 import { useGameStore } from '@/store/gameStore'
 import { seatFanAngles } from '@/three/table/tableView'
 import type { SeatChipState } from '@/three/table/seatChips'
@@ -44,7 +45,14 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
   useEffect(() => {
     const el = mountRef.current
     if (!el) return
-    const handle = createTableScene(el, { autoSpin: spin })
+    // Decorative landing pour: ring a synthesised coin clink as each coin lands
+    // (see coinAudio). The live game stays silent — the pot builds constantly
+    // there, so per-coin clinks would be noise, not delight.
+    const decorative = pot !== undefined
+    const handle = createTableScene(el, {
+      autoSpin: spin,
+      onCoinLand: decorative ? playCoinClink : undefined,
+    })
     handleRef.current = handle
 
     // DEV console helpers — cleared on unmount so they don't retain a disposed scene (and
@@ -63,7 +71,11 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
     if (pot !== undefined) {
       handle.setPot(pot)
       handle.setPriceBoardVisible(false)
+      // Enabling sound (or the first user gesture) replays the pour so the coins
+      // rain in again audibly — the on-load drop is silent under autoplay policy.
+      onReplayRequest(() => handle.replayPour())
       return () => {
+        onReplayRequest(null)
         clearDev()
         handle.dispose()
         handleRef.current = null

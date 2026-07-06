@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { initAudioUnlock, isMuted, toggleMuted } from '@/lib/coinAudio'
 import './comingSoon.css'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -39,14 +40,32 @@ const SOCIALS: Array<{
 /* ────────────────────────────────────────────────────────────────────────── */
 
 export function ComingSoon() {
+  const [muted, setMuted] = useState(isMuted)
+
   useEffect(() => {
     document.title = "Satoshi Table"
+    // Browsers gate audio until a gesture; resume on the first interaction so
+    // the coin clinks come alive even if the on-load pour started muted.
+    initAudioUnlock()
   }, [])
 
   return (
     <main className="cs" aria-label="Satoshi Table">
       <div className="cs-scrim cs-scrim--top" aria-hidden="true" />
       <div className="cs-scrim cs-scrim--bottom" aria-hidden="true" />
+
+      {/* ── Sound toggle — bottom-right ────────────────────── */}
+      <button
+        type="button"
+        className="cs-mute cs-rise"
+        style={delay(4)}
+        aria-pressed={muted}
+        aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+        title={muted ? 'Unmute' : 'Mute'}
+        onClick={() => setMuted(toggleMuted())}
+      >
+        {muted ? <MutedIcon /> : <SoundIcon />}
+      </button>
 
       {/* ── Brand mark — top-left ──────────────────────────── */}
       <img
@@ -67,21 +86,15 @@ export function ComingSoon() {
         <h1 className="cs-wordmark cs-rise" style={delay(2)}>
           Satoshi Table
         </h1>
+
+        <p className="cs-tagline cs-rise" style={delay(3)}>
+          Predict . Outplay . Win
+        </p>
       </header>
 
       {/* ── Footer block: join the table ───────────────────── */}
       <footer className="cs-bottom">
-        <div className="cs-rule cs-rise" aria-hidden="true" style={delay(3)}>
-          <span className="cs-rule-line" />
-          <span className="cs-rule-gem">◆</span>
-          <span className="cs-rule-line" />
-        </div>
-
         <div className="cs-cta cs-rise" style={delay(4)}>
-          <div className="cs-join">
-            <p className="cs-join-lead">Predict the market. Beat the table. Win the pot.</p>
-          </div>
-
           <nav className="cs-socials" aria-label="Community channels">
             {SOCIALS.map((s) => (
               <a
@@ -116,6 +129,28 @@ function delay(i: number) {
 }
 
 /* ── Brand glyphs (inline SVG, 24×24) ─────────────────────────────────────── */
+
+function SoundIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"
+      />
+    </svg>
+  )
+}
+
+function MutedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M4 9v6h4l5 4V5L8 9H4zm17.5-2.5-1.4-1.4L17 8.17 13.83 5 12.4 6.4 15.6 9.6 12.4 12.8l1.4 1.4L17 11l3.17 3.17 1.4-1.4L18.4 9.6z"
+      />
+    </svg>
+  )
+}
 
 function TelegramIcon() {
   return (
