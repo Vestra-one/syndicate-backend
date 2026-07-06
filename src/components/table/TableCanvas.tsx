@@ -35,16 +35,16 @@ function seatChipStates(match: MatchStateView | null | undefined): SeatChipState
  *
  * Pass a fixed `pot` to drive a decorative, static heap instead — used by the
  * coming-soon page, which renders the table purely as a showpiece and never
- * connects to a live game.
+ * connects to a live game. `spin` slowly rotates the whole table (coming-soon only).
  */
-export function TableCanvas({ pot }: { pot?: number } = {}) {
+export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolean } = {}) {
   const mountRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<TableSceneHandle | null>(null)
 
   useEffect(() => {
     const el = mountRef.current
     if (!el) return
-    const handle = createTableScene(el)
+    const handle = createTableScene(el, { autoSpin: spin })
     handleRef.current = handle
 
     // DEV console helpers — cleared on unmount so they don't retain a disposed scene (and
@@ -129,7 +129,7 @@ export function TableCanvas({ pot }: { pot?: number } = {}) {
       handle.dispose()
       handleRef.current = null
     }
-  }, [pot])
+  }, [pot, spin])
 
   return <div ref={mountRef} className="table-canvas" aria-hidden="true" />
 }

@@ -58,7 +58,10 @@ export interface TableSceneHandle {
   dispose: () => void
 }
 
-export function createTableScene(container: HTMLElement): TableSceneHandle {
+export function createTableScene(
+  container: HTMLElement,
+  opts: { autoSpin?: boolean } = {},
+): TableSceneHandle {
   // ---------- helpers ----------
   const rand = (a: number, b: number) => a + Math.random() * (b - a)
   function noiseFill(ctx: CanvasRenderingContext2D, w: number, h: number, _base: number, amt: number) {
@@ -744,6 +747,13 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   const rWell = R_WELL * R_OUTER
   const tex = buildTableTextures()
 
+  // The structural table (rail, felt, inscription band, gold rings, body, pedestal)
+  // lives in one group so the coming-soon page can slowly spin the whole table on
+  // its vertical axis (opts.autoSpin). The pot heap, seat chips and price board are
+  // added to the scene root instead — they stay put while the table turns.
+  const tableGroup = new THREE.Group()
+  scene.add(tableGroup)
+
   const tableTop = new THREE.Mesh(
     new THREE.RingGeometry(R_BAND1 * R_OUTER, R_OUTER, 180, 1),
     new THREE.MeshStandardMaterial({ ...tex, metalness: 1.0, roughness: 1.0, envMapIntensity: 0.55 }),
@@ -751,7 +761,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   tableTop.rotation.x = -Math.PI / 2
   tableTop.position.y = yRail + 0.002
   tableTop.receiveShadow = true
-  scene.add(tableTop)
+  tableGroup.add(tableTop)
 
   const rimMat = new THREE.MeshStandardMaterial({
     ...buildRimStrip(),
@@ -765,7 +775,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   band.rotation.x = -Math.PI / 2
   band.position.y = yRail + 0.004
   band.receiveShadow = true
-  scene.add(band)
+  tableGroup.add(band)
 
   const felt = new THREE.Mesh(
     new THREE.CircleGeometry(rFelt + 0.04, 120),
@@ -779,7 +789,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   felt.rotation.x = -Math.PI / 2
   felt.position.y = yFelt
   felt.receiveShadow = true
-  scene.add(felt)
+  tableGroup.add(felt)
 
   const wall = new THREE.Mesh(
     new THREE.CylinderGeometry(rWell, rFelt, recess, 180, 1, true),
@@ -794,7 +804,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   wall.position.y = yFelt + recess / 2
   wall.receiveShadow = true
-  scene.add(wall)
+  tableGroup.add(wall)
 
   // ---- 3D gold moldings ----
   const lineAssets = buildGoldStrip('line')
@@ -818,7 +828,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     m.position.y = y
     m.castShadow = true
     m.receiveShadow = true
-    scene.add(m)
+    tableGroup.add(m)
     return m
   }
   const rIn = R_BAND0 * R_OUTER,
@@ -842,14 +852,14 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   body.castShadow = true
   body.receiveShadow = true
-  scene.add(body)
+  tableGroup.add(body)
   const cap = new THREE.Mesh(
     new THREE.CircleGeometry(R_OUTER * 0.97, 80),
     new THREE.MeshStandardMaterial({ color: 0x0a0503, roughness: 0.9 }),
   )
   cap.rotation.x = Math.PI / 2
   cap.position.y = -THICK / 2
-  scene.add(cap)
+  tableGroup.add(cap)
 
   const ped = new THREE.Mesh(
     new THREE.CylinderGeometry(1.4, 2.0, 3.0, 40),
@@ -857,7 +867,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   ped.position.y = -THICK / 2 - 1.5
   ped.castShadow = true
-  scene.add(ped)
+  tableGroup.add(ped)
 
   // ---- price board (the cabinet that stands on the felt) ----
   // A tabletop-scale cabinet resting its base on the felt, stood nearly upright
@@ -986,6 +996,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   let inspect: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null
   function frame() {
     t += 0.016
+    // Coming-soon showpiece: turn the whole table slowly on its axis (~2 min a
+    // revolution). Time-based so it's smooth regardless of frame cadence.
+    if (opts.autoSpin) tableGroup.rotation.y = t * 0.05
     if (inspect) {
       camera.position.copy(inspect.pos)
       camera.lookAt(inspect.look)

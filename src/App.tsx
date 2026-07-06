@@ -37,7 +37,7 @@ function isAppHost(): boolean {
 function Landing() {
   return (
     <>
-      <TableCanvas pot={2400} />
+      <TableCanvas pot={2400} spin />
       <div className="scene-vignette" />
       <ComingSoon />
     </>
