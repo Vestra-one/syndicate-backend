@@ -31,8 +31,8 @@ export interface PotPile {
   dispose: () => void
 }
 
-const COIN_R = 0.21 // coin radius (world units)
-const COIN_H = 0.06 // coin thickness — chunky enough to show its reeded edge
+export const COIN_R = 0.21 // coin radius (world units)
+export const COIN_H = 0.06 // coin thickness — chunky enough to show its reeded edge
 const GAP = 0.001 // hairline between stacked coins so edges separate
 const MAX_CHIPS = 115 // total coin budget in the heap
 const HEAP_R = 0.74 // radius of the mound footprint on the felt
@@ -48,17 +48,19 @@ function chipsFor(amount: number): number {
 }
 
 // deterministic pseudo-random in [0,1) from two ints (stable per slot)
-function hash(a: number, b: number): number {
+export function hash(a: number, b: number): number {
   const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453
   return s - Math.floor(s)
 }
 
-const easeOutBack = (x: number) => {
+export const easeOutBack = (x: number) => {
   const c1 = 1.70158,
     c3 = c1 + 1
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2)
 }
-const easeInCubic = (x: number) => x * x * x
+export const easeInCubic = (x: number) => x * x * x
+export const easeInOutCubic = (x: number) =>
+  x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
 
 // ---- coin geometry ------------------------------------------------------------
 
@@ -506,38 +508,27 @@ function buildEdgeMaps(): {
 // three gold alloys so the heap doesn't read as one uniform colour
 const ALLOY_TINTS = [0xf3d489, 0xe8c270, 0xead09a]
 
-// ---- coin pile ---------------------------------------------------------------
+// ---- shared coin kit ----------------------------------------------------------
 
-interface Chip {
-  mesh: THREE.Mesh
-  homeY: number
-  born: number
-  leaving: boolean
-  leaveStart: number
-  spin: number // residual settle wobble seed
+/**
+ * The struck-gold coin, boiled down to the three GPU assets every pile needs:
+ * one merged geometry and one [face, face, edge] material array per alloy. It is
+ * EXPENSIVE to build (four 1024² face channels + four 2048×128 edge channels of
+ * hand-painted CanvasTextures), so the whole table mints exactly one kit and
+ * shares it across the pot heap and all six seat stacks. The owner disposes it.
+ */
+export interface CoinKit {
+  geom: THREE.BufferGeometry
+  matSets: THREE.Material[][]
+  dispose: () => void
 }
 
-interface Slot {
-  x: number
-  z: number
-  homeY: number
-  rotY: number
-  lean: number
-  leanAxis: number
-  matIdx: number
-}
-
-export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): PotPile {
-  const group = new THREE.Group()
-  group.position.copy(opts.center)
-  group.position.y = opts.feltY
-
-  const geom = coinGeometry()
-  const faceMaps = buildFaceMaps()
-  const edgeMaps = buildEdgeMaps()
-
-  // one [face, face, edge] material array per alloy tint
-  const matSets = ALLOY_TINTS.map((tint) => {
+/** Build one [face, face, edge] material array per alloy tint from shared maps. */
+function buildCoinMatSets(
+  faceMaps: ReturnType<typeof buildFaceMaps>,
+  edgeMaps: ReturnType<typeof buildEdgeMaps>,
+): THREE.Material[][] {
+  return ALLOY_TINTS.map((tint) => {
     const face = new THREE.MeshStandardMaterial({
       ...faceMaps,
       bumpScale: 0.6,
@@ -562,6 +553,59 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
     })
     return [face, face, edge] as THREE.Material[]
   })
+}
+
+export function createCoinKit(): CoinKit {
+  const geom = coinGeometry()
+  const faceMaps = buildFaceMaps()
+  const edgeMaps = buildEdgeMaps()
+  const matSets = buildCoinMatSets(faceMaps, edgeMaps)
+  return {
+    geom,
+    matSets,
+    dispose() {
+      geom.dispose()
+      ;[faceMaps, edgeMaps].forEach((m) =>
+        Object.values(m).forEach((t) => (t as THREE.Texture).dispose()),
+      )
+      matSets.forEach((set) => set.forEach((m) => m.dispose()))
+    },
+  }
+}
+
+// ---- coin pile ---------------------------------------------------------------
+
+interface Chip {
+  mesh: THREE.Mesh
+  homeY: number
+  born: number
+  leaving: boolean
+  leaveStart: number
+  spin: number // residual settle wobble seed
+}
+
+interface Slot {
+  x: number
+  z: number
+  homeY: number
+  rotY: number
+  lean: number
+  leanAxis: number
+  matIdx: number
+}
+
+export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?: CoinKit }): PotPile {
+  const group = new THREE.Group()
+  group.position.copy(opts.center)
+  group.position.y = opts.feltY
+
+  // Use the table's shared coin kit when given (the pot and every seat stack
+  // draw from one set of textures); otherwise mint a private kit — the
+  // decorative coming-soon table has no scene to share with.
+  const ownKit = opts.kit ? null : createCoinKit()
+  const kit = opts.kit ?? ownKit!
+  const geom = kit.geom
+  const matSets = kit.matSets
 
   // Precompute every coin's fixed home slot as a physically sound mound. Coins
   // stack into a hexagonal lattice of columns whose centres are more than one
@@ -735,11 +779,9 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3 }): P
   }
 
   function dispose() {
-    geom.dispose()
-    ;[faceMaps, edgeMaps].forEach((m) =>
-      Object.values(m).forEach((t) => (t as THREE.Texture).dispose()),
-    )
-    matSets.forEach((set) => set.forEach((m) => m.dispose()))
+    // Only dispose the kit if we minted it ourselves; a shared kit is owned by
+    // the scene and released once, alongside the seat stacks that also use it.
+    ownKit?.dispose()
   }
 
   return { group, setAmount, update, dispose }

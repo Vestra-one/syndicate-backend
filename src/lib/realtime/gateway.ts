@@ -1,34 +1,38 @@
 /**
- * The realtime gateway: the one socket the client speaks to (§1, §3, §5).
+ * The realtime gateway: the one socket the client speaks to (§9, §12).
  *
- * Transport-agnostic — the store depends only on this interface. `connect()`
- * performs the nonce-challenge auth handshake internally (signing with the
- * Wallet adapter) and resolves once authenticated. After that, gameplay flows
- * as `ServerMessage`s to subscribers and `ClientMessage`s via `send`.
- *
- * Two implementations, chosen by env (see `createGateway`):
- *   - mockGateway: a full play-money match emulator (no backend needed)
- *   - wsGateway:   a real WebSocket to the Satoshi's Table gateway
+ * Transport-agnostic — the store depends only on this interface. `connect()` opens the
+ * socket and (if a wallet is connected) answers the auth challenge; it resolves once the
+ * socket is open (spectating needs no auth). After that, `subscribe` receives v2
+ * `ServerFrame`s and `send` posts v2 `ClientFrame`s.
  */
-import type { ClientMessage, ServerMessage } from '@/lib/protocol'
 import type { Adapters } from '@/lib/adapters'
-import { IS_DEMO } from '@/lib/adapters'
-import { createMockGateway } from './mockGateway'
+import type { ClientFrame, ServerFrame } from './wsTypes'
 import { createWsGateway } from './wsGateway'
 
-export type GatewayListener = (msg: ServerMessage) => void
+export type GatewayListener = (frame: ServerFrame) => void
 
 export interface Gateway {
-  /** Connect + authenticate (§3). Resolves once authenticated; rejects on auth/geo error. */
+  /** Open the socket; answers the nonce challenge if a wallet is connected. Resolves on open. */
   connect(): Promise<void>
   disconnect(): void
   subscribe(listener: GatewayListener): () => void
-  /** Send a post-auth client message (act / sealPrediction / setDefault / subscribe). */
-  send(msg: ClientMessage): void
+  /** Send a v2 client frame (subscribe / act / seal / set_default / ping). */
+  send(frame: ClientFrame): void
+  /** True if the underlying socket is open — lets callers reuse a live session. */
+  isOpen(): boolean
 }
 
-/** Pick the mock emulator or a real WS gateway based on env (mirrors adapter selection). */
+/** Open a real v2 WebSocket gateway. Requires VITE_WS_URL (or the dev WS proxy). */
 export function createGateway(adapters: Adapters): Gateway {
-  const url = import.meta.env.VITE_GATEWAY_WS_URL as string | undefined
-  return IS_DEMO || !url ? createMockGateway(adapters) : createWsGateway(url, adapters)
+  const devUser = import.meta.env.VITE_DEVNET_USER as string | undefined
+  // In local dev with Basic Auth, use the Vite WS proxy so the auth header is injected
+  // server-side (the browser WebSocket API cannot set Authorization headers directly).
+  const url = devUser
+    ? `${window.location.origin.replace(/^http/, 'ws')}/ws-proxy`
+    : (import.meta.env.VITE_WS_URL as string | undefined)
+  if (!url) {
+    throw new Error('VITE_WS_URL is not set — configure the v2 WebSocket URL in .env')
+  }
+  return createWsGateway(url, adapters)
 }

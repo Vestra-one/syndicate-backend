@@ -2,8 +2,17 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { createPotPile } from './pot'
-import { bindTableView, unbindTableView } from './tableView'
+import { createPriceBoard } from './priceBoard'
+import { createPotPile, createCoinKit } from './pot'
+import { createSeatChips, type SeatChipState } from './seatChips'
+import {
+  bindTableView,
+  unbindTableView,
+  bindPriceBoardTabs,
+  unbindPriceBoardTabs,
+  bindPriceChartButton,
+  unbindPriceChartButton,
+} from './tableView'
 import roomBgUrl from '@/assets/room-bg.png'
 
 // Decode the room backdrop once at module load. Doing it here (rather than per
@@ -38,10 +47,21 @@ export interface TableSceneHandle {
   feltY: number
   /** Drive the 3D coin pile at the centre of the felt from the live pot value. */
   setPot: (amount: number) => void
+  /** Drive the per-seat coin stacks + committed piles from live seat state. */
+  setSeats: (seats: SeatChipState[]) => void
+  /** A check at `seat`: ripple the felt (no coins move). */
+  knock: (seat: number) => void
+  /** Award the pot to `seat`: stream coins from the pot into their stack. */
+  awardPot: (seat: number) => void
+  /** Show or hide the price-board cabinet (hidden on discovery, shown in-match). */
+  setPriceBoardVisible: (visible: boolean) => void
   dispose: () => void
 }
 
-export function createTableScene(container: HTMLElement): TableSceneHandle {
+export function createTableScene(
+  container: HTMLElement,
+  opts: { autoSpin?: boolean } = {},
+): TableSceneHandle {
   // ---------- helpers ----------
   const rand = (a: number, b: number) => a + Math.random() * (b - a)
   function noiseFill(ctx: CanvasRenderingContext2D, w: number, h: number, _base: number, amt: number) {
@@ -599,6 +619,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   renderer.domElement.style.display = 'block'
 
   const scene = new THREE.Scene()
+  // Set true in dispose() — guards async continuations (image load) from touching a torn-down scene.
+  let disposed = false
 
   // ---- photographic room backdrop ----
   // The room (chandelier, chairs, panelling, ETH crest) is the reference image,
@@ -655,7 +677,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     bgTex.needsUpdate = true
   }
   drawBackdrop()
-  roomImgReady.then(drawBackdrop)
+  // roomImgReady is a module-level promise; guard so a late resolve after unmount is a no-op.
+  roomImgReady.then(() => { if (!disposed) drawBackdrop() })
 
   // procedural warm environment for metal reflections
   function buildEnvTexture() {
@@ -695,7 +718,10 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     return t
   }
   const pmrem = new THREE.PMREMGenerator(renderer)
-  const envRT = pmrem.fromEquirectangular(buildEnvTexture())
+  // Keep the source equirectangular texture referenced so we can dispose it — PMREM uploads it
+  // to the GPU but doesn't own it, and `Material.dispose()` never reaches it.
+  const envSrc = buildEnvTexture()
+  const envRT = pmrem.fromEquirectangular(envSrc)
   scene.environment = envRT.texture
 
   const camera = new THREE.PerspectiveCamera(
@@ -721,6 +747,13 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   const rWell = R_WELL * R_OUTER
   const tex = buildTableTextures()
 
+  // The structural table (rail, felt, inscription band, gold rings, body, pedestal)
+  // lives in one group so the coming-soon page can slowly spin the whole table on
+  // its vertical axis (opts.autoSpin). The pot heap, seat chips and price board are
+  // added to the scene root instead — they stay put while the table turns.
+  const tableGroup = new THREE.Group()
+  scene.add(tableGroup)
+
   const tableTop = new THREE.Mesh(
     new THREE.RingGeometry(R_BAND1 * R_OUTER, R_OUTER, 180, 1),
     new THREE.MeshStandardMaterial({ ...tex, metalness: 1.0, roughness: 1.0, envMapIntensity: 0.55 }),
@@ -728,7 +761,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   tableTop.rotation.x = -Math.PI / 2
   tableTop.position.y = yRail + 0.002
   tableTop.receiveShadow = true
-  scene.add(tableTop)
+  tableGroup.add(tableTop)
 
   const rimMat = new THREE.MeshStandardMaterial({
     ...buildRimStrip(),
@@ -742,7 +775,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   band.rotation.x = -Math.PI / 2
   band.position.y = yRail + 0.004
   band.receiveShadow = true
-  scene.add(band)
+  tableGroup.add(band)
 
   const felt = new THREE.Mesh(
     new THREE.CircleGeometry(rFelt + 0.04, 120),
@@ -756,7 +789,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   felt.rotation.x = -Math.PI / 2
   felt.position.y = yFelt
   felt.receiveShadow = true
-  scene.add(felt)
+  tableGroup.add(felt)
 
   const wall = new THREE.Mesh(
     new THREE.CylinderGeometry(rWell, rFelt, recess, 180, 1, true),
@@ -771,7 +804,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   wall.position.y = yFelt + recess / 2
   wall.receiveShadow = true
-  scene.add(wall)
+  tableGroup.add(wall)
 
   // ---- 3D gold moldings ----
   const lineAssets = buildGoldStrip('line')
@@ -795,7 +828,7 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     m.position.y = y
     m.castShadow = true
     m.receiveShadow = true
-    scene.add(m)
+    tableGroup.add(m)
     return m
   }
   const rIn = R_BAND0 * R_OUTER,
@@ -819,14 +852,14 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   body.castShadow = true
   body.receiveShadow = true
-  scene.add(body)
+  tableGroup.add(body)
   const cap = new THREE.Mesh(
     new THREE.CircleGeometry(R_OUTER * 0.97, 80),
     new THREE.MeshStandardMaterial({ color: 0x0a0503, roughness: 0.9 }),
   )
   cap.rotation.x = Math.PI / 2
   cap.position.y = -THICK / 2
-  scene.add(cap)
+  tableGroup.add(cap)
 
   const ped = new THREE.Mesh(
     new THREE.CylinderGeometry(1.4, 2.0, 3.0, 40),
@@ -834,11 +867,35 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   )
   ped.position.y = -THICK / 2 - 1.5
   ped.castShadow = true
-  scene.add(ped)
+  tableGroup.add(ped)
 
-  // ---- pot (3D coin heap, dead centre of the felt) ----
-  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 0) })
+  // ---- price board (the cabinet that stands on the felt) ----
+  // A tabletop-scale cabinet resting its base on the felt, stood nearly upright
+  // (a hair of back-lean) so it foreshortens like a real object rather than a
+  // flat image aimed at the camera. Sits at the back so the pot reads in front.
+  const priceBoard = createPriceBoard()
+  const PB_SCALE = 0.8 // large enough that the chart stays legible
+  const PB_BASE_DROP = 1.94 // local distance from face centre to base underside
+  priceBoard.group.scale.setScalar(PB_SCALE)
+  priceBoard.group.position.set(0, yFelt + PB_BASE_DROP * PB_SCALE, -0.6)
+  priceBoard.group.rotation.x = -0.06
+  scene.add(priceBoard.group)
+  bindPriceBoardTabs(priceBoard.getTabAnchors())
+  bindPriceChartButton(priceBoard.getChartButtonAnchor())
+
+  // ---- coins (one shared kit: pot heap + every seat stack draw from it) ----
+  // The struck-gold coin's geometry and textures are minted once and shared, so
+  // the pot and all six seat stacks are one set of GPU assets, not seven.
+  const coinKit = createCoinKit()
+
+  // ---- pot (3D coin heap, centre-front of the felt) ----
+  // Forward of the cabinet, aligned under POT_WORLD so the HUD amount pins above it.
+  const potPile = createPotPile({ feltY: yFelt, center: new THREE.Vector3(0, 0, 1.1), kit: coinKit })
   scene.add(potPile.group)
+
+  // ---- per-seat chips (personal stacks + committed piles on the felt) ----
+  const seatChips = createSeatChips({ feltY: yFelt, kit: coinKit })
+  scene.add(seatChips.group)
 
   // ---- floor ----
   // No floor mesh — the room backdrop supplies the floor. We keep its world Y
@@ -892,7 +949,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
 
   // ---------- post ----------
   const composer = new EffectComposer(renderer)
-  composer.addPass(new RenderPass(scene, camera))
+  const renderPass = new RenderPass(scene, camera)
+  composer.addPass(renderPass)
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(container.clientWidth, container.clientHeight),
     0.3,
@@ -914,6 +972,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
       h = container.clientHeight
     camera.aspect = w / h
     camera.updateProjectionMatrix()
+    // Re-read DPR each resize so dragging the window to a different-density monitor re-scales.
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
     renderer.setSize(w, h)
     composer.setSize(w, h)
     drawBackdrop() // re-fit the room cover to the new aspect
@@ -936,6 +996,9 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   let inspect: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null
   function frame() {
     t += 0.016
+    // Coming-soon showpiece: turn the whole table slowly on its axis (~2 min a
+    // revolution). Time-based so it's smooth regardless of frame cadence.
+    if (opts.autoSpin) tableGroup.rotation.y = t * 0.05
     if (inspect) {
       camera.position.copy(inspect.pos)
       camera.lookAt(inspect.look)
@@ -959,6 +1022,8 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     front.intensity = 26 * (0.88 + 0.12 * flick(8.0))
     rim.intensity = 16 * (0.9 + 0.1 * flick(11.0))
     potPile.update(t)
+    seatChips.update(t)
+    priceBoard.update(t)
     composer.render()
   }
   function animate() {
@@ -983,26 +1048,57 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
   }
 
   // ---------- disposal ----------
+  // Material.dispose() does NOT free the textures a material references, so dispose each
+  // texture-valued property (map/metalnessMap/roughnessMap/bumpMap/emissiveMap/…) too —
+  // otherwise every CanvasTexture built for the felt/rim/side/table materials leaks GPU
+  // memory until the context is GC'd (which renderer.dispose alone does not force).
+  function disposeMaterial(m: THREE.Material) {
+    for (const val of Object.values(m as unknown as Record<string, unknown>)) {
+      if (val && (val as THREE.Texture).isTexture) (val as THREE.Texture).dispose()
+    }
+    m.dispose()
+  }
   function dispose() {
+    if (disposed) return
+    disposed = true
     running = false
     cancelAnimationFrame(raf)
     unbindTableView()
+    unbindPriceBoardTabs()
+    unbindPriceChartButton()
     potPile.dispose()
+    seatChips.dispose()
+    coinKit.dispose()
+    priceBoard.dispose()
     window.removeEventListener('mousemove', onMouseMove)
     ro.disconnect()
+    // EffectComposer.dispose() only frees its own targets — the passes we added own render
+    // targets/materials that must be disposed explicitly (bloom owns a whole mip pyramid).
+    bloom.dispose()
+    renderPass.dispose()
     composer.dispose()
     envRT.dispose()
+    envSrc.dispose()
     pmrem.dispose()
+    bgTex.dispose() // scene.background — never visited by traverse()
     scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh
       if (mesh.geometry) mesh.geometry.dispose()
       const mat = mesh.material
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
-      else if (mat) mat.dispose()
+      if (Array.isArray(mat)) mat.forEach(disposeMaterial)
+      else if (mat) disposeMaterial(mat)
     })
     renderer.dispose()
+    // dispose() frees caches but not the WebGL context; force it so repeated mounts don't
+    // pile up live contexts and trip the browser's ~16-context cap (killing older canvases).
+    renderer.forceContextLoss()
     if (renderer.domElement.parentNode === container) {
       container.removeChild(renderer.domElement)
+    }
+    if (import.meta.env.DEV) {
+      const w = window as unknown as Record<string, unknown>
+      delete w.__tableStep
+      delete w.__inspect
     }
   }
 
@@ -1012,6 +1108,10 @@ export function createTableScene(container: HTMLElement): TableSceneHandle {
     tableRadius: R_OUTER,
     feltY: yFelt,
     setPot: (amount: number) => potPile.setAmount(amount),
+    setSeats: (s: SeatChipState[]) => seatChips.setSeats(s),
+    knock: (seat: number) => seatChips.knock(seat),
+    awardPot: (seat: number) => seatChips.awardPot(seat),
+    setPriceBoardVisible: (v: boolean) => { priceBoard.group.visible = v },
     dispose,
   }
 }

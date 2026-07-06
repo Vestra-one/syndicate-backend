@@ -1,0 +1,8 @@
+EXC: {"exceptionId":1,"text":"Uncaught","lineNumber":705,"columnNumber":8,"scriptId":"39","url":"http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055","stackTrace":{"callFrames":[{"functionName":"Dashboard","scriptId":"39","url":"http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055","lineNumber":705,"columnNumber":8},{"functionName":"renderWithHooks","scriptId":"30",
+EXC: {"exceptionId":2,"text":"Uncaught","lineNumber":705,"columnNumber":8,"scriptId":"39","url":"http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055","stackTrace":{"callFrames":[{"functionName":"Dashboard","scriptId":"39","url":"http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055","lineNumber":705,"columnNumber":8},{"functionName":"renderWithHooks","scriptId":"30",
+ERR: The above error occurred in the <Dashboard> component:
+
+    at Dashboard (http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055:487:23)
+    at App (http://localhost:5173/src/App.tsx?t=1783158249055:27:16)
+    at WalletModalProvider (http://localhost:5173/node_modules/.vite/deps/@sol
+EXC: {"exceptionId":3,"text":"Uncaught","lineNumber":19412,"columnNumber":12,"scriptId":"30","url":"http://localhost:5173/node_modules/.vite/deps/chunk-SM3OW2QE.js?v=1cb2e5d1","stackTrace":{"callFrames":[{"functionName":"Dashboard","scriptId":"39","url":"http://localhost:5173/src/components/hud/Dashboard.tsx?t=1783158249055","lineNumber":705,"columnNumber":8},{"functionName":"renderWithHooks","scriptId

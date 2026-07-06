@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { PriceRange } from '@/lib/priceRanges'
 
 /**
  * Bridges the 3D table to the 2D HUD: world-space anchors for each seat (on the
@@ -52,14 +53,35 @@ export function seatAngles(n: number): number[] {
   return [...l, ...r]
 }
 
-function seatWorld(angleDeg: number): THREE.Vector3 {
-  const a = (angleDeg * Math.PI) / 180
-  return new THREE.Vector3(Math.sin(a) * R_SEAT, Y_SEAT, Math.cos(a) * R_SEAT)
+/**
+ * The single source of truth for which seat sits at which angle: you (if seated)
+ * dead front at 0°, opponents fanned across the front arc in stable seat order.
+ * Both the HUD pods (Seats.tsx) and the 3D coin stacks (seatChips) read this, so
+ * a player's medallion and their physical chips always share the same bearing.
+ */
+export function seatFanAngles(
+  seatIndices: number[],
+  yourSeat: number | undefined,
+): Map<number, number> {
+  const others = seatIndices.filter((s) => s !== yourSeat).sort((a, b) => a - b)
+  const angles = seatAngles(others.length)
+  const map = new Map<number, number>()
+  others.forEach((s, i) => map.set(s, angles[i]))
+  if (yourSeat != null && seatIndices.includes(yourSeat)) map.set(yourSeat, 0)
+  return map
 }
-// The 3D coin heap is centred on (0, felt, 1.1); the amount label floats just
-// above the top of the pile and a touch toward the camera so the number reads
-// over the coins rather than buried in them.
-const POT_WORLD = new THREE.Vector3(0, 0.85, 1.25)
+
+function seatWorld(angleDeg: number, radius = R_SEAT, y = Y_SEAT): THREE.Vector3 {
+  const a = (angleDeg * Math.PI) / 180
+  return new THREE.Vector3(Math.sin(a) * radius, y, Math.cos(a) * radius)
+}
+// The 3D coin heap is centred on (0, felt, 1.1); the amount label floats well
+// clear above the top of the pile (raised so a tall pot never buries the number
+// in coins) and a touch toward the camera so it reads over the heap.
+const POT_WORLD = new THREE.Vector3(0, 1.24, 1.2)
+// The pre-game countdown sits lower and further forward than the pot label so the
+// ring rests on the open felt, clear of the price cabinet behind it.
+const FELT_CENTRE_WORLD = new THREE.Vector3(0, 0.42, 1.42)
 
 export interface ScreenPoint {
   x: number
@@ -97,6 +119,54 @@ function project(world: THREE.Vector3): ScreenPoint | null {
 export function projectSeatAngle(angleDeg: number): ScreenPoint | null {
   return project(seatWorld(angleDeg))
 }
+/**
+ * A tighter seat ring for the pre-game waiting console: pulled off the far
+ * outer rim and lowered a touch so the medallions sit ON the open felt in
+ * front of the cabinet, clear of the flanking rails.
+ */
+const R_WAIT = 3.35
+const Y_WAIT = 0.5
+export function projectWaitingSeat(angleDeg: number): ScreenPoint | null {
+  return project(seatWorld(angleDeg, R_WAIT, Y_WAIT))
+}
 export function projectPot(): ScreenPoint | null {
   return project(POT_WORLD)
+}
+export function projectFeltCentre(): ScreenPoint | null {
+  return project(FELT_CENTRE_WORLD)
+}
+
+/**
+ * World-space anchors for the price cabinet's clickable timeframe tabs, handed in
+ * by tableScene once the cabinet mesh exists (its screen sits at a fixed local
+ * transform, so these anchors never move — only the camera does). Lets the 2D
+ * PriceBoardTabs overlay project each tab's real position without reaching into
+ * the Three.js scene graph itself.
+ */
+let priceTabAnchors: { range: PriceRange; world: THREE.Vector3 }[] = []
+export function bindPriceBoardTabs(anchors: { range: PriceRange; world: THREE.Vector3 }[]) {
+  priceTabAnchors = anchors
+}
+export function unbindPriceBoardTabs() {
+  priceTabAnchors = []
+}
+export function projectPriceTab(range: PriceRange): ScreenPoint | null {
+  const a = priceTabAnchors.find((x) => x.range === range)
+  return a ? project(a.world) : null
+}
+
+/**
+ * World-space anchor for the cabinet's "CHART" launch button (see priceBoard's
+ * getChartButtonAnchor), for the same invisible-overlay click technique as the
+ * timeframe tabs above.
+ */
+let chartButtonAnchor: THREE.Vector3 | null = null
+export function bindPriceChartButton(anchor: THREE.Vector3) {
+  chartButtonAnchor = anchor
+}
+export function unbindPriceChartButton() {
+  chartButtonAnchor = null
+}
+export function projectPriceChartButton(): ScreenPoint | null {
+  return chartButtonAnchor ? project(chartButtonAnchor) : null
 }
