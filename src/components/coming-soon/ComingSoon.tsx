@@ -79,7 +79,7 @@ export function ComingSoon() {
 
         <div className="cs-cta cs-rise" style={delay(4)}>
           <div className="cs-join">
-            <p className="cs-join-lead">A private table for those who know when to play.</p>
+            <p className="cs-join-lead">A private table for those who know.</p>
           </div>
 
           <nav className="cs-socials" aria-label="Community channels">
