@@ -586,7 +586,7 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   }
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
   const share = () => {
-    navigator.share?.({ title: "Satoshi's Table", text: 'Join my table on Satoshi’s Table', url }).catch(() => {})
+    navigator.share?.({ title: "Satoshi Table", text: 'Join my table on Satoshi Table', url }).catch(() => {})
   }
 
   return (

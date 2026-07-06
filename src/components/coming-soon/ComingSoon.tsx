@@ -17,7 +17,7 @@ const SOCIALS: Array<{
     key: 'telegram',
     label: 'Telegram',
     handle: 'Join the room',
-    href: 'https://t.me/+MUnWYma5l9s5NGQ9',
+    href: 'https://t.me/SatoshiTableHQ',
     icon: <TelegramIcon />,
   },
   {
@@ -40,11 +40,11 @@ const SOCIALS: Array<{
 
 export function ComingSoon() {
   useEffect(() => {
-    document.title = "Satoshi's Table"
+    document.title = "Satoshi Table"
   }, [])
 
   return (
-    <main className="cs" aria-label="Satoshi's Table — coming soon">
+    <main className="cs" aria-label="Satoshi Table">
       <div className="cs-scrim cs-scrim--top" aria-hidden="true" />
       <div className="cs-scrim cs-scrim--bottom" aria-hidden="true" />
 
@@ -52,7 +52,7 @@ export function ComingSoon() {
       <img
         className="cs-logo cs-rise"
         src="/logo.png"
-        alt="Satoshi's Table monogram"
+        alt="Satoshi Table monogram"
         width={64}
         height={64}
         style={delay(0)}
@@ -65,7 +65,7 @@ export function ComingSoon() {
         </p>
 
         <h1 className="cs-wordmark cs-rise" style={delay(2)}>
-          Satoshi&rsquo;s Table
+          Satoshi Table
         </h1>
       </header>
 
@@ -79,8 +79,7 @@ export function ComingSoon() {
 
         <div className="cs-cta cs-rise" style={delay(4)}>
           <div className="cs-join">
-            <p className="cs-join-lead">Pull up a chair</p>
-            <p className="cs-join-sub">Come hang out while we get the table ready</p>
+            <p className="cs-join-lead">A private table for those who know when to play.</p>
           </div>
 
           <nav className="cs-socials" aria-label="Community channels">
@@ -100,7 +99,7 @@ export function ComingSoon() {
         </div>
 
         <p className="cs-foot cs-rise" style={delay(5)}>
-          <span>© 2026 Satoshi&rsquo;s Table</span>
+          <span>© 2026 Satoshi Table</span>
           <span className="cs-foot-sep">·</span>
           <span>Please play responsibly</span>
           <span className="cs-foot-sep">·</span>
