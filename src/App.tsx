@@ -2,12 +2,50 @@ import { useEffect } from 'react'
 import { TableCanvas } from '@/components/table/TableCanvas'
 import { Dashboard } from '@/components/hud/Dashboard'
 import { Hud } from '@/components/hud/Hud'
+import { ComingSoon } from '@/components/coming-soon/ComingSoon'
 import { useGameStore } from '@/store/gameStore'
 import { startPriceFeed } from '@/lib/realtime/priceFeed'
 import { consumeInviteParam } from '@/lib/invite'
 
 /**
- * Root view router.
+ * Top-level host router.
+ *
+ * The full game runs on the `app.` subdomain (app.satoshitable.fun) and in local
+ * dev. Every other host — the root domain satoshitable.fun — gets the coming-soon
+ * landing painted over the 3D table backdrop.
+ *
+ * The same build serves both domains; the hostname decides. Override on any host
+ * for previews with `?view=app` or `?view=soon`.
+ */
+export default function App() {
+  return isAppHost() ? <Game /> : <Landing />
+}
+
+/** True on the app subdomain / local dev, or when forced via `?view=app`. */
+function isAppHost(): boolean {
+  const override = new URLSearchParams(window.location.search).get('view')
+  if (override === 'app') return true
+  if (override === 'soon') return false
+  const h = window.location.hostname
+  return h.startsWith('app.') || h === 'localhost' || h === '127.0.0.1'
+}
+
+/**
+ * Coming-soon landing: the 3D table renders as a decorative showpiece (fixed pot,
+ * no backend feeds) behind the launch overlay.
+ */
+function Landing() {
+  return (
+    <>
+      <TableCanvas pot={2400} />
+      <div className="scene-vignette" />
+      <ComingSoon />
+    </>
+  )
+}
+
+/**
+ * The live game.
  *
  * discovery — the live-games lobby (Dashboard) over the 3D table backdrop.
  * table     — the active match: the 3D table + the 2D HUD overlay.
@@ -16,7 +54,7 @@ import { consumeInviteParam } from '@/lib/invite'
  * the discovery → game transition so the camera swoop into the match feels
  * seamless).  The pot value drives the coin pile in the Three.js scene.
  */
-export default function App() {
+function Game() {
   const view = useGameStore((s) => s.view)
   const loadDiscovery = useGameStore((s) => s.loadDiscovery)
 
