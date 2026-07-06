@@ -24,8 +24,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 
 export interface PotPile {
   group: THREE.Group
-  /** Set the live pot value; coins animate toward the new amount. */
-  setAmount: (amount: number) => void
+  /**
+   * Set the live pot value; coins animate toward the new amount. Pass
+   * `instant` to place newly-revealed coins at rest (no drop-in) — used to
+   * hydrate an in-progress pot without replaying its build-up.
+   */
+  setAmount: (amount: number, instant?: boolean) => void
   /** Advance animations. `t` is the scene clock (seconds-ish). */
   update: (t: number) => void
   dispose: () => void
@@ -714,8 +718,9 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
   const chips: Chip[] = []
   let target = 0
   let lastT = -1
+  let instantNext = false // next reveal drops straight to rest (mid-hand hydrate)
 
-  function grow(to: number, t: number) {
+  function grow(to: number, t: number, instant: boolean) {
     for (let i = chips.length; i < to; i++) {
       const sl = slots[i]
       const mesh = new THREE.Mesh(geom, matSets[sl.matIdx])
@@ -729,12 +734,15 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
         Math.sin(sl.leanAxis) * sl.lean,
       )
       group.add(mesh)
-      chips.push({ mesh, homeY: sl.homeY, born: t, leaving: false, leaveStart: 0, spin: hash(i, 6) })
+      // born:-Infinity makes the drop-in maths resolve to "already settled",
+      // so a hydrated coin sits at rest at full scale on its first frame.
+      chips.push({ mesh, homeY: sl.homeY, born: instant ? -Infinity : t, leaving: false, leaveStart: 0, spin: hash(i, 6) })
     }
   }
 
-  function setAmount(amount: number) {
+  function setAmount(amount: number, instant = false) {
     target = chipsFor(amount)
+    if (instant) instantNext = true
   }
 
   function update(t: number) {
@@ -742,7 +750,7 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
 
     const live = chips.filter((c) => !c.leaving).length
     if (target > live) {
-      grow(target, t)
+      grow(target, t, instantNext)
     } else if (target < live) {
       let excess = live - target
       for (let i = chips.length - 1; i >= 0 && excess > 0; i--) {
@@ -775,6 +783,7 @@ export function createPotPile(opts: { feltY: number; center: THREE.Vector3; kit?
         c.mesh.scale.setScalar(0.6 + 0.4 * sc)
       }
     }
+    instantNext = false // consumed: only the reveal right after setAmount snaps
     lastT = t
   }
 

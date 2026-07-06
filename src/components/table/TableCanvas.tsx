@@ -74,17 +74,41 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
     // `match.pot` is in token base units (6 dp); the coin pile scales off the
     // human token amount, so a real ~18 USDC pot builds a modest heap rather than
     // saturating the 115-coin cap (which buried the pot label under the coins).
-    const readPot = (p: bigint) => handle.setPot(Number(p) / 1e6)
-    readPot(useGameStore.getState().match?.pot ?? 0n)
+    // `instant` on the seed places coins at rest so joining a hand already in
+    // progress shows a settled table, not a replay of every bet that led here.
+    //
+    // The backend `pot` is a grand total that ALREADY includes every seat's
+    // current-street commitment (it's Σ total_contribution). Those same chips are
+    // drawn in front of each player as their committed pile, so feeding raw `pot`
+    // to the central heap double-counts them. Drive the heap with the chips
+    // already *gathered* to the middle — pot minus what's still committed this
+    // street — so during a street the heap holds steady while bets sit in front of
+    // players, then steps up as the committed piles sweep in at street's end.
+    const gatheredPot = (m: MatchStateView | null | undefined): bigint => {
+      if (!m) return 0n
+      const committed = m.seats.reduce((a, s) => a + s.committedThisStreet, 0n)
+      const h = m.pot - committed
+      return h > 0n ? h : 0n
+    }
+    const readPot = (p: bigint, instant = false) => handle.setPot(Number(p) / 1e6, instant)
+    readPot(gatheredPot(useGameStore.getState().match), true)
 
     // Seed the per-seat coin stacks, then follow them as the hand plays out.
-    const pushSeats = (m: MatchStateView | null | undefined) => handle.setSeats(seatChipStates(m))
-    pushSeats(useGameStore.getState().match)
+    const pushSeats = (m: MatchStateView | null | undefined, instant = false) =>
+      handle.setSeats(seatChipStates(m), instant)
+    const seedMatch = useGameStore.getState().match
+    pushSeats(seedMatch, true)
+
+    // If the match hydrated at mount, we've already snapped it. If it hadn't
+    // (mounted before the match arrived), the first subscription tick carrying
+    // real seats is still the initial hydration — snap that one too so a mid-hand
+    // join never animates its own build-up, whichever path delivers it first.
+    let hydrated = !!seedMatch?.seats.length
 
     // Price board is only visible in-match — on discovery the chart has no context yet.
     handle.setPriceBoardVisible(useGameStore.getState().view === 'table')
 
-    let last = useGameStore.getState().match?.pot ?? 0n
+    let last = gatheredPot(useGameStore.getState().match)
     let lastView = useGameStore.getState().view
     // A cheap signature of the seat state (≤6 seats) so we only re-push the 3D
     // chips when a stack, bet, fold or seating actually changes.
@@ -98,10 +122,13 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
     let feedLen = useGameStore.getState().feed?.length ?? 0
     let awarded = useGameStore.getState().match?.phase === 'SETTLED'
     const unsub = useGameStore.subscribe((s) => {
-      const next = s.match?.pot ?? 0n
-      if (next !== last) { last = next; readPot(next) }
+      // First real snapshot after an empty mount is still hydration, not play.
+      const hydrating = !hydrated && !!s.match?.seats.length
+      if (hydrating) hydrated = true
+      const next = gatheredPot(s.match)
+      if (next !== last) { last = next; readPot(next, hydrating) }
       const sig = seatSig(s.match)
-      if (sig !== lastSeatSig) { lastSeatSig = sig; pushSeats(s.match) }
+      if (sig !== lastSeatSig) { lastSeatSig = sig; pushSeats(s.match, hydrating) }
       if (s.view !== lastView) {
         lastView = s.view
         handle.setPriceBoardVisible(s.view === 'table')
@@ -116,10 +143,17 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
         if (e.kind === 'action' && e.action === 'check') handle.knock(e.seat)
       }
       feedLen = feed.length
-      // pot → winner stream, once, when the match settles
+      // pot → winner stream, once, when the match settles. Settlement lands in
+      // two steps: the `settled` frame names the winning seats but their amounts
+      // hydrate a beat later from the on-chain read. Wait for a positive amount so
+      // the stream scales to the real pot won (and only pours to seats that won),
+      // instead of firing a placeholder handful off the zero-amount first frame.
       if (s.match?.phase === 'SETTLED' && !awarded) {
         const awards = s.settlement?.awards
-        if (awards && awards.length) { awarded = true; awards.forEach((a) => handle.awardPot(a.seat)) }
+        if (awards && awards.some((a) => a.amount > 0n)) {
+          awarded = true
+          for (const a of awards) if (a.amount > 0n) handle.awardPot(a.seat, Number(a.amount) / 1e6)
+        }
       }
     })
 
