@@ -1065,6 +1065,19 @@ export function createTableScene(
     w.__inspect = (x, y, z, lx = 0, ly = 0.12, lz = 1.1) => {
       inspect = { pos: new THREE.Vector3(x, y, z), look: new THREE.Vector3(lx, ly, lz) }
     }
+    ;(w as unknown as { __potInfo?: () => unknown }).__potInfo = () => {
+      const g = potPile.group
+      const first = g.children[0] as THREE.Mesh | undefined
+      const wp = new THREE.Vector3()
+      if (first) first.getWorldPosition(wp)
+      return {
+        groupPos: g.position.toArray(),
+        children: g.children.length,
+        firstLocalY: first?.position.y,
+        firstWorldY: wp.y,
+        firstVisible: first?.visible, userData: g.userData,
+      }
+    }
   }
 
   // ---------- disposal ----------
