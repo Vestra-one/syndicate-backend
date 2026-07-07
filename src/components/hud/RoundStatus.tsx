@@ -1,6 +1,5 @@
 import { useGameStore } from '@/store/gameStore'
 import { formatChips, formatCountdown } from '@/lib/format'
-import { seatAlias } from '@/lib/seats'
 import { useNow } from '@/lib/useNow'
 import type { MatchPhase } from '@/lib/protocol'
 import { useWaiting } from './WaitingRoom'
@@ -55,13 +54,9 @@ export function RoundStatus() {
   const round = Math.min(roundCount, Math.max(match.round, scheduleRound))
   const label = live ? `Round ${round} of ${roundCount}` : PHASE_COPY[match.phase]
 
-  // Whose move it is, phrased from your side of the felt.
-  const toAct =
-    live && match.toActSeat != null
-      ? match.toActSeat === match.yourSeat
-        ? 'Your move'
-        : `${seatAlias(match.toActSeat, match.yourSeat)} to act`
-      : null
+  // Whose-move-it-is lives solely in the top TurnBanner now — this card is the
+  // calm round/pot reference, so it no longer repeats the turn (was a third,
+  // redundant "Your move" competing with the banner and the action panel).
 
   // Streets advance on the server's street schedule, not on betting — so a matched pot
   // with nobody to act is a WAIT, not a stall. Count the window down so it reads that way.
@@ -89,7 +84,6 @@ export function RoundStatus() {
           )}
         </div>
         <div className="round-label">{label}</div>
-        {toAct && <div className="round-toact eyebrow">{toAct}</div>}
         {clock && <div className="round-toact eyebrow mono">{clock}</div>}
         <div className="round-prices mono">
           <span>pot {formatChips(match.pot)} {token}</span>

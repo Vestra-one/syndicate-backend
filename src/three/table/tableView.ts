@@ -78,7 +78,7 @@ function seatWorld(angleDeg: number, radius = R_SEAT, y = Y_SEAT): THREE.Vector3
 // The 3D coin heap is centred on (0, felt, 1.1); the amount label floats well
 // clear above the top of the pile (raised so a tall pot never buries the number
 // in coins) and a touch toward the camera so it reads over the heap.
-const POT_WORLD = new THREE.Vector3(0, 1.24, 1.2)
+const POT_WORLD = new THREE.Vector3(0, 1.5, 1.2)
 // The pre-game countdown sits lower and further forward than the pot label so the
 // ring rests on the open felt, clear of the price cabinet behind it.
 const FELT_CENTRE_WORLD = new THREE.Vector3(0, 0.42, 1.42)

@@ -46,18 +46,12 @@ export function TurnBanner() {
         </div>
       )
     }
-    const remaining = yourTurn ? Math.max(0, yourTurn.deadline - now) : null
+    // The countdown lives once, on the action panel's ring below — repeating it here
+    // (and again on the round card) is the "three timers, one turn" clutter we removed.
     return (
       <div className="turn-banner turn-banner--you" role="status" aria-live="polite">
         <span className="turn-banner-label">Your turn</span>
-        <span className="turn-banner-sub">
-          choose an action below ↓
-          {/* aria-hidden: the countdown ticks every 500ms — keeping it out of the live region
-              stops screen readers from re-announcing the whole banner twice a second. */}
-          {remaining != null && (
-            <span aria-hidden="true">{` · ${Math.ceil(remaining / 1000)}s left`}</span>
-          )}
-        </span>
+        <span className="turn-banner-sub">choose an action below ↓</span>
       </div>
     )
   }
