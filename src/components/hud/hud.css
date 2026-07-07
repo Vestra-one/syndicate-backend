@@ -199,6 +199,7 @@
 .round-prices {
   display: flex;
   justify-content: space-between;
+  gap: 14px; /* guarantee a space between pot/bet even when the card is narrow (was "USDCbet") */
   font-size: 12px;
   color: var(--text-dim);
 }
@@ -5422,3 +5423,47 @@
 }
 .pod-tip-ago { flex: none; font-size: 9.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .pod-tip-empty { font-size: 11px; color: var(--text-faint); font-style: italic; }
+
+/* ===========================================================================
+   Mobile in-match HUD (2026-07-07)
+   The live/sealing HUD was authored as a corner-pinned desktop layout: a 3-column
+   `.hud-bottom` flex (position 240px + betting 360px + round 240px ≈ 840px min) and
+   opponent pods anchored to a wide landscape table. In portrait those overflow and
+   overlap, pushing the primary action buttons off-screen. Below 768px we switch to a
+   single-column bottom-sheet HUD: table + pot as backdrop, opponent actions read from
+   a compact feed strip, and the betting/seal panel becomes the full-width primary
+   surface nearest the thumb.
+   =========================================================================== */
+@media (max-width: 768px) {
+  .hud { padding: 10px; gap: 10px; }
+
+  /* Header stays a single row; shrink the wordmark + wallet so nothing clips. */
+  .brand { padding: 8px 10px; gap: 8px; }
+  .brand-mark { font-size: 13px; letter-spacing: 0.08em; }
+  .brand .conn { display: none; }
+  .hud-top { gap: 8px; align-items: center; }
+  .wc-btn { padding: 8px 12px; font-size: 12px; white-space: nowrap; }
+  .wc-chip { padding: 6px 10px; }
+
+  /* The floating whose-turn banner and the projected pot label both crowd the small
+     portrait viewport and collide with the feed / round card. On mobile the action
+     panel is the clear "your turn" signal and the round card carries the pot, so drop
+     both floating elements here. */
+  .turn-banner { display: none; }
+  .table-pot { display: none; }
+
+  /* Opponent pods are laid out for a wide table and collapse onto the centre in
+     portrait — hide them (opponent actions surface in the feed). */
+  .table-seat { display: none !important; }
+
+  /* Action feed: a slim, capped strip top-left instead of a 230px blanket. */
+  .feed { width: 46vw; max-width: 220px; max-height: 116px; overflow: hidden; }
+
+  /* Footer: stack into one full-width column pinned to the bottom. Betting/seal is
+     the primary surface (order last = nearest the thumb); round + position ride above. */
+  .hud-bottom { flex-direction: column; align-items: stretch; gap: 8px; }
+  .betpanel { min-width: 0; width: 100%; order: 3; }
+  .position { min-width: 0; width: 100%; order: 2; }
+  .position-row { flex-wrap: wrap; white-space: normal; gap: 8px 14px; }
+  .round { width: 100%; order: 1; }
+}
