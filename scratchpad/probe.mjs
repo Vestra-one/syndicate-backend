@@ -1,17 +1,19 @@
 const CDP='http://127.0.0.1:9222'
-function connect(u){return new Promise((res,rej)=>{const ws=new WebSocket(u);let id=0;const p=new Map();const ev=[];ws.onopen=()=>res({send:(m,pa={})=>new Promise((r,j)=>{const i=++id;p.set(i,{r,j});ws.send(JSON.stringify({id:i,method:m,params:pa}))}),ev,close:()=>ws.close(),wait:(m,t)=>new Promise(r=>{const t0=Date.now();const k=()=>{if(ev.some(e=>e.method===m))return r(1);if(Date.now()-t0>t)return r(0);setTimeout(k,80)};k()})});ws.onerror=e=>rej(e);ws.onmessage=x=>{const g=JSON.parse(x.data);if(g.id&&p.has(g.id)){const{r,j}=p.get(g.id);p.delete(g.id);g.error?j(new Error(g.error.message)):r(g.result)}else if(g.method)ev.push(g)}})}
-const sleep=ms=>new Promise(r=>setTimeout(r,ms))
 const tab=await(await fetch(`${CDP}/json/new?about:blank`,{method:'PUT'})).json()
-const c=await connect(tab.webSocketDebuggerUrl)
-await c.send('Page.enable');await c.send('Runtime.enable')
-await c.send('Page.navigate',{url:'http://localhost:5173/?view=soon'});await c.wait('Page.loadEventFired',15000);await sleep(4500)
-const ev=async e=>{const r=await c.send('Runtime.evaluate',{expression:e,returnByValue:true});return r.exceptionDetails?('EXC:'+JSON.stringify(r.exceptionDetails).slice(0,200)):r.result.value}
-console.log('hooks:', await ev(`JSON.stringify({step:typeof window.__tableStep, setPot:typeof window.__setPot, inspect:typeof window.__inspect})`))
-console.log('canvas:', await ev(`(()=>{const c=document.querySelector('canvas');return c?c.width+'x'+c.height:'none'})()`))
-await ev(`window.__tableStep&&window.__tableStep(200)`)
-await sleep(300)
-// try to find the pot group by walking THREE via the canvas? not accessible. Instead re-drive pot and count via a patched hook if present.
-console.log('after pump, setPot then step:', await ev(`(()=>{try{window.__setPot&&window.__setPot(2400);return 'called'}catch(e){return 'err '+e.message}})()`))
-await ev(`window.__tableStep&&window.__tableStep(200)`)
-await sleep(300)
-c.close();await fetch(`${CDP}/json/close/${tab.id}`).catch(()=>{})
+const ws=new WebSocket(tab.webSocketDebuggerUrl)
+let id=0;const p=new Map()
+const send=(m,pr={})=>new Promise((r)=>{const i=++id;p.set(i,r);ws.send(JSON.stringify({id:i,method:m,params:pr}))})
+ws.onmessage=(m)=>{const j=JSON.parse(m.data);if(j.id&&p.has(j.id)){p.get(j.id)(j.result);p.delete(j.id)}}
+await new Promise(r=>ws.onopen=r)
+await send('Page.enable');await send('Runtime.enable')
+await send('Page.navigate',{url:'http://localhost:5173/?view=app'})
+await new Promise(r=>setTimeout(r,6000))
+const seed=`(()=>{const now=Date.now();window.__gameStore.setState({discoveryStatus:'ready',upcomingGames:[{matchId:'up-1',feed:'BTC/USD',buyIn:10000000,entryFee:500000,seated:2,maxPlayers:5,minPlayers:3,fillDeadline:now+90000}],activeGames:[{matchId:'live-1',feed:'BTC/USD',buyIn:10000000,potSize:86500000,spectators:12,actionsPerMin:9,startedAt:now-420000}]});return 'seeded';})()`
+console.log('seed:',(await send('Runtime.evaluate',{expression:seed})).result)
+await new Promise(r=>setTimeout(r,300))
+const probe=`(()=>{const s=window.__gameStore.getState();return JSON.stringify({view:s.view,status:s.discoveryStatus,up:s.upcomingGames.length,act:s.activeGames.length});})()`
+console.log('t+300ms:',(await send('Runtime.evaluate',{expression:probe})).result.value)
+await new Promise(r=>setTimeout(r,2000))
+console.log('t+2.3s:',(await send('Runtime.evaluate',{expression:probe})).result.value)
+await fetch(`${CDP}/json/close/${tab.id}`)
+process.exit(0)
