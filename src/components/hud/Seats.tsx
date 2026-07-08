@@ -158,7 +158,10 @@ function OpponentPod({
   token: string
   actionSecs: number
 }) {
-  const ref = useAnchor(useCallback(() => projectSeatAngle(angle), [angle]))
+  // clampMargin keeps the extreme side pods from clipping off the viewport edge —
+  // they ride the table as the camera sways but park at a 12px inset when a seat
+  // would otherwise project past the frame.
+  const ref = useAnchor(useCallback(() => projectSeatAngle(angle), [angle]), { clampMargin: 12 })
   const now = useNow(500)
   const alias = seatAlias(seat.seat, match.yourSeat)
   const status = podStatus(seat, match, feed, token)

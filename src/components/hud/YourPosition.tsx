@@ -15,6 +15,9 @@ export function YourPosition() {
   const sealClosed = useGameStore((s) => s.sealClosed)
   const prediction = useGameStore((s) => s.yourPrediction)
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
+  // On your turn the action panel below shows to-call / committed / stack — so this
+  // panel drops the duplicated money figures and keeps only the seat reference.
+  const yourTurn = useGameStore((s) => s.yourTurn)
 
   const decimals = terms?.decimals ?? 2
   const token = terms?.chipsToken ?? 'USDC'
@@ -66,8 +69,12 @@ export function YourPosition() {
       {match?.yourSeat != null && (
         <div className="position-row eyebrow">
           <span>seat {match.yourSeat + 1}</span>
-          <span className="mono">stack {formatMoney(match.yourStack ?? 0, token)}</span>
-          <span className="mono">committed {formatMoney(match.yourExposure ?? 0, token)}</span>
+          {yourTurn == null && (
+            <>
+              <span className="mono">stack {formatMoney(match.yourStack ?? 0, token)}</span>
+              <span className="mono">committed {formatMoney(match.yourExposure ?? 0, token)}</span>
+            </>
+          )}
         </div>
       )}
 
