@@ -144,8 +144,17 @@ pub enum Cmd {
     Sealed { seat_index: u8 },
     /// Full state view (WS snapshot).
     Snapshot(oneshot::Sender<Value>),
+    /// Cheap in-memory pot/round read for list rows — no DB queries, unlike `Snapshot`
+    /// (which loads seats via `match_view`). `None` fields when the engine hasn't started.
+    LiveStats(oneshot::Sender<LiveStats>),
     /// Sweeper tick: re-check deadlines even if the sleep was lost.
     Poke,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveStats {
+    pub pot: Option<u64>,
+    pub round: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +327,14 @@ impl Actor {
             }
             Cmd::Snapshot(reply) => {
                 let _ = reply.send(self.view().await);
+            }
+            Cmd::LiveStats(reply) => {
+                let engine = self.runtime.as_ref().map(|rt| rt.engine());
+                let stats = LiveStats {
+                    pot: engine.map(|e| e.seats.iter().map(|s| s.total_contribution).sum::<u64>()),
+                    round: engine.map(|e| e.round),
+                };
+                let _ = reply.send(stats);
             }
             Cmd::Act { intent, reply } => {
                 let result = self.apply_action(intent).await;

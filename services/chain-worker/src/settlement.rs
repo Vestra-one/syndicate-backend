@@ -361,18 +361,31 @@ pub async fn prepare_settlement(
         }
     };
 
+    // Winner signal: `settle()`'s pot_awards, NOT the final on-chain payout — the payout
+    // also folds in each seat's uncontributed remainder (buy_in − contribution), so a
+    // seat that folded pre-bet still gets a payout close to its buy-in back without
+    // having won anything.
+    let pot_won = pot_won_per_seat(&result.pot_awards, confirmed_count);
+    let final_pot_chips = final_pot_chips(&result.pot_awards, result.rake_collected);
+
     let oracle_audit = json!({
         "signed_price_sha256": signed.payload_sha256_hex,
         "signed_price_source": signed.source_url,
         "publish_time_sec": signed.publish_time_sec,
         "settlement_price_wad": result.settlement_price.to_string(),
         "rake_collected": result.rake_collected,
+        "final_pot_chips": final_pot_chips,
         "event_root": hex::encode(replay_root),
         "timelock": timelock_receipt,
         "predictions": seats.iter().map(|s| json!({
             "engine_seat": s.engine_seat,
+            "wallet": s.wallet,
             "source": if s.is_sealed() { "sealed" } else { "spot" },
             "prediction_wad": predictions.get(&(s.engine_seat as u16)).map(|p| p.to_string()),
+            "payout_chips": payouts.iter()
+                .find(|p| p.engine_seat == s.engine_seat)
+                .map(|p| p.amount),
+            "pot_won_chips": pot_won.get(s.engine_seat as usize).copied(),
         })).collect::<Vec<_>>(),
     });
 
@@ -385,6 +398,27 @@ pub async fn prepare_settlement(
         confirmed_players,
         oracle_audit,
     }
+}
+
+/// Per-engine-seat pot winnings (the winner signal — see the doc comment on migration
+/// 0013). Seats with no award stay 0.
+fn pot_won_per_seat(pot_awards: &[syndicate_shared::Award], confirmed_count: u8) -> Vec<u64> {
+    let mut pot_won = vec![0u64; confirmed_count as usize];
+    for award in pot_awards {
+        if let Some(slot) = pot_won.get_mut(award.player.0 as usize) {
+            *slot = slot.saturating_add(award.amount);
+        }
+    }
+    pot_won
+}
+
+/// The contested pot before rake: Σ pot_awards + rake_collected.
+fn final_pot_chips(pot_awards: &[syndicate_shared::Award], rake_collected: u64) -> u64 {
+    pot_awards
+        .iter()
+        .map(|a| a.amount)
+        .sum::<u64>()
+        .saturating_add(rake_collected)
 }
 
 /// Parse the seal-close snapshot into the settlement price domain (i128, exp −18).
@@ -429,6 +463,35 @@ fn decimal_to_wad(text: &str, _exponent: i32) -> Result<i128, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use syndicate_shared::{Award, PlayerId};
+
+    #[test]
+    fn pot_won_per_seat_credits_only_awarded_seats() {
+        let awards = vec![
+            Award { player: PlayerId(0), amount: 250 },
+            Award { player: PlayerId(2), amount: 10 },
+            Award { player: PlayerId(0), amount: 5 }, // main + side pot for the same seat
+        ];
+        let pot_won = pot_won_per_seat(&awards, 3);
+        assert_eq!(pot_won, vec![255, 0, 10]);
+    }
+
+    #[test]
+    fn pot_won_per_seat_ignores_out_of_range_awards() {
+        // Defensive: an award referencing a seat beyond confirmed_count must not panic.
+        let awards = vec![Award { player: PlayerId(9), amount: 100 }];
+        assert_eq!(pot_won_per_seat(&awards, 2), vec![0, 0]);
+    }
+
+    #[test]
+    fn final_pot_chips_is_awards_plus_rake() {
+        let awards = vec![
+            Award { player: PlayerId(0), amount: 250 },
+            Award { player: PlayerId(1), amount: 43 },
+        ];
+        assert_eq!(final_pot_chips(&awards, 7), 300);
+        assert_eq!(final_pot_chips(&[], 0), 0);
+    }
 
     #[test]
     fn decimal_to_wad_scales() {

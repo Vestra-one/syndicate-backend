@@ -64,6 +64,22 @@ ON CONFLICT (idempotency_key) DO NOTHING
 RETURNING id
 "#;
 
+/// Per-seat settlement outcome, keyed by `(match_id, engine_seat)`. Idempotent — safe to
+/// re-run on retry (see chainjobs.rs::persist_settlement_outcome).
+pub const UPDATE_SEAT_SETTLEMENT_SQL: &str = r#"
+UPDATE match_seats
+SET payout_chips = $3, pot_won_chips = $4, prediction_wad = $5::text::numeric
+WHERE match_id = $1 AND seat_index = $2
+"#;
+
+/// Match-level settlement summary. Idempotent.
+pub const UPDATE_MATCH_SETTLEMENT_SQL: &str = r#"
+UPDATE matches
+SET settlement_price_wad = $2::text::numeric, final_pot_chips = $3, rake_chips = $4,
+    settlement_tx_sig = $5
+WHERE id = $1
+"#;
+
 #[derive(Clone, Debug)]
 pub struct MatchRow {
     pub id: Uuid,
@@ -234,6 +250,11 @@ pub struct SeatRow {
     pub seal_commitment: Option<Vec<u8>>,
     pub seal_timelock_target: Option<u64>,
     pub seal_chain_confirmed: bool,
+    /// Settlement outcome (NULL pre-settlement or for legacy/backfilled matches — see
+    /// migration 0013). `pot_won`, not `payout`, is the winner signal.
+    pub payout_chips: Option<u64>,
+    pub pot_won_chips: Option<u64>,
+    pub prediction_wad: Option<String>,
 }
 
 pub async fn load_seats(
@@ -245,7 +266,8 @@ pub async fn load_seats(
             r#"
             SELECT seat_index, wallet_address, buy_in_chips, sealed, seal_seq,
                    prediction_source, seal_ciphertext, seal_commitment,
-                   seal_timelock_target, seal_chain_confirmed
+                   seal_timelock_target, seal_chain_confirmed,
+                   payout_chips, pot_won_chips, prediction_wad::text AS prediction_wad
             FROM match_seats
             WHERE match_id = $1
             ORDER BY seat_index ASC
@@ -268,7 +290,31 @@ pub async fn load_seats(
                 .get::<_, Option<i64>>("seal_timelock_target")
                 .map(|v| v as u64),
             seal_chain_confirmed: r.get("seal_chain_confirmed"),
+            payout_chips: r.get::<_, Option<i64>>("payout_chips").map(|v| v as u64),
+            pot_won_chips: r.get::<_, Option<i64>>("pot_won_chips").map(|v| v as u64),
+            prediction_wad: r.get("prediction_wad"),
         })
+        .collect())
+}
+
+/// Batch wallet → handle lookup (only wallets with a set handle are returned).
+pub async fn handles_for_wallets(
+    client: &tokio_postgres::Client,
+    wallets: &[String],
+) -> Result<std::collections::HashMap<String, String>, ApiError> {
+    if wallets.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows = client
+        .query(
+            r#"SELECT wallet_address, handle FROM profile_metadata
+               WHERE handle IS NOT NULL AND wallet_address = ANY($1)"#,
+            &[&wallets],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get("wallet_address"), r.get("handle")))
         .collect())
 }
 

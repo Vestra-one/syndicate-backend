@@ -472,6 +472,15 @@ impl Executor {
         {
             warn!(job_id = %job.id, "mark_submitted failed: {e}");
         }
+        // Attach the audit now, before confirmation — a crash between here and the confirm
+        // loop below hits the `run_job` crash-recovery early-return (top of this file),
+        // which never revisits `build_instruction`/oracle_audit. Attaching at submit time
+        // means the audit (and therefore settlement persistence, see chainjobs.rs) is
+        // durable even if this process dies mid-confirm. Deterministic per idempotency
+        // key, so re-attaching on a later attempt is a safe no-op overwrite.
+        if let Some(audit) = &oracle_audit {
+            let _ = self.attach_oracle_audit(job.id, audit).await;
+        }
         info!(job_id = %job.id, match_id = %job.match_id, kind = job.kind.as_str(),
               tx_sig = %sig, "submitted");
 
@@ -483,12 +492,6 @@ impl Executor {
                 Ok(SigStatus::Confirmed) => {
                     self.metrics
                         .observe_submit_confirm_ms(crate::now_ms() - started);
-                    if let Some(audit) = &oracle_audit {
-                        // Persist the audit trail on the job row via dead-letter column
-                        // reuse is wrong — attach it through mark_confirmed's oracle_audit
-                        // update instead.
-                        let _ = self.attach_oracle_audit(job.id, audit).await;
-                    }
                     if job.kind == JobKind::BeginLive {
                         self.mirror_begin_live(job, &sig).await;
                     }

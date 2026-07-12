@@ -63,6 +63,12 @@ async fn tick(st: &AppState, rpc: &RpcClient) -> Result<(), ApiError> {
                 warn!(%match_id, %kind, "chain sync failed (will retry): {e}");
                 continue; // leave unacked; retried next tick
             }
+            if kind == "submit_settlement" {
+                if let Err(e) = persist_settlement_outcome(st, match_id, job_id).await {
+                    warn!(%match_id, "settlement persist failed (will retry): {e}");
+                    continue; // leave unacked; retried next tick
+                }
+            }
             let event = match kind.as_str() {
                 "lock" => Some(ChainEvent::Locked {
                     tx_sig: tx_signature.clone(),
@@ -89,6 +95,87 @@ async fn tick(st: &AppState, rpc: &RpcClient) -> Result<(), ApiError> {
             )
             .await;
     }
+    Ok(())
+}
+
+/// Persist the settlement outcome (per-seat payouts/pot-won/prediction + match-level
+/// settle price/final pot/rake/tx sig) computed by the chain-worker, once the settlement
+/// job has confirmed. Read-after-confirm, additive-only, and idempotent — safe to retry.
+/// Never touches the on-chain submission path (see settlement.rs / executor.rs).
+async fn persist_settlement_outcome(
+    st: &AppState,
+    match_id: Uuid,
+    job_id: Uuid,
+) -> Result<(), ApiError> {
+    let mut client = st.pool.get().await?;
+    let row = client
+        .query_opt(
+            "SELECT oracle_audit, tx_signature FROM chain_jobs WHERE id = $1",
+            &[&job_id],
+        )
+        .await?;
+    let Some(row) = row else {
+        return Ok(()); // job vanished; nothing to persist
+    };
+    let audit: Option<serde_json::Value> = row.get("oracle_audit");
+    let tx_sig: Option<String> = row.get("tx_signature");
+    let Some(audit) = audit else {
+        info!(%match_id, "settlement confirmed with no oracle_audit yet; skipping persist");
+        return Ok(());
+    };
+    let predictions = audit.get("predictions").and_then(|v| v.as_array());
+    // Legacy audit format (pre-migration-0013) carries no per-seat payout_chips — nothing
+    // new to persist for these matches; don't wedge the ack loop retrying forever.
+    let has_payouts = predictions
+        .map(|p| p.iter().any(|e| e.get("payout_chips").is_some()))
+        .unwrap_or(false);
+    if !has_payouts {
+        info!(%match_id, "settlement audit missing payouts (legacy format); skipping persist");
+        return Ok(());
+    }
+
+    let settlement_price_wad = audit
+        .get("settlement_price_wad")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let final_pot_chips = audit.get("final_pot_chips").and_then(|v| v.as_i64());
+    let rake_chips = audit.get("rake_collected").and_then(|v| v.as_i64());
+
+    let tx = client.transaction().await?;
+    for entry in predictions.into_iter().flatten() {
+        let Some(engine_seat) = entry.get("engine_seat").and_then(|v| v.as_i64()) else {
+            continue;
+        };
+        let payout_chips = entry.get("payout_chips").and_then(|v| v.as_i64());
+        let pot_won_chips = entry.get("pot_won_chips").and_then(|v| v.as_i64());
+        let prediction_wad = entry
+            .get("prediction_wad")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        tx.execute(
+            db::UPDATE_SEAT_SETTLEMENT_SQL,
+            &[
+                &match_id,
+                &(engine_seat as i16),
+                &payout_chips,
+                &pot_won_chips,
+                &prediction_wad,
+            ],
+        )
+        .await?;
+    }
+    tx.execute(
+        db::UPDATE_MATCH_SETTLEMENT_SQL,
+        &[
+            &match_id,
+            &settlement_price_wad,
+            &final_pot_chips,
+            &rake_chips,
+            &tx_sig,
+        ],
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 

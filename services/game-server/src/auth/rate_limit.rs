@@ -56,6 +56,7 @@ pub struct RateLimits {
     ip_intents: BucketMap,
     ip_auth: BucketMap,
     wallet_actions: BucketMap,
+    wallet_profile_updates: BucketMap,
 }
 
 impl Default for RateLimits {
@@ -70,6 +71,8 @@ impl RateLimits {
             ip_intents: BucketMap::new(5.0, 5.0 / 60.0),
             ip_auth: BucketMap::new(10.0, 10.0 / 60.0),
             wallet_actions: BucketMap::new(10.0, 10.0 / 5.0),
+            // 5 handle changes per 10 minutes per wallet.
+            wallet_profile_updates: BucketMap::new(5.0, 5.0 / 600.0),
         }
     }
 
@@ -94,6 +97,14 @@ impl RateLimits {
             Ok(())
         } else {
             Err(ApiError::too_many("too many actions; slow down"))
+        }
+    }
+
+    pub fn check_profile_updates(&self, wallet: &str) -> Result<(), ApiError> {
+        if self.wallet_profile_updates.try_take(wallet) {
+            Ok(())
+        } else {
+            Err(ApiError::too_many("too many profile updates; slow down"))
         }
     }
 }
@@ -147,5 +158,16 @@ mod tests {
             limits.check_actions("w").unwrap();
         }
         assert!(limits.check_actions("w").is_err());
+    }
+
+    #[test]
+    fn wallet_profile_updates_burst_5() {
+        let limits = RateLimits::new();
+        for _ in 0..5 {
+            limits.check_profile_updates("w").unwrap();
+        }
+        assert!(limits.check_profile_updates("w").is_err());
+        // Other wallets unaffected.
+        limits.check_profile_updates("w2").unwrap();
     }
 }

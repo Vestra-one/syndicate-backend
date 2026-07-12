@@ -1,8 +1,9 @@
 //! Shared application state + the axum router.
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use deadpool_postgres::Pool;
 use solana_sdk::pubkey::Pubkey;
@@ -27,6 +28,39 @@ pub struct AppState {
     pub program_id: Pubkey,
     /// The match store used for gameplay event appends (fencing).
     pub store: Arc<syndicate_engine::persistence::PostgresMatchStore>,
+    /// Live spectator counts per match (in-memory, advisory — resets on restart).
+    pub watchers: Watchers,
+}
+
+/// Per-match live watcher counts, tracked via an RAII guard so every unsubscribe path
+/// (explicit unsubscribe, re-subscribe replace, connection teardown, forwarder exit)
+/// decrements through one mechanism: dropping the guard.
+#[derive(Clone, Default)]
+pub struct Watchers(Arc<dashmap::DashMap<uuid::Uuid, Arc<AtomicI64>>>);
+
+impl Watchers {
+    pub fn inc(&self, id: uuid::Uuid) -> WatcherGuard {
+        let counter = self.0.entry(id).or_default().clone();
+        counter.fetch_add(1, Ordering::Relaxed);
+        WatcherGuard { counter }
+    }
+
+    pub fn count(&self, id: &uuid::Uuid) -> i64 {
+        self.0
+            .get(id)
+            .map(|c| c.load(Ordering::Relaxed).max(0))
+            .unwrap_or(0)
+    }
+}
+
+pub struct WatcherGuard {
+    counter: Arc<AtomicI64>,
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -80,6 +114,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/wallets/{wallet}/claimables",
             get(crate::api::lists::get_claimables),
         )
+        // leaderboard + profiles
+        .route("/v1/leaderboard", get(crate::api::profiles::get_leaderboard))
+        .route("/v1/profiles/me", put(crate::api::profiles::put_profile_me))
+        .route("/v1/profiles/{wallet}", get(crate::api::profiles::get_profile))
         // admin
         .route(
             "/v1/admin/config",

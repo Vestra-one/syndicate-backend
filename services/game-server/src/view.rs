@@ -65,6 +65,18 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         Ok(client) => db::load_seats(&client, row.id).await.unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    // Batch handle lookup: creator + every seated wallet. NULL/absent entries mean no
+    // handle set — the FE falls back to a deterministic persona.
+    let mut wallets: Vec<String> = seats.iter().map(|s| s.wallet.clone()).collect();
+    if let Some(creator) = &row.creator_wallet {
+        wallets.push(creator.clone());
+    }
+    let handles = match st.pool.get().await {
+        Ok(client) => db::handles_for_wallets(&client, &wallets)
+            .await
+            .unwrap_or_default(),
+        Err(_) => Default::default(),
+    };
     let engine = rt.map(|rt| rt.engine());
     let seat_views: Vec<Value> = seats
         .iter()
@@ -73,6 +85,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
             json!({
                 "seat_index": s.engine_seat,
                 "wallet": s.wallet,
+                "handle": handles.get(&s.wallet),
                 "sealed": s.sealed,
                 "prediction_source": s.prediction_source,
                 "stack": live.map(|l| l.stack),
@@ -80,6 +93,9 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
                 "total_contribution": live.map(|l| l.total_contribution),
                 "folded": live.map(|l| l.folded),
                 "all_in": live.map(|l| l.all_in),
+                "payout_chips": s.payout_chips,
+                "pot_won_chips": s.pot_won_chips,
+                "prediction_wad": s.prediction_wad,
             })
         })
         .collect();
@@ -125,6 +141,8 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
         "phase": row.status,
         "visibility": row.visibility,
         "feed": row.feed_symbol,
+        "creator_wallet": row.creator_wallet,
+        "creator_handle": row.creator_wallet.as_ref().and_then(|w| handles.get(w)),
         "params": {
             "buy_in": row.buy_in,
             "chips_token_mint": row.mint,
@@ -270,6 +288,7 @@ async fn reveal_view(st: &AppState, row: &MatchRow) -> Value {
                 "settlement_price_wad": audit.as_ref().and_then(|a| a.get("settlement_price_wad")).cloned(),
                 "predictions": audit.as_ref().and_then(|a| a.get("predictions")).cloned(),
                 "rake": audit.as_ref().and_then(|a| a.get("rake_collected")).cloned(),
+                "final_pot_chips": audit.as_ref().and_then(|a| a.get("final_pot_chips")).cloned(),
                 "tx_sig": tx,
             })
         }

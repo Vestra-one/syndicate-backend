@@ -249,7 +249,7 @@ impl Conn {
         }
         if key == "lobby" {
             let rx = self.st.registry.lobby.sender().subscribe();
-            self.spawn_forwarder(key, rx);
+            self.spawn_forwarder(key, rx, None);
             return;
         }
         if let Some(match_id) = channel
@@ -323,16 +323,25 @@ impl Conn {
                 }
             }
 
+            // Count this connection as a watcher only when an actor is actually live to
+            // watch (a snapshot-only request against a dead/terminal match isn't spectating).
+            let guard = live_rx.is_some().then(|| self.st.watchers.inc(match_id));
             if let Some(rx) = live_rx {
-                self.spawn_forwarder(key, rx);
+                self.spawn_forwarder(key, rx, guard);
             }
         }
     }
 
-    fn spawn_forwarder(&mut self, key: String, mut rx: broadcast::Receiver<std::sync::Arc<Value>>) {
+    fn spawn_forwarder(
+        &mut self,
+        key: String,
+        mut rx: broadcast::Receiver<std::sync::Arc<Value>>,
+        guard: Option<crate::app::WatcherGuard>,
+    ) {
         let out = self.out.clone();
         let wallet = self.wallet.clone();
         let task = tokio::spawn(async move {
+            let _guard = guard; // held for the forwarder's lifetime; Drop decrements the count
             loop {
                 match rx.recv().await {
                     Ok(frame) => {

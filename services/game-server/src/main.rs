@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use tracing::{info, warn};
 
-use syndicate_game_server::app::{router, AppState};
+use syndicate_game_server::app::{router, AppState, Watchers};
 use syndicate_game_server::auth::rate_limit::RateLimits;
 use syndicate_game_server::auth::session::NonceStore;
 use syndicate_game_server::config::{validate_overlay, Overlay, ServerConfig};
@@ -72,6 +72,7 @@ async fn main() {
         verify: verifier::rpc_verifier(&cfg.rpc_url, program_id),
         program_id,
         store,
+        watchers: Watchers::default(),
     };
 
     // ---- background tasks ----------------------------------------------------------------

@@ -42,6 +42,8 @@ fn lobby_row(r: &tokio_postgres::Row) -> Value {
         "round_count": r.get::<_, Option<i16>>("round_count"),
         "confirmed": r.get::<_, i64>("confirmed"),
         "candidates": r.get::<_, i64>("candidates"),
+        "creator_wallet": r.get::<_, Option<String>>("creator_wallet"),
+        "creator_handle": r.get::<_, Option<String>>("creator_handle"),
         "fill_deadline": r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("fill_deadline_ts").map(ts_ms),
         "created_at": ts_ms(r.get::<_, chrono::DateTime<chrono::Utc>>("created_at")),
     })
@@ -58,7 +60,9 @@ pub async fn get_lobby(
             r#"
             SELECT m.id, m.onchain_match_id, m.status::text AS status, m.feed_symbol,
                    m.buy_in_chips, m.mint, m.min_players, m.max_players, m.round_count,
-                   m.fill_deadline_ts, m.created_at,
+                   m.fill_deadline_ts, m.created_at, m.creator_wallet,
+                   (SELECT pm.handle FROM profile_metadata pm
+                    WHERE pm.wallet_address = m.creator_wallet) AS creator_handle,
                    count(sc.*) FILTER (WHERE sc.status = 'confirmed') AS confirmed,
                    count(sc.*) FILTER (WHERE sc.status IN ('reported','candidate')) AS candidates
             FROM matches m
@@ -94,7 +98,9 @@ pub async fn get_live(
     let rows = client
         .query(
             &format!(
-                r#"SELECT {} FROM matches m
+                r#"SELECT {}, (SELECT count(*) FROM match_seats ms
+                                WHERE ms.match_id = m.id AND ms.left_at IS NULL) AS confirmed
+                   FROM matches m
                    WHERE m.status IN ('sealing', 'live', 'settlement_pending')
                    ORDER BY m.live_start_ts DESC NULLS LAST LIMIT $1"#,
                 db::MATCH_COLUMNS
@@ -102,11 +108,30 @@ pub async fn get_live(
             &[&q.limit.clamp(1, 200)],
         )
         .await?;
+    let wallets: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.get::<_, Option<String>>("creator_wallet"))
+        .collect();
+    let handles = db::handles_for_wallets(&client, &wallets)
+        .await
+        .unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
         let m = db::MatchRow::from_row(r)?;
+        let confirmed: i64 = r.get("confirmed");
         let tick =
             crate::config::feed_oracle_symbol(&m.feed_symbol).and_then(|s| st.price.latest(s));
+        let stats = match st.registry.get(&m.id) {
+            Some(handle) => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if handle.cmd.send(Cmd::LiveStats(tx)).await.is_ok() {
+                    rx.await.unwrap_or_default()
+                } else {
+                    Default::default()
+                }
+            }
+            None => Default::default(),
+        };
         out.push(json!({
             "match_id": m.id,
             "onchain_match_id": m.onchain_match_id,
@@ -115,9 +140,16 @@ pub async fn get_live(
             "buy_in": m.buy_in,
             "chips_token_mint": m.mint,
             "round_count": m.round_count,
+            "max_players": m.max_players,
+            "confirmed": confirmed,
+            "creator_wallet": m.creator_wallet,
+            "creator_handle": m.creator_wallet.as_ref().and_then(|w| handles.get(w)),
             "live_start": m.live_start_ts.map(ts_ms),
             "scheduled_end": m.scheduled_end_ts.map(ts_ms),
             "feed_price": tick.as_ref().map(|t| t.price.clone()),
+            "pot": stats.pot,
+            "round": stats.round,
+            "watchers": st.watchers.count(&m.id),
         }));
     }
     Ok(Json(
@@ -125,45 +157,109 @@ pub async fn get_live(
     ))
 }
 
-/// `GET /v1/matches/history` — terminal matches, newest first.
+/// Opaque keyset cursor for `/matches/history`: `"{ended_at_ms}.{match_id}"`.
+fn encode_history_cursor(ended_at_ms: i64, id: uuid::Uuid) -> String {
+    format!("{ended_at_ms}.{id}")
+}
+
+fn parse_history_cursor(cursor: &str) -> Result<(i64, uuid::Uuid), ApiError> {
+    let (ms, id) = cursor
+        .split_once('.')
+        .ok_or_else(|| ApiError::bad_request("malformed cursor"))?;
+    let ms: i64 = ms
+        .parse()
+        .map_err(|_| ApiError::bad_request("malformed cursor"))?;
+    let id = uuid::Uuid::parse_str(id).map_err(|_| ApiError::bad_request("malformed cursor"))?;
+    Ok((ms, id))
+}
+
+/// `GET /v1/matches/history` — terminal matches, newest first, real keyset pagination.
 pub async fn get_history(
     State(st): State<AppState>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let client = st.pool.get().await?;
+    let limit = q.limit.clamp(1, 200);
+    let cursor = q
+        .cursor
+        .as_deref()
+        .map(parse_history_cursor)
+        .transpose()?;
+    let cursor_ts = cursor.map(|(ms, _)| chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default());
+    let cursor_id = cursor.map(|(_, id)| id);
     let rows = client
         .query(
             r#"
-            SELECT id, onchain_match_id, status::text AS status, feed_symbol, buy_in_chips,
-                   min_players, max_players, round_count, void_kind, settled_at, voided_at,
-                   created_at
-            FROM matches
-            WHERE status IN ('settled', 'voided')
-            ORDER BY COALESCE(settled_at, voided_at, created_at) DESC
+            SELECT m.id, m.onchain_match_id, m.status::text AS status, m.feed_symbol,
+                   m.buy_in_chips, m.min_players, m.max_players, m.round_count, m.void_kind,
+                   m.final_pot_chips, m.rake_chips,
+                   m.settlement_price_wad::text AS settlement_price_wad, m.settlement_tx_sig,
+                   COALESCE(m.settled_at, m.voided_at, m.created_at) AS ended_at,
+                   w.wallet_address AS winner_wallet, w.pot_won_chips AS winner_pot_won,
+                   pm.handle AS winner_handle
+            FROM matches m
+            LEFT JOIN LATERAL (
+                SELECT ms.wallet_address, ms.pot_won_chips
+                FROM match_seats ms
+                WHERE ms.match_id = m.id AND ms.pot_won_chips > 0
+                ORDER BY ms.pot_won_chips DESC, ms.seat_index ASC
+                LIMIT 1
+            ) w ON true
+            LEFT JOIN profile_metadata pm ON pm.wallet_address = w.wallet_address
+            WHERE m.status IN ('settled', 'voided')
+              AND ($2::timestamptz IS NULL
+                   OR (COALESCE(m.settled_at, m.voided_at, m.created_at), m.id) < ($2, $3::uuid))
+            ORDER BY COALESCE(m.settled_at, m.voided_at, m.created_at) DESC, m.id DESC
             LIMIT $1
             "#,
-            &[&q.limit.clamp(1, 200)],
+            &[&(limit + 1), &cursor_ts, &cursor_id],
         )
         .await?;
-    let out: Vec<Value> = rows
+    let has_more = rows.len() as i64 > limit;
+    let page = &rows[..(limit as usize).min(rows.len())];
+    let next_cursor = if has_more {
+        page.last().map(|r| {
+            encode_history_cursor(
+                ts_ms(r.get::<_, chrono::DateTime<chrono::Utc>>("ended_at")) as i64,
+                r.get("id"),
+            )
+        })
+    } else {
+        None
+    };
+    let out: Vec<Value> = page
         .iter()
         .map(|r| {
+            let winner_wallet: Option<String> = r.get("winner_wallet");
+            let winner = winner_wallet.map(|wallet| {
+                json!({
+                    "wallet": wallet,
+                    "handle": r.get::<_, Option<String>>("winner_handle"),
+                    "pot_won": r.get::<_, Option<i64>>("winner_pot_won"),
+                })
+            });
             json!({
                 "match_id": r.get::<_, uuid::Uuid>("id"),
                 "onchain_match_id": r.get::<_, i64>("onchain_match_id") as u64,
                 "phase": r.get::<_, String>("status"),
                 "feed": r.get::<_, Option<String>>("feed_symbol"),
                 "buy_in": r.get::<_, Option<i64>>("buy_in_chips").unwrap_or(0),
+                "max_players": r.get::<_, Option<i16>>("max_players"),
                 "void_kind": r.get::<_, Option<String>>("void_kind"),
-                "ended_at": r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("settled_at")
-                    .or(r.get::<_, Option<chrono::DateTime<chrono::Utc>>>("voided_at"))
-                    .map(ts_ms),
+                "final_pot": r.get::<_, Option<i64>>("final_pot_chips"),
+                "rake": r.get::<_, Option<i64>>("rake_chips"),
+                "settlement_price_wad": r.get::<_, Option<String>>("settlement_price_wad"),
+                "settlement_tx_sig": r.get::<_, Option<String>>("settlement_tx_sig"),
+                "ended_at": ts_ms(r.get::<_, chrono::DateTime<chrono::Utc>>("ended_at")),
+                "winner": winner,
             })
         })
         .collect();
-    Ok(Json(
-        json!({ "v": 1, "server_time_ms": now_ms(), "matches": out }),
-    ))
+    Ok(Json(json!({
+        "v": 1, "server_time_ms": now_ms(),
+        "matches": out,
+        "next_cursor": next_cursor,
+    })))
 }
 
 /// `GET /v1/wallets/{wallet}/active` — cold-return session restore.
