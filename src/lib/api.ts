@@ -115,7 +115,7 @@ export async function ensureSession(
 // ---------------------------------------------------------------------------
 
 interface RequestOpts {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'PUT'
   body?: unknown
   auth?: boolean // attach the Bearer session
   signal?: AbortSignal
@@ -176,6 +176,10 @@ export function parseJsonU64Safe(text: string): unknown {
 
 function postJson<T>(path: string, body: unknown, auth: boolean): Promise<T> {
   return request<T>(path, { method: 'POST', body, auth })
+}
+
+function putJson<T>(path: string, body: unknown, auth: boolean): Promise<T> {
+  return request<T>(path, { method: 'PUT', body, auth })
 }
 
 /** Build a `?a=1&b=2` query string, skipping null/undefined values. */
@@ -319,6 +323,8 @@ export interface LobbyRoom {
   round_count: number | null
   confirmed: number
   candidates: number
+  creator_wallet: string | null
+  creator_handle: string | null
   fill_deadline: number | null
   created_at: number
 }
@@ -330,9 +336,23 @@ export interface LiveMatch {
   feed: string
   buy_in: number
   round_count: number | null
+  max_players: number | null
+  confirmed: number | null
+  creator_wallet: string | null
+  creator_handle: string | null
   live_start: number | null
   scheduled_end: number | null
   feed_price: string | number | null
+  /** In-memory engine read — `null` when no actor is resident (rare; treat as unknown). */
+  pot: number | null
+  round: number | null
+  watchers: number
+}
+
+export interface HistoryWinner {
+  wallet: string
+  handle: string | null
+  pot_won: number | null
 }
 
 export interface HistoryMatch {
@@ -341,8 +361,14 @@ export interface HistoryMatch {
   phase: string
   feed: string
   buy_in: number
+  max_players: number | null
   void_kind: string | null
+  final_pot: number | null
+  rake: number | null
+  settlement_price_wad: string | null
+  settlement_tx_sig: string | null
   ended_at: number | null
+  winner: HistoryWinner | null
 }
 
 export interface ActiveSeat {
@@ -362,6 +388,49 @@ export interface Claimable {
   refund_amount_hint: number | null
 }
 
+/** Post-settlement reveal block (`predictions[]` mirrors the on-chain audit — additive). */
+export interface RevealBlock {
+  settlement_price_wad: string | null
+  predictions: {
+    engine_seat: number
+    wallet: string | null
+    source: 'sealed' | 'spot'
+    prediction_wad: string | null
+    payout_chips: number | null
+    pot_won_chips: number | null
+  }[] | null
+  rake: number | null
+  final_pot_chips: number | null
+  tx_sig: string | null
+}
+
+export interface LeaderboardEntry {
+  rank: number
+  wallet: string
+  handle: string | null
+  matches: number
+  wins: number
+  net_chips: number
+  best_pot: number | null
+}
+
+export interface ProfileStats {
+  tables_played: number
+  pots_won: number
+  net_chips: number
+  best_pot: number | null
+}
+
+export interface ProfileResponse {
+  v: number
+  server_time_ms: number
+  wallet: string
+  handle: string | null
+  avatar_uri: string | null
+  avatar_seed: string | null
+  stats: ProfileStats
+}
+
 /** `GET /v1/matches/{id}` — full detail (params, timing, seats, reveal). */
 export interface MatchDetail {
   v: number
@@ -371,6 +440,8 @@ export interface MatchDetail {
   phase: string
   visibility: string
   feed: string
+  creator_wallet: string | null
+  creator_handle: string | null
   params: {
     buy_in: number
     entry_fee: number
@@ -400,6 +471,7 @@ export interface MatchDetail {
   seats: {
     seat_index: number
     wallet: string
+    handle: string | null
     sealed: boolean
     prediction_source: string | null
     stack: number | null
@@ -407,6 +479,11 @@ export interface MatchDetail {
     total_contribution: number | null
     folded: boolean | null
     all_in: boolean | null
+    /** Settlement outcome — null pre-settlement/for legacy matches. `pot_won_chips`,
+     *  not `payout_chips`, is the winner signal (payout includes the unbet remainder). */
+    payout_chips: number | null
+    pot_won_chips: number | null
+    prediction_wad: string | null
   }[]
   pot: number | null
   round: number | null
@@ -414,7 +491,7 @@ export interface MatchDetail {
   to_act: number | null
   /** The open turn (server ≥ turn-recovery patch) — carries the TRUE action deadline. */
   turn?: { seat: number; to_call: number; min_raise_to: number; deadline_ms: number } | null
-  reveal: unknown | null
+  reveal: RevealBlock | null
   last_seq: number
   head: string
   void_kind: string | null
@@ -475,7 +552,7 @@ export const api = {
       `/matches/live${qs({ cursor: opts.cursor, limit: opts.limit })}`,
     ),
   getHistory: (opts: { cursor?: string; limit?: number } = {}) =>
-    request<{ v: number; server_time_ms: number; matches: HistoryMatch[] }>(
+    request<{ v: number; server_time_ms: number; matches: HistoryMatch[]; next_cursor: string | null }>(
       `/matches/history${qs({ cursor: opts.cursor, limit: opts.limit })}`,
     ),
 
@@ -488,6 +565,17 @@ export const api = {
     request<{ v: number; server_time_ms: number; wallet: string; claimables: Claimable[] }>(
       `/wallets/${encodeURIComponent(wallet)}/claimables`,
     ),
+
+  // — leaderboard / profiles —
+  getLeaderboard: (opts: { period: 'day' | 'all'; limit?: number }) =>
+    request<{ v: number; server_time_ms: number; period: string; leaders: LeaderboardEntry[] }>(
+      `/leaderboard${qs({ period: opts.period, limit: opts.limit })}`,
+    ),
+  getProfile: (wallet: string) =>
+    request<ProfileResponse>(`/profiles/${encodeURIComponent(wallet)}`),
+  /** Bearer — set your own handle (+ optional avatar seed). */
+  updateProfile: (body: { handle: string; avatar_seed?: string }) =>
+    putJson<ProfileResponse>('/profiles/me', body, true),
 }
 
 /** Re-export for callers that annotate amounts. */

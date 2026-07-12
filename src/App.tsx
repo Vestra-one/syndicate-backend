@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { TableCanvas } from '@/components/table/TableCanvas'
-import { Dashboard } from '@/components/hud/Dashboard'
+import { Room } from '@/components/room/Room'
 import { Hud } from '@/components/hud/Hud'
+import { TxCeremony } from '@/components/hud/TxCeremony'
 import { ComingSoon } from '@/components/coming-soon/ComingSoon'
 import { useGameStore } from '@/store/gameStore'
 import { startPriceFeed } from '@/lib/realtime/priceFeed'
@@ -177,6 +178,47 @@ function Game() {
     }
   }, [])
 
+  // DEV-only: populate the Room page's Live/Play/Past sections + rail with
+  // seeded data so the lobby can be iterated headlessly without a live backend.
+  //   window.__mockRoom()
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as { __mockRoom?: () => void }).__mockRoom = () => {
+      const U = (n: number) => BigInt(Math.round(n * 1e6))
+      const now = Date.now()
+      useGameStore.setState({
+        view: 'discovery',
+        discoveryStatus: 'ready',
+        discoveryUpdatedAt: now,
+        walletAddress: 'H9Qoft4c9k2rXexampleRoomMockWalletDevOnly98of',
+        chipBalance: U(42),
+        activeGames: [
+          { matchId: 'live-1', feed: 'BTC/USD', buyIn: U(10), potSize: U(512.5), spectators: 87, actionsPerMin: 3, startedAt: now - 300_000, seated: 5, maxPlayers: 5, round: 3, roundCount: 4, creatorHandle: 'The Duchess' },
+          { matchId: 'live-2', feed: 'ETH/USD', buyIn: U(5), potSize: U(86.5), spectators: 12, actionsPerMin: 1, startedAt: now - 180_000, seated: 4, maxPlayers: 5, round: 2, roundCount: 4 },
+        ],
+        upcomingGames: [
+          { matchId: 'up-1', feed: 'BTC/USD', buyIn: U(10), entryFee: U(0.5), seated: 2, maxPlayers: 5, fillDeadline: now + 134_000, creatorHandle: 'The Duchess' },
+          { matchId: 'up-2', feed: 'SOL/USD', buyIn: U(50), entryFee: U(1), seated: 1, maxPlayers: 6, fillDeadline: now + 812_000 },
+        ],
+        historyGames: [
+          { matchId: 'past-1', feed: 'BTC/USD', buyIn: U(10), maxPlayers: 6, voidKind: null, finalPot: U(284), rake: U(2.84), settlementPriceWad: '63209500000000000000000', settlementTxSig: '5KxDevMockSolscanSigPlaceholder', endedAt: now - 720_000, winner: { wallet: '9aQrDevMockWinnerWalletPlaceholder1234mW4d', handle: 'The Chancellor', potWon: U(280) } },
+        ],
+        historyStatus: 'ready',
+        leaderboard: {
+          entries: [
+            { rank: 1, wallet: '3xVmDevMockWalletPlaceholder1234abcdk2Fp', handle: 'Quiet Whale', matches: 12, wins: 7, net_chips: 512_500_000, best_pot: 512_500_000 },
+            { rank: 2, wallet: '9aQrDevMockWinnerWalletPlaceholder1234mW4d', handle: 'The Chancellor', matches: 9, wins: 4, net_chips: 284_000_000, best_pot: 284_000_000 },
+          ],
+        },
+        profile: {
+          wallet: 'H9Qoft4c9k2rXexampleRoomMockWalletDevOnly98of',
+          handle: 'Night Auditor',
+          stats: { tablesPlayed: 12, potsWon: 4, netChips: U(86.5), bestPot: U(120) },
+        },
+      })
+    }
+  }, [])
+
   return (
     <>
       {/* Always-on 3D table: candlelit felt + price cabinet + pot heap. Live mode
@@ -186,8 +228,13 @@ function Game() {
 
       {/* Surface switch — one panel at a time. The HUD layers players (Seats),
           the pot label, and the betting panel over the 3D table during a match. */}
-      {view === 'discovery' && <Dashboard />}
+      {view === 'discovery' && <Room />}
       {view === 'table' && <Hud />}
+
+      {/* Mounted once, above both views — the join/create deposit ceremony now
+          starts on the Room page (discovery) and can carry across the confirmed
+          hand-off into the table view without remounting. */}
+      <TxCeremony />
     </>
   )
 }

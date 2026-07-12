@@ -24,6 +24,7 @@ export function WalletBridgeSync() {
   // Fire pending onConnected callback when the wallet connects
   useEffect(() => {
     if (connected && publicKey) {
+      useGameStore.setState({ walletError: null })
       const cb = walletBridge.onConnected
       if (cb) {
         walletBridge.onConnected = null

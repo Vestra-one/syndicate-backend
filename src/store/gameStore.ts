@@ -29,10 +29,11 @@ import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import type { PriceRange } from '@/lib/priceRanges'
 import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
-import { fetchActiveGames, fetchUpcomingGames } from '@/lib/discovery'
+import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
 import { log } from '@/lib/log'
 import { ed25519 } from '@noble/curves/ed25519' // TEMP: seal signature self-verify diagnostic
 import { walletBridge } from '@/lib/walletBridge' // TEMP: seal signature diagnostic (wallet name)
+import type { PastHand } from '@/lib/protocol'
 import {
   api,
   ensureSession,
@@ -40,6 +41,7 @@ import {
   type ApiConfig,
   type CreateIntentResponse,
   type MatchDetail,
+  type LeaderboardEntry,
 } from '@/lib/api'
 
 /** Resolved Play Now action: join an existing open table, or create a new one. */
@@ -108,6 +110,17 @@ export type AppView = 'discovery' | 'table'
 /** Discovery feed load state — distinguishes "empty" from "still loading" from "failed". */
 export type DiscoveryStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+/** The join/create sheet currently open over the Room page (discovery view), if any. */
+export type RoomModal = { kind: 'join'; matchId: string } | { kind: 'create' } | null
+
+export type LeaderboardPeriod = 'day' | 'all'
+
+export interface PlayerProfile {
+  wallet: string
+  handle: string | null
+  stats: { tablesPlayed: number; potsWon: number; netChips: Chips; bestPot: Chips | null }
+}
+
 interface GameState {
   view: AppView
   activeGames: LiveGame[]
@@ -167,11 +180,21 @@ interface GameState {
   playResolving: boolean // true while deciding join-vs-create
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
+  walletError: string | null // wallet-extension connect failure (set by main.tsx's onError, cleared on connect)
   lobbySeated: number | null // seats already taken in the room being joined (from the lobby listing)
   lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
   txProgress: TxCommit | null // live commit tx being narrated by the waiting ceremony
   pendingInvite: string | null // matchId from a ?table=… deep-link, awaiting the user's accept
   inviteFrom: string | null // the inviter's pseudonymous alias from the deep-link's ?from= param
+
+  // The Room lobby (discovery view): join/create sheet + settled hands + leaderboard + profile
+  roomModal: RoomModal
+  historyGames: PastHand[]
+  historyCursor: string | null
+  historyStatus: DiscoveryStatus
+  leaderboardPeriod: LeaderboardPeriod
+  leaderboard: { entries: LeaderboardEntry[] } | null
+  profile: PlayerProfile | null
 
   // actions
   fetchBalance: () => Promise<void>
@@ -188,7 +211,9 @@ interface GameState {
   resumeActiveTable: (wallet: string) => Promise<void>
   enterTable: (matchId: string) => Promise<void>
   leaveToDiscovery: () => void
-  backToDashboard: () => void
+  /** Close the join/create sheet and clear its resolved state. Replaces the old
+   *  `backToDashboard` — the Room page never leaves `view: 'discovery'` for this. */
+  closeRoomModal: () => void
   connect: () => Promise<void>
   disconnect: () => void
   joinGame: (matchId: string) => Promise<void>
@@ -199,6 +224,8 @@ interface GameState {
   setCreateFillWindow: (sec: number) => void
   /** Switch the market (price feed) for the table being created, keeping the host's buy-in & fill window. */
   setCreateFeed: (feed: string) => void
+  /** Set the max-seats for the table being created — clamped to createLimits. */
+  setCreateSeats: (seats: number) => void
   dismissInvite: () => void
   joinTable: () => Promise<void>
   createTable: () => Promise<void>
@@ -214,6 +241,14 @@ interface GameState {
   refund: () => Promise<string | null>
   setReviewing: (v: boolean) => void
   playAgain: () => Promise<void>
+
+  /** Load a page of settled hands. `more: true` appends the next page via cursor. */
+  loadHistory: (opts?: { more?: boolean }) => Promise<void>
+  loadLeaderboard: (period?: LeaderboardPeriod) => Promise<void>
+  /** Load the connected wallet's profile (handle + stats). No-op when disconnected. */
+  loadProfile: () => Promise<void>
+  /** Claim a handle for the connected wallet (signs in if needed). */
+  saveHandle: (handle: string) => Promise<void>
 }
 
 /** One street's scheduled window, epoch-ms. `close` ends betting; `end` includes observation. */
@@ -230,6 +265,8 @@ export interface CreateLimits {
   buyInMax: number
   fillWindowMinSec: number
   fillWindowMaxSec: number
+  playersMin: number
+  playersMax: number
 }
 
 /** Hard floors on host-chosen create params (independent of the config's own range). */
@@ -245,7 +282,9 @@ function configToCreateLimits(config: ApiConfig): CreateLimits {
   const buyInMax = Math.max(buyInMin, b.buy_in.max || 1_000_000_000)
   const fillWindowMinSec = Math.max(MIN_FILL_WINDOW_SEC, b.fill_window_sec.min || MIN_FILL_WINDOW_SEC)
   const fillWindowMaxSec = Math.max(fillWindowMinSec, b.fill_window_sec.max || 86_400)
-  return { buyInMin, buyInMax, fillWindowMinSec, fillWindowMaxSec }
+  const playersMin = Math.max(2, b.players.min || 2)
+  const playersMax = Math.max(playersMin, b.players.max || 6)
+  return { buyInMin, buyInMax, fillWindowMinSec, fillWindowMaxSec, playersMin, playersMax }
 }
 
 const ORACLE_UNAVAILABLE_MSG = 'Settlement paused — the price oracle is unavailable. Your funds are safe and fully refundable.'
@@ -699,11 +738,20 @@ export const useGameStore = create<GameState>((set, get) => ({
   playResolving: false,
   playMode: null,
   playError: null,
+  walletError: null,
   lobbySeated: null,
   lastTx: null,
   txProgress: null,
   pendingInvite: null,
   inviteFrom: null,
+
+  roomModal: null,
+  historyGames: [],
+  historyCursor: null,
+  historyStatus: 'idle',
+  leaderboardPeriod: 'all',
+  leaderboard: null,
+  profile: null,
 
   fetchBalance: async () => {
     if (!adapters) adapters = createAdapters()
@@ -837,15 +885,16 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   /**
-   * Back out of the current create/join Lobby (pre-seat) to the dashboard. The cached REST
+   * Close the join/create sheet (pre-seat) and stay on the Room page. The cached REST
    * session (24h Bearer) persists, so the next create/join skips the wallet-signed nonce
-   * handshake — avoiding the "double sign" this button exists to work around via refresh.
+   * handshake. Leaves the gateway connected (cheap; `terms` is cleared so any stray
+   * `seat_update` for the abandoned room is harmless).
    */
-  backToDashboard: () => {
+  closeRoomModal: () => {
     joinMatchId = null
     createCtx = null
     set({
-      view: 'discovery',
+      roomModal: null,
       playMode: null,
       playResolving: false,
       playError: null,
@@ -856,26 +905,30 @@ export const useGameStore = create<GameState>((set, get) => ({
       createLimits: null,
       roundStartedAt: null,
     })
-    void get().loadDiscovery()
   },
 
-  /** Join a FILLING game by its match UUID — connect wallet, open a REST session, load the
-   *  match detail (§5), then show the deposit Lobby. */
+  /** Join a FILLING game by its match UUID — opens the join sheet immediately (resolving
+   *  spinner), then connects the wallet, opens a REST session, and loads the match detail
+   *  (§5). Stays on the Room page throughout (§ locked decision: in-page modals). */
   joinGame: async (matchId: string) => {
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
-    set({ playError: null, pendingInvite: null, inviteFrom: null })
+    set({
+      playError: null, pendingInvite: null, inviteFrom: null,
+      roomModal: { kind: 'join', matchId }, playResolving: true, playMode: null,
+      match: null, terms: null, seated: false, lobbySeated: null,
+    })
 
     try {
       const addr = await adapters.wallet.connect()
       set({ walletAddress: addr })
     } catch {
-      set({ playError: 'Wallet connection was cancelled.' })
+      set({ playResolving: false, playError: 'Wallet connection was cancelled.' })
       return
     }
 
-    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
+    set({ status: 'connecting' })
     const wallet = adapters.wallet.address()
     if (!wallet || !(await ensureRestSession(adapters, wallet, set))) {
       set({ playResolving: false, playError: 'Could not reach the table server (sign-in failed).' })
@@ -911,23 +964,28 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  /** Create a new game — connect wallet, open a REST session, load `GET /v1/config`, then
-   *  show the create Lobby (the intent is reserved later, in createTable). */
+  /** Create a new game — opens the create sheet immediately, then connects the wallet,
+   *  opens a REST session, and loads `GET /v1/config` (the intent is reserved later, in
+   *  createTable). Stays on the Room page throughout. */
   createGame: async () => {
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
-    set({ playError: null })
+    set({
+      playError: null,
+      roomModal: { kind: 'create' }, playResolving: true, playMode: null,
+      match: null, terms: null, seated: false, lobbySeated: null,
+    })
 
     try {
       const addr = await adapters.wallet.connect()
       set({ walletAddress: addr })
     } catch {
-      set({ playError: 'Wallet connection was cancelled.' })
+      set({ playResolving: false, playError: 'Wallet connection was cancelled.' })
       return
     }
 
-    set({ view: 'table', status: 'connecting', playResolving: true, playMode: null, match: null, terms: null, seated: false, lobbySeated: null })
+    set({ status: 'connecting' })
     const wallet = adapters.wallet.address()
     if (!wallet || !(await ensureRestSession(adapters, wallet, set))) {
       set({ playResolving: false, playError: 'Could not reach the table server (sign-in failed).' })
@@ -947,6 +1005,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           // Seed the host's editable choices with in-range defaults.
           buyIn: BigInt(clamp(Number(base.buyIn), limits.buyInMin, limits.buyInMax)),
           fillWindowSec: clamp(base.fillWindowSec ?? limits.fillWindowMinSec, limits.fillWindowMinSec, limits.fillWindowMaxSec),
+          maxPlayers: clamp(base.maxPlayers, limits.playersMin, limits.playersMax),
         },
         createLimits: limits,
         playMode: 'create',
@@ -969,6 +1028,13 @@ export const useGameStore = create<GameState>((set, get) => ({
     return { terms: { ...s.terms, fillWindowSec } }
   }),
 
+  setCreateSeats: (seats) => set((s) => {
+    if (!s.terms || !s.createLimits) return {}
+    const maxPlayers = clamp(Math.round(seats), Math.max(2, s.createLimits.playersMin), s.createLimits.playersMax)
+    const minPlayers = Math.min(s.terms.minPlayers, maxPlayers)
+    return { terms: { ...s.terms, maxPlayers, minPlayers } }
+  }),
+
   setCreateFeed: (feed) => set((s) => {
     if (!s.terms || !createCtx) return {}
     if (feed === s.terms.priceFeedId) return {}
@@ -985,6 +1051,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         smallBlind: BigInt(Math.max(1, Math.floor(Number(s.terms.buyIn) / 200))),
         bigBlind: BigInt(Math.max(2, Math.floor(Number(s.terms.buyIn) / 100))),
         fillWindowSec: s.terms.fillWindowSec,
+        maxPlayers: s.terms.maxPlayers,
+        minPlayers: s.terms.minPlayers,
       },
     }
   }),
@@ -1103,6 +1171,10 @@ export const useGameStore = create<GameState>((set, get) => ({
       set((s) => ({
         lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
+        // Hand off to the table view; the ceremony (mounted at the app root) keeps
+        // narrating its "you're in" beat across the flip, then dismisses itself.
+        view: 'table',
+        roomModal: null,
       }))
       // Report the deposit txhash so the backend RPC-verifies it into a candidate (§5).
       // Capital safety never depends on this — an unheard-of deposit is still refundable.
@@ -1200,6 +1272,10 @@ export const useGameStore = create<GameState>((set, get) => ({
         lastTx: { sig: txSig, label: 'Table created on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
         fillDeadline: Date.now() + cp.fill_window_sec * 1000,
+        // Hand off to the table view; the ceremony (mounted at the app root) keeps
+        // narrating its "your table is live" beat across the flip, then dismisses itself.
+        view: 'table',
+        roomModal: null,
       }))
       // Open the WS + subscribe to the new match so the waiting room gets live seat/phase pushes.
       if (matchUuid) {
@@ -1464,6 +1540,9 @@ export const useGameStore = create<GameState>((set, get) => ({
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
   playAgain: async () => {
     set({
+      // Back to the Room page first — createGame() now opens the create sheet as an
+      // overlay on discovery rather than switching views, so this must happen before it.
+      view: 'discovery',
       match: null,
       yourTurn: null,
       actPending: null,
@@ -1484,6 +1563,73 @@ export const useGameStore = create<GameState>((set, get) => ({
       streetSchedule: null,
     })
     await get().createGame()
+  },
+
+  loadHistory: async (opts) => {
+    const more = opts?.more ?? false
+    const cursor = more ? get().historyCursor ?? undefined : undefined
+    if (!more) set({ historyStatus: 'loading' })
+    try {
+      const { hands, nextCursor } = await fetchHistory(cursor)
+      set((s) => ({
+        historyGames: more ? [...s.historyGames, ...hands] : hands,
+        historyCursor: nextCursor,
+        historyStatus: 'ready',
+      }))
+    } catch (err) {
+      log.warn('[loadHistory] failed:', err)
+      if (!more) set({ historyStatus: 'error' })
+    }
+  },
+
+  loadLeaderboard: async (period) => {
+    const p = period ?? get().leaderboardPeriod
+    try {
+      const { leaders } = await api.getLeaderboard({ period: p })
+      set({ leaderboardPeriod: p, leaderboard: { entries: leaders } })
+    } catch (err) {
+      log.warn('[loadLeaderboard] failed:', err)
+    }
+  },
+
+  loadProfile: async () => {
+    const wallet = get().walletAddress
+    if (!wallet) {
+      set({ profile: null })
+      return
+    }
+    try {
+      const p = await api.getProfile(wallet)
+      set({
+        profile: {
+          wallet: p.wallet,
+          handle: p.handle,
+          stats: {
+            tablesPlayed: p.stats.tables_played,
+            potsWon: p.stats.pots_won,
+            netChips: BigInt(p.stats.net_chips),
+            bestPot: p.stats.best_pot != null ? BigInt(p.stats.best_pot) : null,
+          },
+        },
+      })
+    } catch (err) {
+      log.warn('[loadProfile] failed:', err)
+    }
+  },
+
+  saveHandle: async (handle) => {
+    if (!adapters) adapters = createAdapters()
+    const addr = adapters.wallet.address() ?? (await adapters.wallet.connect())
+    set({ walletAddress: addr })
+    if (!(await ensureRestSession(adapters, addr, set))) {
+      throw new Error('Could not sign in to save your handle.')
+    }
+    const res = await api.updateProfile({ handle })
+    set((s) => ({
+      profile: s.profile
+        ? { ...s.profile, handle: res.handle }
+        : { wallet: res.wallet, handle: res.handle, stats: { tablesPlayed: 0, potsWon: 0, netChips: 0n, bestPot: null } },
+    }))
   },
 }))
 

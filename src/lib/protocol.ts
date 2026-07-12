@@ -220,6 +220,12 @@ export interface LiveGame {
   spectators: number
   actionsPerMin: number
   startedAt: number
+  seated?: number
+  maxPlayers?: number
+  round?: number
+  roundCount?: number
+  creatorWallet?: string
+  creatorHandle?: string
 }
 
 export interface UpcomingGame {
@@ -232,9 +238,27 @@ export interface UpcomingGame {
   maxPlayers: number
   minPlayers?: number
   fillDeadline?: number
+  creatorWallet?: string
+  creatorHandle?: string
 }
 
 export type DashboardSortKey = 'gameTime' | 'potSize' | 'buyIn' | 'newest'
+
+/** A settled (or voided) hand for the "Past hands" section — mapped from `HistoryMatch`. */
+export interface PastHand {
+  matchId: string
+  onchainMatchId?: string
+  feed: string
+  buyIn: Chips
+  maxPlayers?: number
+  voidKind: string | null
+  finalPot: Chips | null
+  rake: Chips | null
+  settlementPriceWad: string | null
+  settlementTxSig: string | null
+  endedAt: number
+  winner: { wallet: string; handle: string | null; potWon: Chips | null } | null
+}
 
 export interface MatchHistorySummary {
   matchId: string

@@ -8,14 +8,31 @@ import { Seats } from './Seats'
 import { TurnBanner } from './TurnBanner'
 import { ActionFeed } from './ActionFeed'
 import { Resolution } from './Resolution'
-import { Lobby } from './Lobby'
-import { TxCeremony } from './TxCeremony'
 import { WaitingRoom, useWaiting } from './WaitingRoom'
-import { useLobbyPreview } from './Lobby'
 import { PriceBoardTabs } from './PriceBoardTabs'
 import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
 import './hud.css'
+
+/**
+ * Read-only stand-in for YourPosition + BettingPanel when the viewer holds no seat
+ * at this match (Room's "Watch →" spectate path, unauthenticated). Those two panels
+ * assume a seated viewer throughout (seal input, fold/call buttons, timeout default)
+ * — showing them to a spectator makes a purely observational visit look actionable.
+ */
+function SpectatorPanel() {
+  const phase = useGameStore((s) => s.match?.phase)
+  const hint =
+    phase === 'SEALING' ? 'Predictions are sealing — no one can see a call until reveal.'
+    : phase === 'LIVE' ? 'Predictions stay sealed until the hand ends.'
+    : 'Watching this hand.'
+  return (
+    <div className="betpanel panel">
+      <div className="panel-title">Spectating</div>
+      <p className="seal-note eyebrow">{hint}</p>
+    </div>
+  )
+}
 
 function TxBanner() {
   const lastTx = useGameStore((s) => s.lastTx)
@@ -63,13 +80,15 @@ export function Hud() {
   // While the table is filling, the full-surface WaitingRoom console owns the
   // screen (its own rails, seat ring, dock). Suppress the in-match chrome so the
   // two layouts don't stack; the brand + wallet header stays put in both.
+  //
+  // The join/create sheet lives on the Room page (discovery view), so a seated
+  // player always arrives here already seated. But Room's "Watch →" (LiveNow)
+  // also routes here to spectate someone else's hand, unauthenticated — `match
+  // .yourSeat` is only set when a seat's wallet matches ours, so it's the ground
+  // truth for "do I actually hold a seat here" regardless of how we arrived.
   const { active: waiting } = useWaiting()
-  // While the join/create card is previewing a table you haven't sat at yet, the
-  // live-table chrome (opponent pods, feed, betting panel, your-position) has no
-  // real data — showing it ghosted reads as a bug, so suppress it entirely. The
-  // Lobby draws its own anchored seat ring instead.
-  const { open: lobby } = useLobbyPreview()
-  const inMatch = !waiting && !lobby
+  const inMatch = !waiting
+  const seatedHere = useGameStore((s) => s.match?.yourSeat != null)
   return (
     <div className="hud">
       {inMatch && <Seats />}
@@ -90,16 +109,20 @@ export function Hud() {
 
       {inMatch && (
         <footer className="hud-bottom">
-          <YourPosition />
-          <BettingPanel />
+          {seatedHere ? (
+            <>
+              <YourPosition />
+              <BettingPanel />
+            </>
+          ) : (
+            <SpectatorPanel />
+          )}
           <RoundStatus />
         </footer>
       )}
 
       <WaitingRoom />
       <TxBanner />
-      <Lobby />
-      <TxCeremony />
       <Resolution />
       <PriceChartOverlay />
     </div>
