@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
+import { typicalMove } from '@/lib/edge'
 import { useNow } from '@/lib/useNow'
 import { formatChips, formatCountdown } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
@@ -111,8 +112,12 @@ function phaseHint(phase: string | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 /** The relative offsets the quick-chips set the call to, around the live price. */
-const SEAL_OFFSETS = [-0.01, -0.005, 0, 0.005, 0.01] as const
-const offsetLabel = (o: number) => (o === 0 ? 'now' : `${o > 0 ? '+' : ''}${(o * 100).toFixed(o % 0.01 === 0 ? 0 : 1)}%`)
+/**
+ * Quick picks, in typical moves from the market (how far the price usually travels by
+ * settlement). Percent offsets were a trap: on a three-minute hand ±0.5% is many typical
+ * moves away — a call that almost never wins.
+ */
+const SEAL_PICKS = [-1, -0.5, 0, 0.5, 1] as const
 
 /** How far off spot a sealed call may sit before we block it as a fat-finger (§14.4). */
 const SEAL_BOUND = 0.5
@@ -165,10 +170,22 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
   const remaining = sealDeadline != null ? Math.max(0, sealDeadline - now) : null
   const closingSoon = remaining != null && remaining <= 10_000 && remaining > 0
 
-  const setOffset = (o: number) => {
+  // How far the market typically travels between now and settlement: the rest of the seal
+  // window, then every street with its pause.
+  const history = useGameStore((s) => s.priceHistory)
+  const handSec =
+    (remaining != null ? remaining / 1000 : 0) +
+    (terms?.roundDurationsSec ?? []).reduce((a, b) => a + b + 10, 0)
+  const move = typicalMove(history, handSec)
+  const fmtMove = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })
+  const moveText = move != null ? `$${fmtMove(move)}` : null
+
+  const setPick = (k: number) => {
     if (lastPrice == null) return
-    setText((lastPrice * (1 + o)).toFixed(decimals))
+    setText((lastPrice + k * (move ?? 0)).toFixed(decimals))
   }
+  const pickLabel = (k: number) =>
+    k === 0 || move == null ? 'market' : `${k > 0 ? '+' : '−'}$${fmtMove(Math.abs(k * move))}`
 
   const submit = () => {
     if (!valid || working) return
@@ -213,18 +230,25 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
       {!error && sealError && <div className="seal-error">{sealError}</div>}
 
       <div className="seal-offsets">
-        {SEAL_OFFSETS.map((o) => (
+        {SEAL_PICKS.map((k) => (
           <button
-            key={o}
+            key={k}
             className="seal-offset-chip"
-            onClick={() => setOffset(o)}
+            onClick={() => setPick(k)}
             disabled={lastPrice == null}
             type="button"
           >
-            {offsetLabel(o)}
+            {pickLabel(k)}
           </button>
         ))}
       </div>
+
+      {moveText && (
+        <p className="seal-guide">
+          The market typically moves about <b className="mono">±{moveText}</b> by settlement.
+          Sit on the market and you share it with everyone who did the same; step far out and you need a big move.
+        </p>
+      )}
 
       <p className="seal-note eyebrow">
         {waiting

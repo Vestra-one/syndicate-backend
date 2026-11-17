@@ -82,6 +82,9 @@ export function JoinSheet({ matchId }: { matchId: string }) {
       <div className="terms">
         <div className="term"><span>buy-in</span><b>{formatChips(terms.buyIn)} <i>USDC</i></b></div>
         <div className="term"><span>entry fee</span><b>{formatChips(terms.entryFee)} <i>USDC</i></b></div>
+        {(terms.ante ?? 0n) > 0n && (
+          <div className="term" title="Every seat puts this into the pot when the hand starts. Fold everyone out and the antes are yours."><span>ante</span><b>{formatChipsPrecise(terms.ante ?? 0n)} each</b></div>
+        )}
         <div className="term"><span>blinds</span><b>{formatChipsPrecise(terms.smallBlind)} / {formatChipsPrecise(terms.bigBlind)}</b></div>
         <div className="term"><span>rake</span><b>{(terms.rakeBps / 100).toFixed(2)}% <i>cap {formatChipsPrecise(terms.rakeCap)}</i></b></div>
         <div className="term"><span>rounds</span><b>{terms.roundCount} × {terms.roundDurationsSec[0] ?? 0}s</b></div>

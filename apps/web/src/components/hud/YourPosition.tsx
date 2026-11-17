@@ -1,6 +1,8 @@
 import { useGameStore } from '@/store/gameStore'
 import { formatMoney, formatPrice } from '@/lib/format'
 import type { DefaultAction } from '@/lib/protocol'
+import { edgeRead, typicalMove } from '@/lib/edge'
+import { useNow } from '@/lib/useNow'
 
 /**
  * "Your position" — the self-centric panel (replaces the old per-bet list).
@@ -24,6 +26,14 @@ export function YourPosition() {
   const predFloat = prediction != null ? prediction / 10 ** decimals : null
   const distance = predFloat != null && lastPrice != null ? lastPrice - predFloat : null
   const live = match?.phase === 'LIVE'
+  // Edge: the gap to your call against how far the market typically travels before
+  // settlement. Public data only — it says nothing about anyone else's call.
+  const history = useGameStore((s) => s.priceHistory)
+  const settlesAt = useGameStore((s) => s.streetSchedule?.at(-1)?.end ?? null)
+  const now = useNow(1000)
+  const secLeft = settlesAt != null ? Math.max(0, (settlesAt - now) / 1000) : null
+  const move = live && secLeft != null && secLeft > 0 ? typicalMove(history, secLeft) : null
+  const edge = distance != null && move != null ? edgeRead(distance, move) : null
   // The window closed and we never sealed — the prediction defaulted, and that
   // fact must persist through settlement so the final ranking stays explicable (§16).
   const defaulted = sealClosed && sealStatus !== 'sealed'
@@ -62,6 +72,19 @@ export function YourPosition() {
           <span className="eyebrow">market vs. your call</span>
           <span className={`mono ${distance >= 0 ? 'up' : 'down'}`}>
             ${money(Math.abs(distance))} {distance >= 0 ? 'above' : 'below'}
+          </span>
+        </div>
+      )}
+
+      {edge && move != null && (
+        <div className={`position-edge position-edge--${edge.level}`} title="How close the market is to your call, measured against how far it typically travels in the time left. It knows nothing about the other calls.">
+          <div className="position-edge-head">
+            <span className="eyebrow">your call</span>
+            <span className="position-edge-label">{edge.label}</span>
+          </div>
+          <div className="position-edge-bar" aria-hidden="true"><span style={{ width: `${Math.round(edge.fill * 100)}%` }} /></div>
+          <span className="position-edge-note eyebrow">
+            typical move left ±${money(move)}
           </span>
         </div>
       )}

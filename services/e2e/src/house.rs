@@ -510,6 +510,8 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
     let mut rng = Rng::new();
     let mut seal_tried: HashSet<String> = HashSet::new();
     let mut nonces: HashMap<u16, u64> = HashMap::new();
+    // What each bot sealed this hand (by seat) — its own call is all a bot knows.
+    let mut calls: HashMap<u16, i128> = HashMap::new();
     let deadline = std::time::Instant::now()
         + Duration::from_secs(
             house.fill_sec + room.total_betting_sec + room.begin_live_window_sec + 900,
@@ -574,12 +576,23 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     let call = (spot as f64 * (1.0 + drift)) as i128;
                     let target = timelock_target(room, &detail);
                     seal(ctx, bot, room, seat_index as u16, target, call).await;
+                    calls.insert(seat_index as u16, call);
                     println!("house: {} sealed", bot.name);
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
             "live" => {
-                act_if_ours(ctx, room, bots, &detail, &mut nonces, &mut rng).await;
+                act_if_ours(
+                    ctx,
+                    room,
+                    bots,
+                    house,
+                    &detail,
+                    &calls,
+                    &mut nonces,
+                    &mut rng,
+                )
+                .await;
             }
             _ => tokio::time::sleep(Duration::from_secs(2)).await,
         }
@@ -616,11 +629,25 @@ async fn spot_wad(ctx: &Ctx, house: &House, detail: &Value) -> Option<i128> {
 }
 
 /// If the open turn belongs to a bot, take it. Humans' turns are left alone.
+/// How a bot rates its own call: the gap to the market in typical moves (how far the price
+/// usually travels in the time left). The same public arithmetic the UI shows a player.
+#[derive(Clone, Copy, PartialEq)]
+enum Read {
+    InRange,
+    NeedsMove,
+    LongShot,
+    /// No price source or no sealed call on record (e.g. after a restart).
+    Blind,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn act_if_ours(
     ctx: &Ctx,
     room: &Room,
     bots: &[Player],
+    house: &House,
     detail: &Value,
+    calls: &HashMap<u16, i128>,
     nonces: &mut HashMap<u16, u64>,
     rng: &mut Rng,
 ) {
@@ -670,6 +697,30 @@ async fn act_if_ours(
     let max_total = seat["committed"].as_u64().unwrap_or(0) + stack;
     let can_raise = min_raise_to > 0 && min_raise_to <= max_total;
     let roll = rng.unit();
+    let pot = detail["pot"].as_u64().unwrap_or(0);
+
+    // Read the bot's own hand: where is the market relative to what it sealed?
+    let read = match (
+        calls.get(&(to_act as u16)),
+        spot_wad(ctx, house, detail).await,
+    ) {
+        (Some(&call), Some(spot)) if spot > 0 => {
+            let rounds = detail["params"]["round_count"].as_u64().unwrap_or(1).max(1);
+            let left = rounds.saturating_sub(round).saturating_add(1) as f64 / rounds as f64;
+            let sec_left = (room.total_betting_sec as f64 * left).max(5.0);
+            // ~0.009% of price per √second — BTC-like volatility.
+            let typical = spot as f64 * 0.00009 * sec_left.sqrt();
+            let moves = (spot - call).abs() as f64 / typical;
+            if moves <= 0.75 {
+                Read::InRange
+            } else if moves <= 2.0 {
+                Read::NeedsMove
+            } else {
+                Read::LongShot
+            }
+        }
+        _ => Read::Blind,
+    };
 
     use syndicate_shared::intent::{
         ACTION_TAG_BET_TO, ACTION_TAG_CALL, ACTION_TAG_CHECK, ACTION_TAG_FOLD, ACTION_TAG_RAISE_TO,
@@ -677,38 +728,53 @@ async fn act_if_ours(
     let fold = (ACTION_TAG_FOLD, 0, json!("fold"));
     let call = (ACTION_TAG_CALL, 0, json!("call"));
     let check = (ACTION_TAG_CHECK, 0, json!("check"));
+    // Bets are about half the pot, never below the minimum and never beyond the stack.
+    let raise_to = min_raise_to.max(current_bet + pot / 2).min(max_total);
     let raise = if current_bet > 0 {
         (
             ACTION_TAG_RAISE_TO,
-            min_raise_to,
-            json!({"kind": "raise_to", "amount": min_raise_to}),
+            raise_to,
+            json!({"kind": "raise_to", "amount": raise_to}),
         )
     } else {
         (
             ACTION_TAG_BET_TO,
-            min_raise_to,
-            json!({"kind": "bet_to", "amount": min_raise_to}),
+            raise_to,
+            json!({"kind": "bet_to", "amount": raise_to}),
         )
     };
+    // Value-bet a live call, bluff a dead one now and then, and respect the price of a call.
+    let cheap = to_call.saturating_mul(4) <= pot; // getting 4:1 or better
+    let fair = to_call.saturating_mul(2) <= pot; // getting 2:1 or better
     let (tag, amount, action) = if to_call == 0 {
-        if can_raise && roll < 0.30 {
+        let bet_freq = match read {
+            Read::InRange => 0.60,
+            Read::NeedsMove => 0.20,
+            Read::LongShot => 0.12,
+            Read::Blind => 0.25,
+        };
+        if can_raise && roll < bet_freq {
             raise
         } else {
             check
         }
-    } else if to_call.saturating_mul(5) > stack.saturating_mul(2) {
-        // Facing more than 40% of the stack: a coin flip between standing and folding.
-        if roll < 0.5 {
+    } else {
+        let (raise_freq, call_freq) = match read {
+            Read::InRange => (0.25, 1.0),
+            Read::NeedsMove if fair => (0.05, 0.75),
+            Read::NeedsMove => (0.0, 0.30),
+            Read::LongShot if cheap => (0.03, 0.45),
+            Read::LongShot => (0.03, 0.10),
+            Read::Blind if fair => (0.05, 0.80),
+            Read::Blind => (0.0, 0.40),
+        };
+        if can_raise && roll < raise_freq {
+            raise
+        } else if roll < call_freq {
             call
         } else {
             fold
         }
-    } else if can_raise && roll < 0.10 {
-        raise
-    } else if roll < 0.95 {
-        call
-    } else {
-        fold
     };
 
     // Nonces only have to be unused for the seat; starting from the clock keeps them fresh

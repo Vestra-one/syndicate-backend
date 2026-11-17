@@ -706,6 +706,7 @@ impl Actor {
             button: self.row.button.unwrap_or(0) as usize,
             small_blind: self.row.small_blind,
             big_blind: self.row.big_blind,
+            ante: crate::config::derive_ante(self.row.buy_in),
             round_count: self.row.round_count,
             round_durations_sec: self.row.round_durations_sec.clone(),
             observation_windows_sec: self.row.observation_windows_sec.clone(),

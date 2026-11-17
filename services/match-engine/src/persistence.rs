@@ -391,6 +391,7 @@ fn event_payload(event: &EngineLogEvent) -> Result<Value, PersistenceError> {
             "button": config.button,
             "small_blind": config.small_blind,
             "big_blind": config.big_blind,
+            "ante": config.ante,
             "round_count": config.round_count,
             "round_durations_sec": config.round_durations_sec,
             "observation_windows_sec": config.observation_windows_sec,
@@ -530,6 +531,7 @@ pub fn parse_persisted_event(payload: &Value) -> Result<EngineLogEvent, Persiste
                         .get("big_blind")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0),
+                    ante: payload.get("ante").and_then(|v| v.as_u64()).unwrap_or(0),
                     round_count: payload
                         .get("round_count")
                         .and_then(|v| v.as_u64())
@@ -656,7 +658,11 @@ pub fn parse_persisted_event(payload: &Value) -> Result<EngineLogEvent, Persiste
             // Reconstruct the exact phase — the event hash covers `format!("{phase:?}")`, so
             // defaulting to Live would break replay hash verification for a snapshot taken in
             // Settlement/Done (e.g. the end-of-match snapshot).
-            phase: match payload.get("phase").and_then(|v| v.as_str()).unwrap_or("Live") {
+            phase: match payload
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Live")
+            {
                 "Done" => crate::Phase::Done,
                 "Settlement" => crate::Phase::Settlement,
                 _ => crate::Phase::Live,

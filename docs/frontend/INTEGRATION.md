@@ -359,3 +359,12 @@ check_fold=0, check_call_any=1.
 public table open (empty when the deployment runs none). Label seats and lobby rows owned
 by those wallets as bots. They are ordinary players to every other endpoint: same
 sessions, same sealing rules, same payouts.
+
+## Antes
+
+Every seat posts an ante of 10% of the buy-in when the hand starts (`params.ante` in the
+match detail, `ante` in the create response and the `match_started` event). It goes into
+the pot as dead money: it is not part of the bet to match, so `to_call` is unchanged. A
+match is one hand; the ante is what makes that hand worth contesting, and a seat that
+folds everyone else out collects the antes.
+

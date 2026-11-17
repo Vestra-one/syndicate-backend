@@ -231,6 +231,7 @@ pub async fn post_intent(
         "time_bank_sec": overlay.time_bank_sec,
         "small_blind": small_blind,
         "big_blind": big_blind,
+        "ante": crate::config::derive_ante(body.buy_in),
         "chips_token_mint": chips_token_mint,
         "config_hash": hex::encode(hash),
         "canonical_json": canonical_config_json(&canonical),

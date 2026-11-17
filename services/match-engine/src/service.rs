@@ -21,6 +21,8 @@ pub struct MatchConfig {
     pub button: usize,
     pub small_blind: Chips,
     pub big_blind: Chips,
+    /// Posted by every seat before the blinds (0 = none).
+    pub ante: Chips,
     pub round_count: u8,
     /// Per-street betting window (seconds), one per street; `len == round_count`. The
     /// street's wall-clock hard cap = live_start + Σ(prior streets' duration+observation)
@@ -262,12 +264,13 @@ pub struct FencedMatchRuntime {
 impl FencedMatchRuntime {
     pub fn start(config: MatchConfig, lease: MatchLease) -> Self {
         assert_eq!(config.match_id, lease.match_id, "lease must match config");
-        let engine = Engine::new(
+        let engine = Engine::with_ante(
             config.players.clone(),
             config.button,
             config.small_blind,
             config.big_blind,
             config.round_count,
+            config.ante,
         );
         let mut runtime = Self {
             config: config.clone(),
@@ -552,12 +555,13 @@ impl FencedMatchRuntime {
                     if next_seq != 0 || config.is_some() {
                         return Err(MatchServiceError::Replay("duplicate match start"));
                     }
-                    let e = Engine::new(
+                    let e = Engine::with_ante(
                         c.players.clone(),
                         c.button,
                         c.small_blind,
                         c.big_blind,
                         c.round_count,
+                        c.ante,
                     );
                     config = Some(c.clone());
                     engine = Some(e);
@@ -924,6 +928,10 @@ fn push_config(out: &mut Vec<u8>, config: &MatchConfig) {
     push_usize(out, config.button);
     push_u64(out, config.small_blind);
     push_u64(out, config.big_blind);
+    // Only hashed when set, so journals written before antes existed still verify.
+    if config.ante > 0 {
+        push_u64(out, config.ante);
+    }
     out.extend_from_slice(config.round_count.to_string().as_bytes());
     out.push(b'|');
     for d in &config.round_durations_sec {
@@ -1040,6 +1048,7 @@ mod tests {
             button: 0,
             small_blind: 1,
             big_blind: 2,
+            ante: 0,
             round_count: 3,
             round_durations_sec: vec![200, 150, 150],
             observation_windows_sec: vec![20, 20, 40],

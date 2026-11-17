@@ -101,6 +101,8 @@ export interface TableTerms {
   rakeCap: Chips
   smallBlind: Chips
   bigBlind: Chips
+  /** Posted by every seat at the start of the hand (10% of the buy-in). */
+  ante?: Chips
   minPlayers: number
   maxPlayers: number
   roundCount: number

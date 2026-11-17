@@ -30,38 +30,43 @@ export function hostAlias(matchId: string): string {
 }
 
 /**
- * A stable "read" on each opponent's style — the behaviour badge under their
- * pod (mirrors the reference's TIGHT / AGGRESSIVE / SAFE / PASSIVE / UNKNOWN).
- * Deterministic from the seat index, so it leaks no identity; you're always the
- * balanced baseline.
+ * The badge under each pod. It is a read of what that seat has actually done in this
+ * hand — nothing is invented, and before anyone has acted there is no read.
  */
 export type SeatTagKind = 'tight' | 'aggressive' | 'safe' | 'passive' | 'unknown' | 'balanced' | 'bot'
-/** `hint` explains how the read is computed — surfaced as the badge's tooltip. */
+/** `hint` says what the badge is based on — surfaced as its tooltip. */
 export interface SeatTag { label: string; kind: SeatTagKind; hint: string }
-
-/**
- * The five personas (plus the "balanced" self-baseline). A read is derived from
- * a player's observed betting tendencies across the hand — never from identity.
- */
-const TAGS: SeatTag[] = [
-  { label: 'Tight', kind: 'tight', hint: 'Tight — folds most hands, commits chips only on strong convictions.' },
-  { label: 'Aggressive', kind: 'aggressive', hint: 'Aggressive — raises and re-raises often, applies pressure to the table.' },
-  { label: 'Safe', kind: 'safe', hint: 'Safe — sizes bets conservatively and rarely risks the whole stack.' },
-  { label: 'Passive', kind: 'passive', hint: 'Passive — calls far more than it raises, lets others set the pace.' },
-  { label: 'Unknown', kind: 'unknown', hint: 'Unknown — not enough hands observed yet to read this player.' },
-]
 
 const BOT_TAG: SeatTag = {
   label: 'House bot',
   kind: 'bot',
   hint: 'House bot — keeps this table open around the clock. Plays by the same rules as you and never sees your sealed call.',
 }
+const YOU_TAG: SeatTag = { label: 'You', kind: 'balanced', hint: 'Your seat.' }
+const NO_READ: SeatTag = { label: 'No read yet', kind: 'unknown', hint: 'No bets from this seat yet in this hand.' }
 
-export function seatTag(seat: SeatIndex, yourSeat?: SeatIndex, wallet?: string | null): SeatTag {
-  if (seat !== yourSeat && isHouseBot(wallet)) return BOT_TAG
-  if (seat === yourSeat)
-    return { label: 'Balanced', kind: 'balanced', hint: 'Balanced — your baseline read: a mix of calls, raises, and folds.' }
-  return TAGS[seat % TAGS.length]
+export function seatTag(
+  seat: SeatIndex,
+  yourSeat?: SeatIndex,
+  wallet?: string | null,
+  feed?: PublicEvent[],
+): SeatTag {
+  if (seat === yourSeat) return YOU_TAG
+  if (isHouseBot(wallet)) return BOT_TAG
+  let pressed = 0
+  let called = 0
+  let checked = 0
+  for (const e of feed ?? []) {
+    if (e.kind !== 'action' || e.seat !== seat) continue
+    if (e.action === 'betTo' || e.action === 'raiseTo' || e.action === 'allIn') pressed++
+    else if (e.action === 'call') called++
+    else if (e.action === 'check') checked++
+  }
+  if (pressed >= 2) return { label: 'Pressing', kind: 'aggressive', hint: `Bet or raised ${pressed} times this hand.` }
+  if (pressed === 1) return { label: 'Bet once', kind: 'safe', hint: 'Bet or raised once this hand.' }
+  if (called >= 1) return { label: 'Calling', kind: 'passive', hint: `Called ${called} time${called === 1 ? '' : 's'} this hand without raising.` }
+  if (checked >= 1) return { label: 'Checking', kind: 'tight', hint: 'Has only checked this hand.' }
+  return NO_READ
 }
 
 /** Human-readable line for the action feed. Amounts arrive in token base units. */

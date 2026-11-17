@@ -5472,3 +5472,19 @@
   .position-row { flex-wrap: wrap; white-space: normal; gap: 8px 14px; }
   .round { width: 100%; order: 1; }
 }
+
+/* Edge read — how live your call is (YourPosition) */
+.position-edge { display: flex; flex-direction: column; gap: 6px; padding: 10px 0 2px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.position-edge-head { display: flex; justify-content: space-between; align-items: baseline; }
+.position-edge-label { font-family: var(--font-display, inherit); font-size: 15px; letter-spacing: 0.04em; }
+.position-edge-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.position-edge-bar > span { display: block; height: 100%; border-radius: 2px; transition: width 600ms ease; }
+.position-edge--in-range .position-edge-label { color: var(--up); }
+.position-edge--in-range .position-edge-bar > span { background: var(--up); }
+.position-edge--needs-move .position-edge-label { color: var(--gold, #e7c873); }
+.position-edge--needs-move .position-edge-bar > span { background: var(--gold, #e7c873); }
+.position-edge--long-shot .position-edge-label { color: var(--down); }
+.position-edge--long-shot .position-edge-bar > span { background: var(--down); }
+.seal-guide { margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.seal-guide b { color: var(--text, #f3ead2); }
+.default-chips .chip { flex: 1; white-space: nowrap; padding-inline: 8px; font-size: 12px; }

@@ -488,6 +488,8 @@ export interface MatchDetail {
     action_timeout_ms: number
     small_blind: number
     big_blind: number
+    /** Posted by every seat at the start of the hand; absent on servers without antes. */
+    ante?: number
     seal_window_sec: number
     config_hash: string | null
   }

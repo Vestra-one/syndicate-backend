@@ -18,6 +18,7 @@ pub fn public_event(envelope: &EventEnvelope) -> Value {
                 "button": config.button,
                 "small_blind": config.small_blind,
                 "big_blind": config.big_blind,
+                "ante": config.ante,
                 "round_count": config.round_count,
             }),
         ),
@@ -157,6 +158,7 @@ pub async fn match_view(st: &AppState, row: &MatchRow, rt: Option<&FencedMatchRu
             "action_timeout_ms": row.action_timeout_ms,
             "small_blind": row.small_blind,
             "big_blind": row.big_blind,
+            "ante": crate::config::derive_ante(row.buy_in),
             "seal_window_sec": row.seal_window_sec,
             // Needed by clients to compute the drand timelock target for sealing
             // (target = round after seal_deadline + total_betting + begin_live_window).
@@ -355,6 +357,7 @@ mod tests {
                 button: 0,
                 small_blind: 5,
                 big_blind: 10,
+                ante: 0,
                 round_count: 2,
                 round_durations_sec: vec![10, 20],
                 observation_windows_sec: vec![5, 0],

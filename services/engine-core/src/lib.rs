@@ -105,6 +105,21 @@ impl Engine {
         big_blind: Chips,
         round_count: u8,
     ) -> Self {
+        Self::with_ante(players, button, small_blind, big_blind, round_count, 0)
+    }
+
+    /// A hand where every seat first posts `ante` into the pot (dead money: it does not
+    /// count toward the street's bet), then the blinds are posted as usual. The ante is
+    /// what makes a single-hand match worth contesting — and worth stealing: fold
+    /// everyone out and the antes are yours.
+    pub fn with_ante(
+        players: Vec<(PlayerId, Chips, u64)>,
+        button: usize,
+        small_blind: Chips,
+        big_blind: Chips,
+        round_count: u8,
+        ante: Chips,
+    ) -> Self {
         assert!(
             players.len() >= 2 && players.len() <= MAX_SEATS,
             "2..=5 players"
@@ -135,6 +150,12 @@ impl Engine {
             to_act: None,
             has_acted: vec![false; n],
         };
+
+        if ante > 0 {
+            for idx in 0..n {
+                e.post_dead(idx, ante);
+            }
+        }
 
         let (sb_idx, bb_idx) = if n == 2 {
             (button, (button + 1) % n)
@@ -310,6 +331,17 @@ impl Engine {
         }
     }
 
+    /// Dead money: into the pot, but not part of this street's bet to match.
+    fn post_dead(&mut self, idx: usize, amount: Chips) {
+        let s = &mut self.seats[idx];
+        let pay = amount.min(s.stack);
+        s.stack -= pay;
+        s.total_contribution += pay;
+        if s.stack == 0 {
+            s.all_in = true;
+        }
+    }
+
     fn reset_acted_except(&mut self, idx: usize) {
         for i in 0..self.seats.len() {
             if i != idx && !self.seats[i].folded && !self.seats[i].all_in {
@@ -475,5 +507,54 @@ mod tests {
             e.seats[0].total_contribution
         );
         assert_eq!(decoded.phase, e.phase);
+    }
+
+    #[test]
+    fn antes_are_dead_money_everyone_posts() {
+        let e = Engine::with_ante(
+            vec![(pid(0), 100, 0), (pid(1), 100, 1), (pid(2), 100, 2)],
+            0,
+            1,
+            2,
+            3,
+            10,
+        );
+        // Every seat is in for the ante; the blinds sit on top for seats 1 and 2.
+        let in_pot: Vec<Chips> = e.seats.iter().map(|s| s.total_contribution).collect();
+        assert_eq!(in_pot, vec![10, 11, 12]);
+        // The ante is not part of the bet to match: the button still only owes the blind.
+        assert_eq!(e.current_bet, 2);
+        assert_eq!(e.to_call(0), 2);
+        assert_eq!(e.seats[0].stack, 90);
+    }
+
+    #[test]
+    fn folding_everyone_out_wins_the_antes() {
+        let mut e = Engine::with_ante(
+            vec![(pid(0), 100, 0), (pid(1), 100, 1), (pid(2), 100, 2)],
+            0,
+            1,
+            2,
+            3,
+            10,
+        );
+        e.apply(0, Action::RaiseTo(20)).unwrap();
+        e.apply(1, Action::Fold).unwrap();
+        e.apply(2, Action::Fold).unwrap();
+        assert!(e.is_complete());
+        let players = e.to_player_states(|_| Some(100));
+        let out = settle(&SettleInput {
+            players: &players,
+            oracle_price: oracle(100),
+            rake_bps: 0,
+            rake_cap: 0,
+            dead_money: 0,
+        })
+        .unwrap();
+        // Seat 0 put in 10 + 20, gets it back plus both rivals' antes and blinds (11 + 12).
+        let won: Chips = out.pot_awards.iter().map(|a| a.amount).sum();
+        let back: Chips = out.uncalled_returns.iter().map(|(_, c)| *c).sum();
+        assert_eq!(won + back, 30 + 11 + 12);
+        assert!(out.pot_awards.iter().all(|a| a.player == pid(0)));
     }
 }

@@ -271,6 +271,15 @@ pub fn derive_blinds(buy_in: u64) -> (u64, u64) {
     (sb, bb)
 }
 
+/// Ante every seat posts at the start of the hand: 10% of the buy-in. A match is one
+/// hand, so without it only the two blinds have anything at stake and most hands are
+/// played for ~1% of a buy-in. With it every seat is in for a real share and the pot is
+/// worth contesting (and stealing) from the first action. Derived from the buy-in, so it
+/// is committed by the same terms hash and needs no extra parameter.
+pub fn derive_ante(buy_in: u64) -> u64 {
+    buy_in / 10
+}
+
 /// v2 default rake cap: 10% of the buy-in.
 pub fn default_rake_cap(buy_in: u64) -> u64 {
     buy_in / 10
