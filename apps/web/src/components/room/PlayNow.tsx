@@ -4,6 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips } from '@/lib/format'
 import { hostAlias } from '@/lib/seats'
+import { isHouseBot } from '@/lib/houseBots'
 import type { UpcomingGame } from '@/lib/protocol'
 import { Coin, SeatPips, AvatarStack, FillRing } from './bits'
 import { useNow } from '@/lib/useNow'
@@ -24,6 +25,7 @@ function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: bool
         </span>
         <span className="card-flag">
           {invited && <span className="flag flag--seat">◆ your invite</span>}
+          {isHouseBot(game.creatorWallet) && <span className="flag flag--seat" title="Two house bots are seated. Sit down and the hand starts when the timer runs out.">House table · always open</span>}
           {oneLeft && <span className="flag flag--seat">One seat left</span>}
         </span>
       </span>

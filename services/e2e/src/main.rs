@@ -56,6 +56,8 @@ use syndicate_chain::params::CreateParams;
 use syndicate_chain::{ix, pda};
 use syndicate_timelock::{DrandTlockScheme, TimelockScheme};
 
+mod house;
+
 // ------------------------------------------------------------------------------------
 // Context + player model
 // ------------------------------------------------------------------------------------
@@ -150,6 +152,12 @@ async fn main() {
         drand_chain_hash,
         drand_pubkey,
     };
+
+    // `E2E_MODE=house` runs the always-on house table instead of the test suite.
+    if env("E2E_MODE", "suite") == "house" {
+        house::run(ctx).await;
+        return;
+    }
 
     let mut p1 = ctx
         .player(

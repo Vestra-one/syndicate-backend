@@ -91,6 +91,7 @@ services:
       GEOFENCE_BLOCKLIST: ${GEOFENCE_BLOCKLIST:-IN}
       DRAND_API: ${DRAND_API:-https://api.drand.sh}
       DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH}
+      HOUSE_BOT_WALLETS: ${HOUSE_BOT_WALLETS:-}
     volumes:
       - ./secrets/postgres-password:/run/secrets/postgres-password:ro
       - ./secrets/session-signing-key:/run/secrets/session-signing-key:ro
@@ -181,6 +182,45 @@ services:
       resources:
         limits:
           memory: 512m
+
+  # House table: bots that keep one public table open around the clock (profile `bots`).
+  # Needs deploy/secrets/house-bot-{1,2}.json funded with SOL + chips, and their pubkeys
+  # in HOUSE_BOT_WALLETS so the UI labels them. See docs/deployment/DEPLOYMENT.md §10.
+  house-bots:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.rust
+      args:
+        BIN: e2e-devnet
+    profiles: ["bots"]
+    restart: unless-stopped
+    depends_on:
+      game-server:
+        condition: service_healthy
+    environment:
+      E2E_MODE: house
+      GAME_SERVER_URL: http://game-server:8080
+      PRICE_URL: http://signed-price-server:8080
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL_PRIMARY}
+      SYNDICATE_PROGRAM_ID: ${SYNDICATE_PROGRAM_ID}
+      CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
+      E2E_SEAL_MODE: ${HOUSE_SEAL_MODE:-live}
+      HOUSE_BOT_KEYPAIRS: /run/secrets/house-bot-1.json,/run/secrets/house-bot-2.json
+      HOUSE_BOT_HANDLES: ${HOUSE_BOT_HANDLES:-}
+      BUY_IN: ${HOUSE_BUY_IN:-10000000}
+      STREET_SEC: ${HOUSE_STREET_SEC:-30}
+      ROUND_COUNT: ${HOUSE_ROUND_COUNT:-3}
+      OBSERVATION_SEC: ${HOUSE_OBSERVATION_SEC:-5}
+      HOUSE_FILL_SEC: ${HOUSE_FILL_SEC:-600}
+      HOUSE_HUMAN_SEATS: ${HOUSE_HUMAN_SEATS:-1}
+      HOUSE_PLAY_WITHOUT_HUMANS: ${HOUSE_PLAY_WITHOUT_HUMANS:-true}
+    volumes:
+      - ./secrets/house-bot-1.json:/run/secrets/house-bot-1.json:ro
+      - ./secrets/house-bot-2.json:/run/secrets/house-bot-2.json:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256m
 
   # Bundled edge proxy. OPT-IN only (profile `edge`) — enable it ONLY on a dedicated
   # VPS where nothing else owns 80/443. If a HOST nginx is already running (the common

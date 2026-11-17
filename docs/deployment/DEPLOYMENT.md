@@ -210,6 +210,30 @@ scripts/localnet/down.sh
   (`npm run e2e:localnet` in `apps/web`): two real app instances play a hand through
   create → join → seal → bet → settle → claim.
 
+### 9b. House table — a table that is always open
+
+Two bot wallets keep one public table open so a visitor never lands on an empty lobby
+(`services/e2e/src/house.rs`, compose profile `bots`).
+
+```bash
+FUND=1 scripts/house-bots-setup.sh   # keys → deploy/secrets/house-bot-{1,2}.json, wallets → deploy/.env, funded from the operator
+scripts/deploy-devnet.sh             # brings the bots up with the stack
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs -f house-bots
+```
+
+- The lead bot opens a table; the second sits down the moment a person does, which fills
+  the table (`HOUSE_HUMAN_SEATS=1`) and locks it at once — the visitor is sealing a call
+  within seconds. The next table opens while that hand is played.
+- When nobody comes, the bots play one showcase hand at a time against each other
+  (`HOUSE_PLAY_WITHOUT_HUMANS=true`), so there is live action to watch. Set it to `false`
+  where chips are real: empty tables then void and refund, and the house pays no rake.
+- The bots are ordinary wallets with ordinary sessions. They seal before the lock like
+  everyone else and never see another seat's call. Their wallets are published in
+  `/v1/config.house_bot_wallets` and the UI labels those seats "House bot".
+- Bankroll: each bot needs SOL for fees and about three buy-ins of chips (it can be seated
+  at a live hand and the next open table at once). The log says which wallet to top up.
+- Local: `BOTS=1 scripts/localnet/up.sh`; browser check: `E2E_HOUSE=1 npm run e2e:localnet`.
+
 ## 10. Operations runbook
 
 - **Logs**: `docker compose logs -f game-server chain-worker` (JSON; filter by `match_id`).

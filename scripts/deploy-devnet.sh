@@ -15,9 +15,19 @@ done
 
 COMPOSE=(docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env)
 
+# House bots start with the stack once scripts/house-bots-setup.sh has provisioned them.
+BUILD=(game-server chain-worker signed-price-server)
+if [ -f deploy/secrets/house-bot-1.json ] && [ -f deploy/secrets/house-bot-2.json ]; then
+  COMPOSE+=(--profile bots)
+  BUILD+=(house-bots)
+  echo "house bots: enabled"
+else
+  echo "house bots: off (run scripts/house-bots-setup.sh to keep a table always open)"
+fi
+
 "${COMPOSE[@]}" config -q
 echo "building images…"
-"${COMPOSE[@]}" build game-server chain-worker signed-price-server
+"${COMPOSE[@]}" build "${BUILD[@]}"
 echo "starting stack…"
 "${COMPOSE[@]}" up -d
 

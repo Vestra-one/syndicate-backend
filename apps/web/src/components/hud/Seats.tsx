@@ -218,7 +218,7 @@ function OpponentPod({
         emblem={sigil ?? monogram(alias)}
         status={shownStatus}
         stack={`${formatChips(seat.stack)} ${token}`}
-        tag={seatTag(seat.seat, match.yourSeat)}
+        tag={seatTag(seat.seat, match.yourSeat, seat.wallet)}
         history={history}
         active={active}
         folded={seat.folded}

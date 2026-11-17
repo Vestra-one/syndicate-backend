@@ -31,6 +31,7 @@ import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters
 import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
+import { setHouseBots } from '@/lib/houseBots'
 import { log } from '@/lib/log'
 import {
   loadSessionKey,
@@ -689,6 +690,7 @@ let serverDrand: ApiConfig['drand'] | null = null
 function adoptServerConfig(config: ApiConfig) {
   serverDrand = config.drand
   setServerChipsMint(config.chips_token_mint)
+  setHouseBots(config.house_bot_wallets)
 }
 let serverConfigLoad: Promise<void> | null = null
 /** Load the server config once (deduped); failures are retried on the next call. */
@@ -941,6 +943,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const [activeResult, upcomingResult] = await Promise.allSettled([
       fetchActiveGames(),
       fetchUpcomingGames(),
+      ensureServerConfig(), // house-bot wallets, so the lobby can label the house table
     ])
     const active = activeResult.status === 'fulfilled' ? activeResult.value : []
     const upcoming = upcomingResult.status === 'fulfilled' ? upcomingResult.value : []

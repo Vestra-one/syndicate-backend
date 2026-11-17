@@ -200,7 +200,7 @@ function SeatRing({
                 emblem={personaEmblem(alias)}
                 status={{ text: 'Seated ✓', tone: 'seated' }}
                 stack={`${formatChips(stack)} ${token}`}
-                tag={seatTag(cell.seat, yourSeat)}
+                tag={seatTag(cell.seat, yourSeat, cell.sv?.wallet)}
                 joining={joining.has(cell.seat)}
               />
             </SeatSlot>
@@ -550,7 +550,7 @@ function TableFullCard({ plan, match, buyIn }: { plan: SeatCell[]; match: Return
         {plan.map((cell) => {
           const isYou = cell.kind === 'you'
           const alias = isYou ? 'You' : seatAlias(cell.seat, yourSeat)
-          const tag = seatTag(cell.seat, yourSeat)
+          const tag = seatTag(cell.seat, yourSeat, cell.kind === 'seated' ? cell.sv?.wallet : undefined)
           const initial = isYou ? '₿' : alias.replace(/^The\s+/, '').charAt(0).toUpperCase()
           return (
             <li key={cell.seat} className={`wr-roster-row ${isYou ? 'wr-roster-row--you' : ''}`}>

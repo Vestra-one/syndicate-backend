@@ -219,6 +219,8 @@ export interface ApiConfig {
   chips_token_mints?: string[]
   /** Server accepts per-match session keys (`POST /matches/{id}/session-key`). */
   session_keys?: boolean
+  /** Wallets of the house bots that keep a public table open; label them in the UI. */
+  house_bot_wallets?: string[]
   feeds: { feed: string; oracle_symbol: string; oracle_token: string }[]
   bounds: {
     buy_in: Range

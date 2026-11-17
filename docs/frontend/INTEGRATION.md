@@ -352,3 +352,10 @@ also accepts raw `message_bytes` signatures for CLI/bot signers.
 
 Action tags: fold=0, check=1, call=2, bet_to=3, raise_to=4, all_in=5. Policy tags:
 check_fold=0, check_call_any=1.
+
+## House bots
+
+`GET /v1/config`.`house_bot_wallets` lists the wallets of the house bots that keep one
+public table open (empty when the deployment runs none). Label seats and lobby rows owned
+by those wallets as bots. They are ordinary players to every other endpoint: same
+sessions, same sealing rules, same payouts.

@@ -122,6 +122,18 @@ fund() { # pubkey, label
 for p in "${PLAYERS[@]}"; do fund "$(solana-keygen pubkey "$ROOT/deploy/e2e-keys/$p.json")" "$p"; done
 for w in $EXTRA_WALLETS; do fund "$w" "extra"; done
 
+# House bots (BOTS=1): two funded wallets that keep a public table open.
+BOTS="${BOTS:-0}"
+BOT_KEYS=("$STATE/keys/bot1.json" "$STATE/keys/bot2.json")
+HOUSE_BOT_WALLETS=""
+if [ "$BOTS" = "1" ]; then
+  for k in "${BOT_KEYS[@]}"; do
+    keygen "$k"
+    fund "$(solana-keygen pubkey "$k")" "house bot"
+    HOUSE_BOT_WALLETS="${HOUSE_BOT_WALLETS:+$HOUSE_BOT_WALLETS,}$(solana-keygen pubkey "$k")"
+  done
+fi
+
 # ---- 4. price server + protocol init ---------------------------------------------------
 say "mock signed-price server"
 [ -d "$HERE/node_modules" ] || (cd "$HERE" && npm install --silent)
@@ -200,6 +212,9 @@ PLAYER1_KEYPAIR=$ROOT/deploy/e2e-keys/player1.json
 PLAYER2_KEYPAIR=$ROOT/deploy/e2e-keys/player2.json
 PLAYER3_KEYPAIR=$ROOT/deploy/e2e-keys/player3.json
 ATTACKER_KEYPAIR=$ROOT/deploy/e2e-keys/attacker.json
+HOUSE_BOT_WALLETS=$HOUSE_BOT_WALLETS
+HOUSE_BOT_KEYPAIRS=${BOT_KEYS[0]},${BOT_KEYS[1]}
+PRICE_URL=http://127.0.0.1:$PRICE_PORT
 ENV
 set -a; . "$STATE/env"; set +a
 
@@ -211,6 +226,15 @@ spawn chain-worker "$TARGET/syndicate-chain-worker"
 spawn game-server "$TARGET/syndicate-game-server"
 wait_http "http://127.0.0.1:$GAME_PORT/healthz" '"price_fresh":true' "game-server"
 wait_http "http://127.0.0.1:$WORKER_PORT/healthz" '"rpc":true' "chain-worker"
+
+if [ "$BOTS" = "1" ]; then
+  say "house table"
+  (cd "$ROOT" && cargo build -q -p syndicate-e2e --bin e2e-devnet)
+  spawn house-bots env E2E_MODE=house BUY_IN="${HOUSE_BUY_IN:-10000000}" \
+    STREET_SEC="${HOUSE_STREET_SEC:-30}" ROUND_COUNT="${HOUSE_ROUND_COUNT:-3}" \
+    HOUSE_FILL_SEC="${HOUSE_FILL_SEC:-120}" "$TARGET/e2e-devnet"
+  ok "house bots running (log: $STATE/logs/house-bots.log)"
+fi
 
 cat <<DONE
 
@@ -231,5 +255,6 @@ Frontend (apps/web/.env.local):
   VITE_PROGRAM_ID=$PROGRAM_ID
   VITE_CHIPS_TOKEN_MINT=$MINT
 
+House table: BOTS=1 scripts/localnet/up.sh keeps a bot table open in the lobby.
 Next: scripts/localnet/e2e.sh   ·   (cd apps/web && npm run e2e:localnet)
 DONE

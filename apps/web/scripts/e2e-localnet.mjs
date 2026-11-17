@@ -347,6 +347,85 @@ const act = (p, action) =>
   }, action)
 
 // ---------------------------------------------------------------------------------------
+// House table (E2E_HOUSE=1, stack started with BOTS=1): a visitor finds the bots' table
+// in the lobby, sits down, seals, plays the hand against them and gets paid.
+// ---------------------------------------------------------------------------------------
+async function houseHand(browser) {
+  const me = await openPlayer(browser, 'visitor', env.PLAYER3_KEYPAIR)
+  const cfg = await (await fetch(`${gameUrl}/v1/config`)).json()
+  const bots = cfg.house_bot_wallets ?? []
+  expect(bots.length >= 2, `server publishes the house bot wallets (${bots.length})`)
+
+  // The table must have enough fill time left for a deposit to confirm.
+  let table = null
+  for (let i = 0; i < 400 && !table; i++) {
+    const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
+    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet))
+    const left = row ? new Date(row.fill_deadline ?? row.fill_deadline_ts ?? 0).getTime() - Date.now() : 0
+    if (row && (Number.isNaN(left) || left > 25_000)) table = row
+    else await sleep(1000)
+  }
+  expect(!!table, `a house table is open in the lobby (${table?.match_id})`)
+  await me.page.evaluate(() => void window.__gameStore.getState().loadDiscovery())
+  await waitFor(me, 'visitor sees the house table', (id) => window.__gameStore.getState().upcomingGames.some((g) => g.matchId === id), 30_000, table.match_id)
+  await sleep(500)
+  await shot(me, 'h1-lobby-house-table')
+  const before = BigInt((await state(me)).chipBalance ?? 0)
+  await me.page.evaluate((id) => void window.__gameStore.getState().joinGame(id), table.match_id)
+  await waitFor(me, 'join sheet ready', () => window.__gameStore.getState().playMode === 'join')
+  await me.page.evaluate(() => void window.__gameStore.getState().joinTable())
+  await waitFor(me, 'deposit confirmed → seated with the bots', () => {
+    const s = window.__gameStore.getState()
+    if (s.txProgress?.stage === 'error') throw new Error(s.txProgress.errorRaw ?? s.txProgress.error)
+    return s.view === 'table' && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
+  }, 120_000)
+  await shot(me, 'h2-seated-with-bots')
+  await waitFor(me, 'table locked → SEALING', () => {
+    const s = window.__gameStore.getState()
+    return s.match?.phase === 'SEALING' && (s.terms?.timelockTargetRound ?? 0) > 0 && s.match?.yourSeat != null
+  }, 180_000)
+  const spot = (await state(me)).lastPrice ?? 64000
+  await me.page.evaluate((price) => void window.__gameStore.getState().sealPrediction(price), Math.round((spot + 10) * 100))
+  await waitFor(me, 'visitor sealed', () => window.__gameStore.getState().sealStatus === 'sealed', 90_000)
+  await waitFor(me, 'match LIVE', () => window.__gameStore.getState().match?.phase === 'LIVE', 180_000)
+  await shot(me, 'h3-live-with-bots')
+  let actions = 0
+  let shotTurn = false
+  const deadline = Date.now() + 15 * 60_000
+  for (;;) {
+    const s = await state(me)
+    if (s.settlement || s.voided) break
+    if (Date.now() > deadline) throw new Error(`house hand never settled\n${JSON.stringify(s)}`)
+    if (s.yourTurn && !s.actPending && s.phase === 'LIVE' && s.bettingOpen) {
+      if (!shotTurn) { shotTurn = true; await shot(me, 'h4-my-turn-vs-bots') }
+      const action = s.yourTurn.toCall > 0 ? { type: 'call' } : { type: 'check' }
+      log(`     visitor (seat ${s.yourSeat}) → ${action.type}  [round ${s.round}, to_call ${s.yourTurn.toCall}]`)
+      await act(me, action)
+      actions++
+    }
+    await sleep(700)
+  }
+  const end = await state(me)
+  expect(!end.voided, 'house hand settled (not voided)')
+  expect(actions >= 1, `the visitor's moves were accepted (${actions})`)
+  expect(end.seats.length === bots.length + 1, `table had the bots plus the visitor (${end.seats.length} seats)`)
+  expect(end.feed > actions, `the bots acted too (${end.feed} feed events, ${actions} mine)`)
+  await sleep(1500)
+  await shot(me, 'h5-result-vs-bots')
+  const total = end.settlement.awards.reduce((a, x) => a + BigInt(x.amount), 0n) + BigInt(end.settlement.rake ?? 0)
+  log(`     awards ${JSON.stringify(end.settlement.awards)} rake ${end.settlement.rake} (pot ${total})`)
+  // A second table must already be opening for the next visitor.
+  let next = null
+  for (let i = 0; i < 90 && !next; i++) {
+    const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
+    next = lobby.rooms.find((r) => bots.includes(r.creator_wallet) && r.match_id !== table.match_id) ?? null
+    if (!next) await sleep(1000)
+  }
+  expect(!!next, `the house opened the next table on its own (${next?.match_id})`)
+  void before
+}
+
+// ---------------------------------------------------------------------------------------
 // The hand
 // ---------------------------------------------------------------------------------------
 async function main() {
@@ -366,6 +445,20 @@ async function main() {
       '--disable-backgrounding-occluded-windows',
     ],
   })
+  if (process.env.E2E_HOUSE) {
+    try {
+      await houseHand(browser)
+    } finally {
+      await browser.close()
+      vite.kill()
+    }
+    if (failed) {
+      console.error('\nHOUSE TABLE E2E FAILED')
+      process.exit(1)
+    }
+    console.log('\nHOUSE TABLE E2E PASSED — lobby → sit with the bots → seal → bet → settle → next table opens')
+    process.exit(0)
+  }
   try {
     const keys = (n) => env[`PLAYER${n}_KEYPAIR`]
     const host = await openPlayer(browser, 'host', keys(1))

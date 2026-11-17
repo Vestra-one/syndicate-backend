@@ -77,6 +77,9 @@ pub struct ServerConfig {
     /// mint is enforced against this set at create-tx verification; joiners inherit the
     /// match mint on-chain, so this is the single control point.
     pub chips_token_mints: Vec<String>,
+    /// Wallets of the house bots (`HOUSE_BOT_WALLETS`, CSV). Published in `/v1/config` so
+    /// clients can label them; they get no special treatment anywhere else.
+    pub house_bot_wallets: Vec<String>,
     pub signed_price_server_url: String,
     pub admin_tokens: Vec<String>,
     pub cors_allowed_origins: Vec<String>,
@@ -115,6 +118,7 @@ impl ServerConfig {
                 .unwrap_or_else(|_| syndicate_chain::PROGRAM_ID_STR.into()),
             chips_token_mint,
             chips_token_mints,
+            house_bot_wallets: split_csv(&std::env::var("HOUSE_BOT_WALLETS").unwrap_or_default()),
             signed_price_server_url: std::env::var("SIGNED_PRICE_SERVER_URL")
                 .unwrap_or_else(|_| "http://localhost:8090".into()),
             admin_tokens: split_csv(&std::env::var("ADMIN_TOKENS").unwrap_or_default()),
@@ -493,6 +497,7 @@ mod tests {
                 program_id: String::new(),
                 chips_token_mint: mints.first().map(|s| s.to_string()).unwrap_or_default(),
                 chips_token_mints: mints.iter().map(|s| s.to_string()).collect(),
+                house_bot_wallets: Vec::new(),
                 signed_price_server_url: String::new(),
                 admin_tokens: vec![],
                 cors_allowed_origins: vec![],

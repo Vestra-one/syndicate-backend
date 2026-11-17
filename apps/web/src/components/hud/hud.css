@@ -1040,6 +1040,7 @@
 .pod-tag--balanced  { color: var(--up); border-color: rgba(79, 209, 139, 0.4); }
 .pod-tag--passive   { color: #c9a86a; border-color: rgba(201, 168, 106, 0.4); }
 .pod-tag--unknown   { color: var(--text-dim); border-color: rgba(255, 255, 255, 0.16); }
+.pod-tag--bot       { color: var(--text-dim); border-color: rgba(255, 255, 255, 0.28); border-style: dashed; }
 
 /* ---- active turn: bright gold ring + lift ---- */
 .pod--active {

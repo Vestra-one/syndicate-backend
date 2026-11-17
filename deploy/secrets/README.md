@@ -11,6 +11,7 @@ secret is a single file, mounted read-only into its container (`*_FILE` conventi
 | `operator-keypair.json` | chain-worker                                    | `solana-keygen new --no-bip39-passphrase -o operator-keypair.json` — fund with SOL; grant it the settlement/config/emergency-void/treasury roles at `initialize_protocol` |
 | `price-signer.key`      | signed-price-server                             | 32-byte secp256k1 secret, hex: `openssl rand -hex 32 > price-signer.key`. Register its Ethereum address on-chain via `set_price_signer`                                   |
 | `session-signing-key`   | game-server                                     | `openssl rand -hex 32 > session-signing-key`                                                                                                                              |
+| `house-bot-{1,2}.json`  | house-bots (optional, profile `bots`)           | `scripts/house-bots-setup.sh` — two ordinary player wallets; fund with SOL + chips                                                                                         |
 
 
 ## Rotation

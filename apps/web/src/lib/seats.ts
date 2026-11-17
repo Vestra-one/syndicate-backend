@@ -1,5 +1,6 @@
 import type { PublicEvent, SeatIndex } from '@/lib/protocol'
 import { formatChips } from '@/lib/format'
+import { isHouseBot } from '@/lib/houseBots'
 
 /**
  * Pseudonymous, seat-indexed aliases. The protocol never exposes opponent
@@ -34,7 +35,7 @@ export function hostAlias(matchId: string): string {
  * Deterministic from the seat index, so it leaks no identity; you're always the
  * balanced baseline.
  */
-export type SeatTagKind = 'tight' | 'aggressive' | 'safe' | 'passive' | 'unknown' | 'balanced'
+export type SeatTagKind = 'tight' | 'aggressive' | 'safe' | 'passive' | 'unknown' | 'balanced' | 'bot'
 /** `hint` explains how the read is computed — surfaced as the badge's tooltip. */
 export interface SeatTag { label: string; kind: SeatTagKind; hint: string }
 
@@ -50,7 +51,14 @@ const TAGS: SeatTag[] = [
   { label: 'Unknown', kind: 'unknown', hint: 'Unknown — not enough hands observed yet to read this player.' },
 ]
 
-export function seatTag(seat: SeatIndex, yourSeat?: SeatIndex): SeatTag {
+const BOT_TAG: SeatTag = {
+  label: 'House bot',
+  kind: 'bot',
+  hint: 'House bot — keeps this table open around the clock. Plays by the same rules as you and never sees your sealed call.',
+}
+
+export function seatTag(seat: SeatIndex, yourSeat?: SeatIndex, wallet?: string | null): SeatTag {
+  if (seat !== yourSeat && isHouseBot(wallet)) return BOT_TAG
   if (seat === yourSeat)
     return { label: 'Balanced', kind: 'balanced', hint: 'Balanced — your baseline read: a mix of calls, raises, and folds.' }
   return TAGS[seat % TAGS.length]
