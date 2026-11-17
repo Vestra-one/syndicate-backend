@@ -88,6 +88,9 @@ export interface TableTerms {
   priceFeedId: string       // e.g. "BTC/USD"
   supportedFeeds: string[]
   chipsToken: string        // e.g. "USDC"
+  /** SPL mint the match is denominated in (`params.chips_token_mint`) — a match can use any
+   *  operator-allowed token, so money instructions follow THIS, not a global default. */
+  chipsTokenMint?: string
   decimals: number
   oracleAdapter: 'signed-price'
   settlementMode: 'exact-timestamp'

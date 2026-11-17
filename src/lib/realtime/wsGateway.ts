@@ -8,6 +8,7 @@ import type { Adapters } from '@/lib/adapters'
 import type { Gateway, GatewayListener } from './gateway'
 import type { ClientFrame, ServerFrame } from './wsTypes'
 import { log } from '@/lib/log'
+import { adoptSession, clearSession, sessionTokenFor } from '@/lib/api'
 
 const HEARTBEAT_MS = 30_000
 const CONNECT_TIMEOUT_MS = 12_000
@@ -73,6 +74,22 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
           }
         }
 
+        // The challenge nonce is kept so a rejected session-token auth can fall back to a
+        // wallet signature over the same nonce (the server leaves it valid).
+        let pendingNonce: string | null = null
+        let triedSession = false
+
+        const authBySignature = async (address: string, nonce: string) => {
+          try {
+            const signature = await adapters.wallet.signMessageBase64(nonce)
+            if (sock.readyState === WebSocket.OPEN) {
+              sock.send(JSON.stringify({ t: 'auth', wallet: address, signature } satisfies ClientFrame))
+            }
+          } catch (err) {
+            log.warn('[ws] auth sign failed:', err)
+          }
+        }
+
         sock.onmessage = async (raw) => {
           let frame: ServerFrame
           try {
@@ -85,18 +102,40 @@ export function createWsGateway(url: string, adapters: Adapters): Gateway {
               // Answer the nonce challenge if a wallet is available (players); spectators skip.
               const address = adapters.wallet.address()
               if (!address) break
-              try {
-                const signature = await adapters.wallet.signMessageBase64(frame.nonce)
-                sock.send(JSON.stringify({ t: 'auth', wallet: address, signature } satisfies ClientFrame))
-              } catch (err) {
-                log.warn('[ws] auth sign failed:', err)
+              pendingNonce = frame.nonce
+              // Already signed in over REST (or reconnecting mid-hand)? Present that session —
+              // no wallet prompt. A dropped socket during a live turn must never need the
+              // player to approve a signature before they can act again.
+              const token = sessionTokenFor(address)
+              if (token && !triedSession) {
+                triedSession = true
+                sock.send(JSON.stringify({ t: 'auth', wallet: address, session: token } satisfies ClientFrame))
+              } else {
+                await authBySignature(address, frame.nonce)
               }
               break
             }
-            case 'error':
+            case 'authenticated':
+              pendingNonce = null
+              // A signature auth mints a session — reuse it for REST (one prompt covers both).
+              if (frame.session && frame.expires_at) adoptSession(frame.wallet, frame.session, frame.expires_at)
+              emit(frame)
+              break
+            case 'error': {
+              // Session token rejected: `bad_session` (stale token) or — on a server that
+              // predates session auth — `bad_frame`. Fall back to signing the nonce.
+              const address = adapters.wallet.address()
+              if (pendingNonce && triedSession && address && (frame.code === 'bad_session' || frame.code === 'bad_frame')) {
+                const nonce = pendingNonce
+                pendingNonce = null
+                if (frame.code === 'bad_session') clearSession()
+                await authBySignature(address, nonce)
+                break
+              }
               // Surface but don't tear down — most errors are per-subscription (lagged, not_found).
               emit(frame)
               break
+            }
             default:
               emit(frame)
           }

@@ -38,6 +38,9 @@ export interface Tlock {
  */
 export interface CreateAndDepositInput {
   onchainMatchId: string
+  /** SPL mint the match is denominated in — the intent's `chips_token_mint` (the server
+   *  re-verifies the on-chain mint against it; omitted → server default / env fallback). */
+  chipsTokenMint?: string
   configHash: string // 64-char hex (32 bytes)
   priceTokenHex: string // 0x… (20 bytes)
   buyIn: Chips

@@ -20,6 +20,8 @@ npm run dev        # dev server at http://localhost:5173
 npm run build      # typecheck + production build
 npm run lint       # eslint
 npm run format     # prettier
+npm test           # unit tests (intent byte layouts)
+npm run e2e:localnet   # two browsers play a full hand against the local stack (below)
 ```
 
 ## Architecture
@@ -60,4 +62,35 @@ src/
 ```
 ```
 
-Copy `.env.example` to `.env` to configure the market / WebSocket endpoint.
+Copy `.env.example` to `.env.local` and point it at a backend (devnet values are the
+defaults in that file).
+
+## Run the whole game locally, end to end
+
+No devnet, no wallet extension, no funds needed — the backend repo ships a one-command
+local stack (validator with the program, chips mint, Postgres, price feed, game-server,
+settlement worker):
+
+```bash
+# 1. in syndicate-backend
+scripts/localnet/up.sh          # prints the VITE_* block for .env.local
+
+# 2. here — two headless browsers play one full hand through the real app
+npm run e2e:localnet
+```
+
+`e2e:localnet` starts the dev server against the local stack, opens a host and a guest
+(each with an injected test wallet signing with the funded e2e keys) and drives:
+
+create table → join from the lobby → both seal a prediction → bet through every street →
+on-chain settlement → reveal → both claim.
+
+It asserts the things that matter for money — sealed predictions decrypt to what was
+sealed, `payouts + rake == buy-ins`, wallet balances after claiming — plus the session
+behaviour (one sign-in prompt, and a socket dropped mid-hand reconnects with no prompt).
+Screenshots of each phase are written to `e2e-shots/`. Set `E2E_3D=1` to render the 3D
+table in the screenshots (software GL; slow on small machines), `VERBOSE=1` for page logs.
+
+To play it by hand instead, put the printed block plus `VITE_TIMELOCK_MODE=mock` in
+`.env.local`, run `npm run dev`, and fund your own wallet on the local chain with
+`EXTRA_WALLETS="<pubkey> <pubkey>" scripts/localnet/up.sh`.

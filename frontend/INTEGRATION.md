@@ -13,7 +13,7 @@ reconnect, and claims. This is the single authoritative frontend guide for v2.
 | Price feed (read-only) | `https://price.devnet.satoshitable.fun` (`GET /prices`, WS `/ws`) |
 | Solana cluster | devnet |
 | Program id | `91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK` |
-| Chips mint (SPL) | `3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X` (6 decimals) |
+| Chips mint (SPL) | default `3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X` (6 decimals). **Not fixed** — the operator configures an allowlist; read `chips_token_mints` from `/v1/config` and let the creator pick one. |
 | IDL | [`docs/frontend/idl/syndicate_program.json`](idl/syndicate_program.json) |
 | drand beacon | quicknet — chain `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`, genesis `1692803367`, period `3s`, scheme `bls-unchained-g1-rfc9380` |
 
@@ -39,6 +39,12 @@ FE                                  backend
 
 Use `Authorization: Bearer <session>` on wallet-bound REST routes. The same
 challenge/response runs inside the WS (`challenge` → `auth` → `authenticated`).
+A client that already holds a session can skip the second wallet prompt: answer the WS
+challenge with `auth {wallet, session}` instead of `auth {wallet, signature}`. A stale
+token gets `error {code:"bad_session"}` and the challenge stays valid, so fall back to
+signing the nonce. Conversely the `authenticated` frame of a signature auth carries a
+fresh `session` usable on REST. Use this on every reconnect so a dropped socket mid-hand
+never needs a wallet prompt.
 Spectating (lobby + match channels, public reads) needs **no** auth.
 
 ## 3. Who signs what
@@ -84,14 +90,26 @@ FE                                          backend                          cha
 - `create_params` is byte-exact: encode the fields in order with Borsh (or use the IDL);
   the server already computed `config_hash` (sha256 of the canonical param JSON — recipe
   in Appendix A) and `room_commitment` (zeroed 32 bytes for public rooms).
+- **Chip token**: the intent body accepts an optional `chips_token_mint` — it must be one of
+  `chips_token_mints` from `/v1/config` (400 otherwise); omit it to use the default. The
+  intent response echoes the chosen `chips_token_mint`; pass **that exact SPL mint** as the
+  `mint` account of `create_and_deposit`. The backend re-verifies the on-chain mint against
+  the allowlist and against the value it advertised — a mismatched mint is rejected at
+  confirm and the seat never seats. It is **not** part of `create_params` (it's an account).
 - Idempotent: re-POSTing the same `{intent_id, tx_sig}` returns the prior result.
 
 ## 5. Join a room
 
 **Public**: pick from `GET /v1/lobby`. **Private**: user pastes the code →
-`GET /v1/rooms/code/{code}` (session) → `200 {match_id, params, seats_confirmed,
-candidates, fill_deadline, join_commitment}` or `404` if unknown/expired/full.
+`GET /v1/rooms/code/{code}` (session) → `200 {match_id, params, chips_token_mint,
+seats_confirmed, candidates, fill_deadline, join_commitment}` or `404` if unknown/expired/full.
 `join_commitment = sha256(roomcode ‖ joiner_pubkey)` — the server computes it for you.
+
+**Use the match's token, not the global default.** A match can be denominated in any allowed
+token, so build the `deposit` against the match's `chips_token_mint` (present on lobby rows,
+`/v1/rooms/code/{code}`, and `GET /v1/matches/{id}.params.chips_token_mint`) — your
+`player_token` ATA must be for that mint. The contract enforces `player_token.mint ==
+match.mint`, so depositing the wrong token fails on-chain.
 
 ```
 │ build deposit(join_commitment) tx  ────────────────────────────────────► sign+send
@@ -121,21 +139,32 @@ surface it via `/v1/wallets/{wallet}/claimables`.
 - **Historical**: `GET /v1/matches/history?cursor=` → settled/voided matches, keyset-paginated.
 - **Detail**: `GET /v1/matches/{id}` → params, phase, seats (wallet, stack, committed,
   folded, sealed flag, engine_seat), timing (street schedule with absolute open/close
-  timestamps), pot, `to_act` + deadline, and after settlement a `reveal` block
+  timestamps), pot, `to_act`, `round` (engine betting round), `clock_round` (wall-clock
+  schedule round), `open_turn` / `turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}`
+  when a live turn is open, and after settlement a `reveal` block
   `{settlement_price, predictions:[{seat, price, source:"sealed"|"spot"}]}`.
 - **Event log**: `GET /v1/matches/{id}/events?after_seq=&limit=` — every action with its
-  `feed_price` stamp (§8). Sealed ciphertexts are redacted until reveal.
+  `feed_price` stamp (§8). Sealed ciphertexts are redacted until reveal. Use
+  `after_seq=-1` or omit `after_seq` to fetch the complete journal including genesis
+  `seq: 0`; use the last observed `seq` for incremental reads.
 
 ## 7. Game start, sealing, dealer
 
 When the room fills (or the fill deadline passes with ≥ min players) the backend locks
-on-chain. WS pushes `phase {phase:"sealing", seal_deadline, timelock_target, ...}`.
+on-chain. WS pushes
+`phase {phase:"sealing", lock_confirmed:true, lock_tx_sig, seal_deadline, timelock_target, ...}`
+only after the lock job has confirmed and the server has mirrored the on-chain
+`seal_deadline`. Treat this frame as the safe point for `register_prediction_commitment`;
+do not start the seal countdown from local fill/full detection or from a pending lock job.
+During sealing, `scheduled_end` is the projected latest match end used for timelock
+validation; the live frame replaces it with the actual scheduled end.
 
-**Sealing UX** (the player has `seal_window_sec` — default 20s — to seal):
+**Sealing UX** (the player has `seal_window_sec` — default 90s — to seal):
 
 1. Player picks a price prediction (i128, exponent −18 — e.g. $64,123.50 → `64123.5e18`).
 2. Encrypt it with **tlock** to the drand round the server gave you (`timelock_target` in
-   the `phase` message — already bounds-checked to publish just after match end):
+   the `phase` message — derived from the confirmed on-chain `seal_deadline` and
+   bounds-checked to publish just after match end):
    ```ts
    import { timelockEncrypt, roundTime } from "tlock-js";      // pin tlock-js@^0.9
    import { HttpChainClient, HttpCachingChain } from "drand-client";
@@ -161,12 +190,14 @@ tells you the seat. The button advances clockwise every street.
 
 Streets and their durations are exactly what the creator configured. Turn flow over WS:
 
-- `your_turn {seat, to_call, min_raise_to, deadline_ms}` — the fixed per-action timer;
-  `deadline_ms` is absolute and already capped by the street close.
+- `turn_update {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — public table
+  state for the current turn; `deadline_ms` is absolute and already capped by the street close.
+- `your_turn {seat, to_call, min_raise_to, deadline_ms, round, head_hex}` — same payload,
+  delivered only to the authenticated acting wallet.
 - Send `act {match_id, seat_index, nonce, prev_head_hex, action, signature}` with
   `action ∈ fold | check | call | bet_to{amount} | raise_to{amount} | all_in`.
   `nonce` increments per seat; `prev_head_hex` is the current action-chain head from the
-  last `action` message / snapshot (replay protection). Signature layout in Appendix B.
+  last `action` message / snapshot top-level `head` (replay protection). Signature layout in Appendix B.
 - Acting early passes the turn immediately — the next `your_turn` fires at once.
 - `set_default {policy: check_fold | check_call_any, signature}` — applied automatically
   on timeout (check when free, else fold / call anything).
@@ -182,13 +213,15 @@ All state lives server-side; the socket is stateless.
 
 1. Re-auth (§2).
 2. `GET /v1/wallets/{wallet}/active` → every non-terminal seat/candidacy + settled-unclaimed:
-   `[{match_id, phase, seat_index, your_turn?, deadline_ts}]`. Deep-link the user straight
+   `[{match_id, phase, seat_index, your_turn, deadline_ts, open_turn}]`. Deep-link the user straight
    back to the table.
-3. WS `subscribe {channel:{match:{match_id}}, last_seq:0}` → server sends
+3. WS `subscribe {channel:{match:{match_id}}, last_seq:-1}` → server sends
    `snapshot {state, last_seq}` (current table view) followed by `event {seq, ...}` for the
-   **complete ordered history**, then the live stream — gap-free, dedup by `seq`. Pass your
-   last seen `last_seq` instead of 0 to fetch only the delta.
-4. Deadlines are absolute; if the player timed out while away, the default action is
+   **complete ordered history**, including genesis `seq: 0`, then the live stream — gap-free,
+   dedup by `seq`. Pass your last seen `last_seq` to fetch only the delta.
+4. If `snapshot.state.open_turn.seat === your seat_index`, render the action controls from
+   `open_turn`; this is the recoverable form of the transient `your_turn` frame.
+5. Deadlines are absolute; if the player timed out while away, the default action is
    already in the history.
 
 ## 10. Settlement & reveal
@@ -225,14 +258,14 @@ Envelope: every server frame is `{"v":1, "t":"<type>", "server_time_ms":…, …
 frames: `{"t":"<type>", …}`. Unknown fields/types MUST be ignored (additive versioning;
 breaking changes bump `v`). Heartbeat: `ping`/`pong` every 30s.
 
-Client → server: `auth {wallet, signature}` · `subscribe {channel: "lobby"|{"match":id}|"wallet", last_seq?}` ·
+Client → server: `auth {wallet, signature | session}` · `subscribe {channel: "lobby"|{"match":id}|"wallet", last_seq?}` ·
 `unsubscribe {channel}` · `act {…}` (§8) · `set_default {…}` · `seal {…}` (§7) · `ping`.
 
 Server → client: `challenge {nonce}` · `authenticated {wallet, session}` ·
 `snapshot {match_id, state, last_seq}` · `event {match_id, seq, event}` ·
 `lobby_delta {kind, room}` · `seat_update {match_id, confirmed, candidates, seats}` ·
 `phase {match_id, phase, fill_deadline?, seal_deadline?, timelock_target?, live_start?,
-scheduled_end?, button?}` · `your_turn {…}` · `action {…}` · `seal_status {sealed[],
+scheduled_end?, button?}` · `turn_update {…}` · `your_turn {…}` · `action {…}` · `seal_status {sealed[],
 deadline_ms}` · `reveal {…}` · `settled {…}` · `voided {…}` · `pong` · `error {code, msg}`.
 
 ## 13. Error catalog
@@ -245,9 +278,12 @@ On-chain `SyndicateError` highlights (Anchor error codes, from the IDL):
 `BadStatus` (wrong phase — usually a race; refresh), `CandidateLimitReached` (32 deposits
 cap), `InvalidRoomCommitment` (private/public commitment mismatch — wrong room code),
 `SeatNotConfirmed` (candidate tried to seal/claim — use refund), `SealWindowClosed`,
-`AlreadySealed`, `InvalidDrandRound` (wrong timelock round — recompute from the `phase`
-message), `AlreadyClaimed`, `MatchFull`, `NotEnoughPlayers`, `RefundUnavailable`. Retryable:
-`BadStatus`-as-race and RPC blockhash errors; everything else is a UX correction.
+`AlreadySealed`, `InvalidDrandRound` (wrong timelock round — use the server
+`timelock_target` from the confirmed `phase:"sealing"` frame), `AlreadyClaimed`,
+`MatchFull`, `NotEnoughPlayers`, `RefundUnavailable`. Retryable: `BadStatus`-as-race and
+RPC blockhash errors; everything else is a UX correction. Backend seal upload can also
+return `timelock_target_pending` or `bad_timelock_target`; refresh match state and use the
+server target.
 
 ## Appendix A — normative hashes (test vectors ship with the backend tests)
 
@@ -267,11 +303,13 @@ message), `AlreadyClaimed`, `MatchFull`, `NotEnoughPlayers`, `RefundUnavailable`
 ## Appendix B — off-chain intent signatures
 
 Domain `syndicate/action/v1` (see `services/shared/src/intent.rs` for the byte-exact
-builders; the backend rejects anything else):
+builders; the backend rejects anything else). Browser wallets should sign the UTF-8
+bytes of `base58(message_bytes)` and send the resulting signature as base64; the backend
+also accepts raw `message_bytes` signatures for CLI/bot signers.
 
 - **Action**: `action_intent_message(match_id, onchain_match_id, seat_index, seat_pubkey,
-  nonce, prev_head, action_tag, amount)` — sign the message bytes with the seat wallet
-  (ed25519 `signMessage`), send hex/base64 in `act.signature`.
+  nonce, prev_head, action_tag, amount)` — sign `base58(message_bytes)` with the seat wallet
+  (ed25519 `signMessage`), send base64 in `act.signature`.
 - **Default policy**: `default_policy_message(match_id, onchain_match_id, seat_index,
   seat_pubkey, policy_tag)`.
 - **Seal**: the prediction-commitment message binds `(match, seat, commitment,

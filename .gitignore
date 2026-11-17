@@ -22,3 +22,6 @@ pnpm-debug.log*
 !.env.example
 
 syndicate-backend
+
+# browser e2e screenshots (scripts/e2e-localnet.mjs)
+e2e-shots

@@ -3,12 +3,11 @@
  *
  * Wallet:  @solana/wallet-adapter-react (via walletBridge singleton).
  * Chain:   @coral-xyz/anchor + IDL; builds deposit/claim/refund instructions.
- * Tlock:   stub — tlock-js integration lands after the base UI is live.
+ * Tlock:   tlock-js against the server's drand beacon (mock ciphertext on localnet only).
  *
- * Env vars required (set in .env):
- *   VITE_GATEWAY_WS_URL, VITE_SOLANA_RPC_URL, VITE_PROGRAM_ID
- * Optional:
- *   VITE_CHIPS_TOKEN_MINT  (SPL mint for the betting token; read from TableTerms if absent)
+ * Env vars (see .env.example): VITE_API_URL, VITE_WS_URL, VITE_SOLANA_RPC_URL.
+ * Optional: VITE_PROGRAM_ID (defaults to the IDL address), VITE_CHIPS_TOKEN_MINT (fallback
+ * only — the match's own mint, then the server default, take precedence).
  */
 import {
   Connection,
@@ -30,6 +29,7 @@ import type { MessageSignerWalletAdapter } from '@solana/wallet-adapter-base'
 import { Buffer } from 'buffer'
 import { walletBridge } from '@/lib/walletBridge'
 import { i128le } from '@/lib/intent'
+import { detectCluster } from '@/lib/network'
 import type {
   Adapters,
   ChainClient,
@@ -258,8 +258,18 @@ async function simulateSignAndSend(
 // Anchor program singleton
 // ---------------------------------------------------------------------------
 
+/**
+ * Reads and pre-flight simulations run at `confirmed`. They used to run at `finalized`, which
+ * trails the cluster by ~13s+: right after the backend's lock/settle transaction the client
+ * still saw the PREVIOUS match status, so sealing reported "still locking on-chain" and a
+ * prompt Claim failed simulation with `BadStatus`. Only the client's own money transactions
+ * need finality (the backend re-reads them at `finalized`), and those still wait for it
+ * explicitly via `confirmTransaction(…, 'finalized')` below.
+ */
+const READ_COMMITMENT = 'confirmed' as const
+
 function getConnection(): Connection {
-  return new Connection(RPC_URL, CONFIRM_OPTS.commitment)
+  return new Connection(RPC_URL, READ_COMMITMENT)
 }
 
 /** Minimal Anchor wallet shim backed by the bridge adapter. */
@@ -288,7 +298,7 @@ function bridgeAnchorWallet(): AnchorWallet {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getProgram(): Program<any> {
   const conn = getConnection()
-  const provider = new AnchorProvider(conn, bridgeAnchorWallet(), CONFIRM_OPTS)
+  const provider = new AnchorProvider(conn, bridgeAnchorWallet(), { ...CONFIRM_OPTS, commitment: READ_COMMITMENT })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return new Program(IDL as any, provider)
 }
@@ -370,9 +380,31 @@ function deArmorAge(armored: string): Uint8Array {
   return out
 }
 
+/**
+ * LOCALNET ONLY: the backend's offline mode (`TIMELOCK_OPEN_MODE=mock`) opens a 24-byte
+ * `MockScheme` ciphertext — `target_round(8 LE) ‖ prediction_wad(16 LE)` — instead of a real
+ * drand tlock, so a local stack needs no beacon. It is NOT time-locked (the plaintext is
+ * readable), so it is honored only when the RPC is a local validator; on any real cluster
+ * the flag is ignored and seals always go through drand.
+ */
+const MOCK_TIMELOCK =
+  (import.meta.env.VITE_TIMELOCK_MODE as string | undefined) === 'mock' && detectCluster() === 'localnet'
+
+function mockSeal(priceWad: bigint, targetRound: number): Uint8Array {
+  const out = new Uint8Array(24)
+  let r = BigInt(targetRound)
+  for (let i = 0; i < 8; i++) {
+    out[i] = Number(r & 0xffn)
+    r >>= 8n
+  }
+  out.set(i128le(priceWad), 8)
+  return out
+}
+
 function createLiveTlock(): Tlock {
   return {
     async seal(priceWad, targetRound, chainHash, api): Promise<Uint8Array> {
+      if (MOCK_TIMELOCK) return mockSeal(priceWad, targetRound)
       // Dynamic import: tlock-js pulls a heavy BLS bundle — load it only when sealing so it
       // code-splits out of the main app chunk. (Buffer/i128le are already in the main bundle.)
       const { timelockEncrypt, HttpChainClient, HttpCachingChain } = await import('tlock-js')
@@ -393,16 +425,55 @@ function createLiveTlock(): Tlock {
 // On-chain custody (Anchor)
 // ---------------------------------------------------------------------------
 
-/** Find the chips token mint.  Prefer env var, else use SOL as an emergency stub. */
-function getChipsMint(mintFromTerms?: string): PublicKey | null {
+/**
+ * The server's default chip mint (`GET /v1/config`.chips_token_mint), set by the store as
+ * soon as it has talked to the backend. Lets a build work with no VITE_CHIPS_TOKEN_MINT and
+ * keeps the client on the operator's allowlist instead of a baked-in address.
+ */
+let serverChipsMint: string | null = null
+export function setServerChipsMint(mint: string | null | undefined) {
+  if (mint) serverChipsMint = mint
+}
+
+/**
+ * Resolve the SPL mint for a chips transfer. A match is denominated in ITS OWN token
+ * (`params.chips_token_mint`, carried on the terms) and the program enforces
+ * `player_token.mint == match.mint`, so the match's mint wins; then the server default;
+ * then the build-time env var.
+ */
+function getChipsMint(matchMint?: string | null): PublicKey | null {
   const envMint = import.meta.env.VITE_CHIPS_TOKEN_MINT as string | undefined
-  const raw = mintFromTerms ?? envMint
+  const raw = matchMint || serverChipsMint || envMint
   if (!raw) return null
   try {
     return new PublicKey(raw)
   } catch {
     return null
   }
+}
+
+/** The mint of the match currently on the table (from its terms), if known. */
+function currentMatchMint(): string | undefined {
+  return useGameStore.getState().terms?.chipsTokenMint
+}
+
+/**
+ * The mint a specific match is denominated in, read from its on-chain `MatchAccount` — the
+ * authoritative source for every money instruction (deposit / claim / refund), including the
+ * standalone "my winnings / reclaim" paths that run with no match on the table. Falls back
+ * to the terms/server/env resolution only if the account read fails.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function mintForMatch(program: any, matchAcct: PublicKey): Promise<PublicKey> {
+  try {
+    const acct = await program.account.matchAccount.fetchNullable(matchAcct)
+    if (acct?.mint) return acct.mint as PublicKey
+  } catch {
+    /* fall through to the configured mint */
+  }
+  const fallback = getChipsMint(currentMatchMint())
+  if (!fallback) throw new Error('[live] chips token mint unknown for this match')
+  return fallback
 }
 
 /** Ensure the player's ATA exists; returns any create-ATA instruction to prepend. */
@@ -424,7 +495,7 @@ function createLiveChain(): ChainClient {
     async chipBalance(): Promise<Chips> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) return 0n
-      const mint = getChipsMint()
+      const mint = getChipsMint(currentMatchMint())
       if (!mint) return 0n
       const conn = getConnection()
       try {
@@ -446,8 +517,8 @@ function createLiveChain(): ChainClient {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
 
-      const mintAddr = getChipsMint()
-      if (!mintAddr) throw new Error('[live] chips token mint not configured (set VITE_CHIPS_TOKEN_MINT)')
+      const mintAddr = getChipsMint(input.chipsTokenMint)
+      if (!mintAddr) throw new Error('[live] chips token mint unknown (server config not loaded and VITE_CHIPS_TOKEN_MINT unset)')
 
       const conn = getConnection()
       const authority = adapter.publicKey
@@ -581,12 +652,6 @@ function createLiveChain(): ChainClient {
           throw new Error('[live] onchainMatchId not available in terms')
         })()
 
-      const mintAddr =
-        terms?.chipsToken === 'SOL'
-          ? null
-          : getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured (set VITE_CHIPS_TOKEN_MINT)')
-
       const conn = getConnection()
       const player = adapter.publicKey
       const matchAcct = matchPda(onchainMatchId)
@@ -596,10 +661,11 @@ function createLiveChain(): ChainClient {
 
       const joinCommitment = hexToBytes(joinCommitmentHex ?? '00'.repeat(32), 32)
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      // Deposit in the MATCH's token (the program rejects any other mint).
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       const ix = await program.methods
         .deposit(joinCommitment)
@@ -633,8 +699,6 @@ function createLiveChain(): ChainClient {
         (() => {
           throw new Error('[live] onchainMatchId not available')
         })()
-      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured')
 
       const conn = getConnection()
       const player = adapter.publicKey
@@ -642,10 +706,10 @@ function createLiveChain(): ChainClient {
       const vault = vaultPda(matchAcct)
       const seat = seatPda(matchAcct, player)
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       const ix = await program.methods
         .claim()
@@ -680,8 +744,6 @@ function createLiveChain(): ChainClient {
         (() => {
           throw new Error('[live] onchainMatchId not available')
         })()
-      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured')
 
       const conn = getConnection()
       const player = adapter.publicKey
@@ -689,10 +751,10 @@ function createLiveChain(): ChainClient {
       const vault = vaultPda(matchAcct)
       const seat = seatPda(matchAcct, player)
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
 
       const ix = await program.methods
         .refund()
@@ -805,8 +867,6 @@ function createLiveChain(): ChainClient {
     async claimSettled(onchainMatchId: string): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
-      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured')
 
       const conn = getConnection()
       const player = adapter.publicKey
@@ -817,10 +877,10 @@ function createLiveChain(): ChainClient {
       const seatInfo = await conn.getAccountInfo(seat)
       if (!seatInfo?.data) throw new Error('NoSeat')
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
       const ix = await program.methods
         .claim()
         .accounts({
@@ -846,8 +906,6 @@ function createLiveChain(): ChainClient {
     async refundSelf(onchainMatchId: string): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
-      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured')
 
       const conn = getConnection()
       const player = adapter.publicKey
@@ -858,10 +916,10 @@ function createLiveChain(): ChainClient {
       const seatInfo = await conn.getAccountInfo(seat)
       if (!seatInfo?.data) throw new Error('NoSeat')
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
       const ix = await program.methods
         .refund()
         .accounts({
@@ -889,8 +947,6 @@ function createLiveChain(): ChainClient {
     async cancelAndRefundSelf(onchainMatchId: string): Promise<string> {
       const adapter = walletBridge.adapter
       if (!adapter?.publicKey) throw new Error('[live] wallet not connected')
-      const mintAddr = getChipsMint(import.meta.env.VITE_CHIPS_TOKEN_MINT)
-      if (!mintAddr) throw new Error('[live] chips token mint not configured')
 
       const conn = getConnection()
       const player = adapter.publicKey
@@ -901,10 +957,10 @@ function createLiveChain(): ChainClient {
       const seatInfo = await conn.getAccountInfo(seat)
       if (!seatInfo?.data) throw new Error('NoSeat')
 
-      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram() as any
+      const mintAddr = await mintForMatch(program, matchAcct)
+      const { ata: playerToken, createIx } = await ensureAta(conn, mintAddr, player, player)
       const voidIx = await program.methods
         .voidBeforeStart()
         .accounts({ matchAccount: matchAcct })

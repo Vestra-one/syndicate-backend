@@ -85,6 +85,18 @@ export function currentToken(): string | null {
   return session && session.expiresAt > Date.now() ? session.token : null
 }
 
+/** The live session token for a specific wallet (null if none / expiring / another wallet's).
+ *  The WebSocket uses it to authenticate without a second wallet prompt. */
+export function sessionTokenFor(wallet: string): string | null {
+  return sessionValidFor(wallet) ? session!.token : null
+}
+
+/** Adopt a session minted elsewhere (the WS `authenticated` frame of a signature auth), so
+ *  one wallet signature covers both the socket and the REST API. */
+export function adoptSession(wallet: string, token: string, expiresAt: number) {
+  if (!sessionValidFor(wallet)) saveSession({ wallet, token, expiresAt })
+}
+
 /**
  * Ensure a live Bearer session for `wallet`, running the nonce→sign→verify handshake
  * only when the cached token is missing/expired/for-another-wallet. `sign` returns a
@@ -203,6 +215,8 @@ export interface ApiConfig {
   server_time_ms: number
   program_id: string
   chips_token_mint: string
+  /** Operator allowlist of chip mints (first = default). */
+  chips_token_mints?: string[]
   feeds: { feed: string; oracle_symbol: string; oracle_token: string }[]
   bounds: {
     buy_in: Range
@@ -266,6 +280,8 @@ export interface CreateIntentResponse {
   config_hash: string
   timelock_target_hint: number
   expires_at: number
+  /** The SPL mint to pass as the `mint` account of `create_and_deposit`. */
+  chips_token_mint?: string
   create_params: ApiCreateParams
   derived: { small_blind: number; big_blind: number; total_betting_duration_sec: number }
 }
@@ -431,6 +447,16 @@ export interface ProfileResponse {
   stats: ProfileStats
 }
 
+/** A live turn as served in the match view / `turn_update` / `your_turn`. */
+export interface OpenTurn {
+  seat: number
+  to_call: number
+  min_raise_to: number
+  deadline_ms: number
+  round?: number
+  head_hex?: string
+}
+
 /** `GET /v1/matches/{id}` — full detail (params, timing, seats, reveal). */
 export interface MatchDetail {
   v: number
@@ -444,6 +470,8 @@ export interface MatchDetail {
   creator_handle: string | null
   params: {
     buy_in: number
+    /** SPL mint this match is denominated in (null on legacy rows). */
+    chips_token_mint?: string | null
     entry_fee: number
     rake_bps: number
     rake_cap: number
@@ -461,6 +489,8 @@ export interface MatchDetail {
   timing: {
     fill_deadline: number | null
     lock_ts: number | null
+    /** True once the lock tx confirmed and the server mirrored the on-chain seal deadline. */
+    lock_confirmed?: boolean
     seal_deadline: number | null
     live_start: number | null
     scheduled_end: number | null
@@ -489,8 +519,10 @@ export interface MatchDetail {
   round: number | null
   current_bet: number | null
   to_act: number | null
-  /** The open turn (server ≥ turn-recovery patch) — carries the TRUE action deadline. */
-  turn?: { seat: number; to_call: number; min_raise_to: number; deadline_ms: number } | null
+  /** The open turn — carries the TRUE action deadline and the live action-chain head.
+   *  (`open_turn` is the same object under its documented name.) */
+  turn?: OpenTurn | null
+  open_turn?: OpenTurn | null
   reveal: RevealBlock | null
   last_seq: number
   head: string
@@ -537,11 +569,11 @@ export const api = {
 
   // — detail / lists —
   getMatch: (matchId: string) => request<MatchDetail>(`/matches/${encodeURIComponent(matchId)}`),
-  /** Journal page (`since` is EXCLUSIVE — and the genesis event is seq 0, so it is never
-   *  returned; an empty result on a live match means only genesis exists). */
-  getEvents: (matchId: string, since = 0) =>
+  /** Journal page. `afterSeq` is EXCLUSIVE; the default −1 returns the whole journal
+   *  including the genesis event (seq 0). */
+  getEvents: (matchId: string, afterSeq = -1) =>
     request<{ events: { seq: number; type: string; body: Record<string, unknown>; hash: string }[] }>(
-      `/matches/${encodeURIComponent(matchId)}/events${qs({ since })}`,
+      `/matches/${encodeURIComponent(matchId)}/events${qs({ after_seq: afterSeq })}`,
     ),
   getLobby: (opts: { feed?: string; buyInMin?: number; buyInMax?: number; cursor?: string; limit?: number } = {}) =>
     request<{ v: number; server_time_ms: number; rooms: LobbyRoom[] }>(

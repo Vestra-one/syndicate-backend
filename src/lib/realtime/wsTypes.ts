@@ -48,7 +48,9 @@ export interface WsMatchState {
   to_act: number | null
   /** The open turn (server ≥ turn-recovery patch) — lets a mid-turn refresh recover the
    *  action panel with the TRUE deadline instead of being silently timeout-folded. */
-  turn?: { seat: number; to_call: number; min_raise_to: number; deadline_ms: number } | null
+  turn?: WsTurn | null
+  /** Same object as `turn`, under its documented name (§9). */
+  open_turn?: WsTurn | null
   reveal: {
     settlement_price_wad: string | null
     predictions: { seat: number; price: string; source: string }[] | null
@@ -70,6 +72,17 @@ export interface WsSeat {
   total_contribution: number | null
   folded: boolean | null
   all_in: boolean | null
+}
+
+/** A live turn: who acts, what it costs, the absolute deadline, and the action-chain head
+ *  the acting seat must sign against. */
+export interface WsTurn {
+  seat: number
+  to_call: number
+  min_raise_to: number
+  deadline_ms: number
+  round?: number
+  head_hex?: string
 }
 
 /** One engine event (backfill or inside an `action` broadcast). */
@@ -102,6 +115,9 @@ export type ServerFrame =
       t: 'phase'
       match_id: string
       phase: string
+      /** True on the sealing frame: the lock tx confirmed — safe to register a commitment. */
+      lock_confirmed?: boolean
+      lock_tx_sig?: string | null
       seal_deadline?: number | null
       timelock_target?: number | null
       live_start?: number | null
@@ -116,7 +132,10 @@ export type ServerFrame =
       just_sealed?: number | null
       deadline_ms?: number | null
     })
-  | (Base & { t: 'your_turn'; match_id: string; seat: number; to_call: number; min_raise_to: number; deadline_ms: number })
+  // `turn_update` is the PUBLIC turn frame every subscriber gets; `your_turn` is the same
+  // payload delivered only to the acting wallet's authenticated socket.
+  | (Base & { t: 'turn_update'; match_id: string } & WsTurn)
+  | (Base & { t: 'your_turn'; match_id: string } & WsTurn)
   | (Base & {
       t: 'action'
       match_id: string
@@ -149,7 +168,10 @@ export type Channel = 'lobby' | 'wallet' | { match: string }
 export type WsAction = 'fold' | 'check' | 'call' | 'all_in' | { kind: 'bet_to' | 'raise_to'; amount: number }
 
 export type ClientFrame =
+  // Sign the challenge nonce, OR present an existing REST session token for the wallet.
   | { t: 'auth'; wallet: string; signature: string }
+  | { t: 'auth'; wallet: string; session: string }
+  /** `last_seq: -1` (or omitted) backfills the whole journal incl. genesis; N → events after N. */
   | { t: 'subscribe'; channel: Channel; last_seq?: number }
   | { t: 'unsubscribe'; channel: Channel }
   | { t: 'ping' }

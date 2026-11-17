@@ -16,7 +16,7 @@ import type {
   VoidReason,
 } from '@/lib/protocol'
 import { DRAND, GATEWAY_PRICE_PHASES } from '@/lib/protocol'
-import type { ServerFrame, WsMatchState, WsAction } from '@/lib/realtime/wsTypes'
+import type { ServerFrame, WsMatchState, WsAction, WsTurn } from '@/lib/realtime/wsTypes'
 import {
   actionIntentMessage,
   defaultPolicyMessage,
@@ -28,6 +28,7 @@ import bs58 from 'bs58'
 import type { ConnectionStatus, PricePoint } from '@/lib/ui'
 import type { PriceRange } from '@/lib/priceRanges'
 import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters'
+import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
 import { log } from '@/lib/log'
@@ -311,6 +312,7 @@ function configToTerms(config: ApiConfig, feed: string): TableTerms {
     priceFeedId: feed,
     supportedFeeds: config.feeds.map((f) => f.feed),
     chipsToken: 'USDC',
+    chipsTokenMint: config.chips_token_mint || undefined,
     decimals: 2,
     oracleAdapter: 'signed-price',
     settlementMode: 'exact-timestamp',
@@ -344,6 +346,7 @@ function matchDetailToTerms(detail: MatchDetail): TableTerms {
     priceFeedId: detail.feed,
     supportedFeeds: [detail.feed],
     chipsToken: 'USDC',
+    chipsTokenMint: p.chips_token_mint ?? undefined,
     decimals: 2,
     oracleAdapter: 'signed-price',
     settlementMode: 'exact-timestamp',
@@ -373,6 +376,10 @@ function matchDetailToTerms(detail: MatchDetail): TableTerms {
 let adapters: Adapters | null = null
 let gateway: Gateway | null = null
 let unsub: (() => void) | null = null
+/** The wallet the CURRENT socket is authenticated as (from its `authenticated` frame);
+ *  null on a fresh/unauthenticated socket. Acts, seals and defaults need this — spectating
+ *  does not. */
+let wsAuthedWallet: string | null = null
 
 /** Action-chain state for signed betting (§8), reset per match. `head` seeds `prev_head`
  *  for the next `act`; `nonce` increments per action; `engineSeat` is this wallet's seat. */
@@ -439,7 +446,7 @@ async function syncActionHead(matchId: string): Promise<boolean> {
     /* fall through to the journal */
   }
   try {
-    const { events } = await api.getEvents(matchId, 0)
+    const { events } = await api.getEvents(matchId) // whole journal incl. genesis (seq 0)
     const last = events.at(-1)
     if (!last) return false
     actionHead = hexToBytes32(last.hash)
@@ -467,6 +474,38 @@ async function armActionChain(get: () => GameState): Promise<void> {
   defaultArmed = true
   log.info('[head] journal empty — registering default policy to mint a fetchable event')
   get().setDefault(get().defaultAction)
+}
+
+/**
+ * Make sure the socket can carry a signed gameplay frame for the connected wallet: open AND
+ * authenticated as that wallet. `gateway.send` silently drops frames on a closed socket and
+ * the server rejects acts from an unauthenticated one, and either way the turn was burning
+ * down with the panel already cleared. So before signing: wait out an auth that is still in
+ * flight; if the socket is dead or was never authenticated (challenge prompt dismissed,
+ * dropped connection), rebuild it and resubscribe — silent when a session token exists.
+ */
+async function ensureActionSocket(get: () => GameState, matchId: string): Promise<boolean> {
+  const wallet = adapters?.wallet.address() ?? null
+  if (!wallet) return false
+  const ready = () => !!gateway?.isOpen() && wsAuthedWallet === wallet
+  const waitReady = async (ms: number) => {
+    for (let waited = 0; waited < ms && !ready(); waited += 100) await new Promise((r) => setTimeout(r, 100))
+    return ready()
+  }
+  if (ready()) return true
+  if (gateway?.isOpen() && (await waitReady(1500))) return true
+  log.warn('[ws] socket not ready for a signed frame — reconnecting')
+  if (gateway) {
+    unsub?.()
+    gateway.disconnect()
+    gateway = null
+    unsub = null
+  }
+  await get().connect()
+  // `connect()` reassigned the module-level gateway (TS narrowed it to null above).
+  const fresh = gateway as Gateway | null
+  fresh?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: lastAppliedSeq })
+  return waitReady(6000)
 }
 
 /** Subscribe the open socket to a match channel — server replies with a snapshot then the
@@ -524,10 +563,25 @@ let joinMatchId: string | null = null
  *  hit the create path). Falls back to the compiled-in quicknet constant only if config is
  *  unreachable. */
 let serverDrand: ApiConfig['drand'] | null = null
+/** Remember what `GET /v1/config` told us: the drand beacon to seal against and the
+ *  operator's default chip mint (so balances/deposits never depend on a build-time env). */
+function adoptServerConfig(config: ApiConfig) {
+  serverDrand = config.drand
+  setServerChipsMint(config.chips_token_mint)
+}
+let serverConfigLoad: Promise<void> | null = null
+/** Load the server config once (deduped); failures are retried on the next call. */
+function ensureServerConfig(): Promise<void> {
+  if (serverDrand) return Promise.resolve()
+  serverConfigLoad ??= api.getConfig()
+    .then(adoptServerConfig)
+    .catch((e) => log.warn('[config] server config fetch failed:', e))
+    .finally(() => { serverConfigLoad = null })
+  return serverConfigLoad
+}
 async function resolveDrand(): Promise<{ chainHash: string; api: string }> {
-  if (!serverDrand) {
-    try { serverDrand = (await api.getConfig()).drand } catch (e) { log.warn('[seal] drand config fetch failed, using fallback beacon', e) }
-  }
+  if (!serverDrand) await ensureServerConfig()
+  if (!serverDrand) log.warn('[seal] drand config unavailable, using fallback beacon')
   return serverDrand
     ? { chainHash: serverDrand.chain_hash, api: serverDrand.api }
     : { chainHash: DRAND.chainHash, api: DRAND.api }
@@ -994,7 +1048,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     try {
       const config = await api.getConfig()
-      serverDrand = config.drand
+      adoptServerConfig(config)
       const feed = config.feeds[0]?.feed ?? 'BTC/USD'
       createCtx = { config, feed, intent: null }
       const limits = configToCreateLimits(config)
@@ -1077,6 +1131,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     // StrictMode unmount/remount across the await; act on the instance we created.
     const gw = createGateway(adapters)
     gateway = gw
+    wsAuthedWallet = null // a new socket starts unauthenticated
     unsub = gw.subscribe((frame) => handleServerFrame(frame, set, get))
     try {
       await gw.connect() // resolves on socket open; auto-answers a challenge if a wallet exists
@@ -1098,6 +1153,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     gateway?.disconnect()
     gateway = null
     unsub = null
+    wsAuthedWallet = null
     adapters = null
     joinMatchId = null
     createCtx = null
@@ -1237,6 +1293,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       //    price_token, room_commitment, oracle params all come from the backend).
       const { txSig, matchPda } = await adapters.chain.createAndDeposit({
         onchainMatchId: String(cp.match_id),
+        chipsTokenMint: intent.chips_token_mint,
         configHash: cp.config_hash,
         priceTokenHex: cp.price_token,
         buyIn: BigInt(cp.buy_in),
@@ -1268,7 +1325,9 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       // Record the on-chain ids so subsequent ix (seal/claim) derive the right PDAs.
       set((s) => ({
-        terms: s.terms ? { ...s.terms, onchainMatchId: String(cp.match_id), matchPda } : s.terms,
+        terms: s.terms
+          ? { ...s.terms, onchainMatchId: String(cp.match_id), matchPda, chipsTokenMint: intent.chips_token_mint ?? s.terms.chipsTokenMint }
+          : s.terms,
         lastTx: { sig: txSig, label: 'Table created on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
         fillDeadline: Date.now() + cp.fill_window_sec * 1000,
@@ -1448,6 +1507,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     // Instant feedback: flip the panel to "Sending…" now, before the (slow) wallet sign —
     // otherwise the button looks dead for the whole signature round-trip.
     set({ actPending: action })
+    // The act travels over the socket and needs it authenticated as this wallet.
+    if (!(await ensureActionSocket(get, match.matchId))) {
+      set({ actPending: null, playError: 'Reconnecting to the table — try that again in a moment.' })
+      return
+    }
     // Freshen the action-chain head from the journal at the last moment: the engine rejects
     // any intent whose prev_head isn't its CURRENT head, and another seat's event (default
     // registration, timeout) may have moved it since we last heard. ~1 RTT before the wallet
@@ -1480,7 +1544,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         amount,
       })
       const signature = await signIntent(msg)
-      gateway.send({
+      gateway?.send({
         t: 'act',
         match_id: match.matchId,
         seat_index: seatIndex,
@@ -1786,6 +1850,7 @@ function bettingActionToWire(a: BettingAction): { tag: number; amount: Chips; wi
 function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameState) {
   switch (frame.t) {
     case 'authenticated':
+      wsAuthedWallet = frame.wallet
       set({ walletAddress: frame.wallet, status: 'live' })
       break
 
@@ -1813,7 +1878,8 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       if (frame.state.phase === 'sealing') void ensureSealContext(set, get)
       // Mid-turn refresh recovery: a patched server puts the open turn (with its TRUE
       // deadline) in the snapshot — latch it if it's ours and still live.
-      const turn = frame.state.turn
+      const turn = frame.state.turn ?? frame.state.open_turn
+      if (turn) adoptTurnHead(turn)
       if (turn && turn.seat === view.yourSeat && Date.now() < turn.deadline_ms) {
         set({ yourTurn: { toCall: turn.to_call, minRaiseTo: turn.min_raise_to, deadline: turn.deadline_ms }, actPending: null })
       }
@@ -1900,15 +1966,25 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       break
     }
 
+    // The server announces every turn twice: `turn_update` to EVERY subscriber (public table
+    // state) and `your_turn` only to the acting wallet's authenticated socket. Both carry the
+    // same payload, so handle them identically — and never depend on the private frame: a
+    // socket whose auth challenge was skipped/dismissed still gets `turn_update`, which is
+    // enough to open the panel for our own seat.
+    case 'turn_update':
     case 'your_turn': {
-      // Turn frames arrive on the shared match channel, so every subscriber sees them —
-      // including the OTHER player. Never adopt frame.seat as our identity (that made both
-      // browsers open the action panel and sign acts with the wrong seat_index); only open
-      // the panel if the seat verifiably matches our wallet-resolved engine seat.
+      // Never adopt frame.seat as our identity (that once made both browsers open the action
+      // panel and sign acts with the wrong seat_index); only open the panel if the seat
+      // verifiably matches our wallet-resolved engine seat.
       const turn = { toCall: frame.to_call, minRaiseTo: frame.min_raise_to, deadline: frame.deadline_ms }
       const mySeat = myEngineSeat ?? get().match?.yourSeat ?? null
+      // The frame carries the live action-chain head — the exact prev_head the acting seat
+      // must sign. Adopt it directly (no REST round-trip, no stale-head race).
+      const gotHead = adoptTurnHead(frame)
       // Whoever it's for, the frame names the acting seat — keep the banner/pods honest.
-      set((s) => ({ match: s.match ? { ...s.match, toActSeat: frame.seat } : s.match }))
+      set((s) => ({
+        match: s.match ? { ...s.match, toActSeat: frame.seat, round: frame.round ?? s.match.round } : s.match,
+      }))
       if (mySeat == null) {
         // Seat unknown (e.g. reconnected mid-hand) — resolve it from REST, then decide.
         void refreshMatchSeats(set, get).then(() => {
@@ -1918,10 +1994,15 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         })
         break
       }
-      set({ yourTurn: frame.seat === mySeat ? turn : null, actPending: null })
-      // Freshen the action-chain head from the journal before the user can click — an
-      // opponent's default registration may have moved it since our last sync.
-      if (frame.seat === mySeat) void syncActionHead(frame.match_id)
+      const mine = frame.seat === mySeat
+      // Don't clobber an in-flight act: the public + private frames for the same turn arrive
+      // back-to-back, and the second must not reset a click made after the first.
+      set((s) => ({
+        yourTurn: mine ? turn : null,
+        actPending: mine && s.yourTurn?.deadline === turn.deadline ? s.actPending : null,
+      }))
+      // Older servers send no head in the frame — fall back to the journal.
+      if (mine && !gotHead) void syncActionHead(frame.match_id)
       // Make sure our own stack/committed are populated before the action panel opens — the
       // turn frame carries to_call/min_raise_to but no stacks.
       void refreshMatchSeats(set, get)
@@ -1987,8 +2068,15 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // A rejected act otherwise leaves a silently dead table (yourTurn was optimistically
       // cleared on send). Resync the chain head + table so the turn is restored and the
       // retry signs against the real head.
-      if (frame.code === 'bad_action' || frame.code === 'unauthorized' || frame.code === 'rate_limited') {
-        set({ playError: `Action rejected — ${frame.msg}` })
+      if (
+        frame.code === 'bad_action' || frame.code === 'unauthorized' || frame.code === 'rate_limited' ||
+        frame.code === 'betting_closed' || frame.code === 'not_live' || frame.code === 'not_found'
+      ) {
+        set({
+          playError: frame.code === 'betting_closed'
+            ? 'This round is not open for betting yet — your turn stays queued until it opens.'
+            : `Action rejected — ${frame.msg}`,
+        })
         const mid = get().match?.matchId ?? joinMatchId
         if (mid) void syncActionHead(mid)
         void refreshMatchSeats(set, get)
@@ -2038,21 +2126,44 @@ async function ensureSealContext(set: SetState, get: () => GameState): Promise<v
 }
 
 /**
- * Resolve the per-seat payout AWARDS for a settled match. No server view carries per-seat
- * payout amounts — they live on-chain (`seat.payout`) — and a conviction match pays MULTIPLE
- * seats (winner + partial returns), not just the winner. So read EVERY seat's on-chain payout
- * (the seat wallets come from the match view) and return the full award set, ordered
- * top-payout-first so the ceremony crowns the actual winner and totals the real pot.
+ * Resolve the per-seat payout AWARDS for a settled match, winner first.
  *
- * Degraded fallback (chain unreachable / no seat wallets): read only the connected wallet's own
- * payout and crown the WS `winnerSeats` at amount 0 — enough to light the Claim button and mark
- * a winner, even when the full distribution is unknown.
+ * A conviction match pays MULTIPLE seats (the pot winner + every other seat's un-bet stack),
+ * so the ceremony needs every seat's amount, not just the winner's.
+ *
+ *  1. The server's settlement audit — `seats[].payout_chips` (what the seat can claim) and
+ *     `pot_won_chips` (the winner signal). This is the exact data the settle transaction was
+ *     built from, and it is available the instant the match reads `settled`.
+ *  2. The on-chain `seat.payout`, for servers that predate those fields. NOTE this read runs
+ *     at `finalized` commitment, which lags the settle transaction by ~15s: asked right at
+ *     settlement it returns zeros, which is why it can no longer be the primary source (the
+ *     ceremony latched a $0 result with no Claim button until the page was reloaded).
+ *  3. Degraded: only the connected wallet's own payout, crowning the WS `winnerSeats` at 0.
+ *
+ * Returns `complete: false` when no amounts could be resolved yet, so callers keep polling
+ * instead of latching an empty ceremony.
  */
 async function computeSettlementAwards(
   detail: MatchDetail,
   onchainId: string | undefined,
   winnerSeats?: number[],
-): Promise<{ seat: number; amount: Chips }[]> {
+): Promise<{ awards: { seat: number; amount: Chips }[]; complete: boolean }> {
+  const desc = (a: bigint, b: bigint) => (b > a ? 1 : b < a ? -1 : 0)
+
+  // 1. Server audit.
+  const audited = (detail.seats ?? []).filter((s) => s.payout_chips != null)
+  if (audited.length > 0 && audited.some((s) => (s.payout_chips ?? 0) > 0)) {
+    const rows = audited.map((s) => ({
+      seat: s.seat_index,
+      amount: BigInt(s.payout_chips ?? 0),
+      won: BigInt(s.pot_won_chips ?? 0),
+    }))
+    // Crown by pot won (payout alone also counts each seat's returned, un-bet stack).
+    rows.sort((a, b) => desc(a.won, b.won) || desc(a.amount, b.amount))
+    return { awards: rows.map(({ seat, amount }) => ({ seat, amount })), complete: true }
+  }
+
+  // 2. On-chain seat payouts.
   if (adapters && onchainId) {
     const seatWallets = (detail.seats ?? [])
       .filter((s) => !!s.wallet)
@@ -2062,17 +2173,17 @@ async function computeSettlementAwards(
         const payouts = await adapters.chain.getSeatPayouts(onchainId, seatWallets.map((s) => s.wallet))
         const byWallet = new Map(payouts.map((p) => [p.wallet, p.payout]))
         const awards = seatWallets.map(({ wallet, seat }) => ({ seat, amount: byWallet.get(wallet) ?? 0n }))
-        // Only trust the full read if it actually found amounts; otherwise fall through to the
-        // degraded path (a settled match always pays someone, so all-zero means the read missed).
+        // A settled match always pays someone, so all-zero means the read missed (not finalized).
         if (awards.some((a) => a.amount > 0n)) {
-          return awards.sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0))
+          return { awards: awards.sort((a, b) => desc(a.amount, b.amount)), complete: true }
         }
       } catch (err) {
         log.warn('[settle] all-seat payout read failed, falling back:', err)
       }
     }
   }
-  // Degraded: only our own amount is knowable.
+
+  // 3. Degraded: only our own amount is knowable.
   let myPayout: { seat: number; amount: Chips } | null = null
   if (adapters && onchainId) {
     try {
@@ -2082,11 +2193,12 @@ async function computeSettlementAwards(
       log.warn('[settle] on-chain payout read failed:', err)
     }
   }
-  return winnerSeats && winnerSeats.length
+  const awards = winnerSeats && winnerSeats.length
     ? winnerSeats.map((seat) => ({ seat, amount: myPayout && myPayout.seat === seat ? myPayout.amount : 0n }))
     : myPayout
       ? [myPayout]
       : []
+  return { awards, complete: false }
 }
 
 /**
@@ -2155,14 +2267,56 @@ async function recoverSettlement(set: SetState, get: () => GameState, winnerSeat
     return
   }
 
-  // Per-seat payout amounts aren't in any server view — read every seat's from the chain.
-  const onchainId = get().terms?.onchainMatchId
-  const awards = await computeSettlementAwards(detail, onchainId, winnerSeats)
+  await landSettlement(set, get, detail, decimals, winnerSeats)
+}
 
+/**
+ * Put the settlement on screen and, if the payout amounts could not be resolved yet, keep
+ * re-resolving them in the background until they land — the ceremony (and its Claim button)
+ * then fills in by itself instead of staying at $0 forever.
+ */
+async function landSettlement(
+  set: SetState,
+  get: () => GameState,
+  detail: MatchDetail,
+  decimals: number,
+  winnerSeats?: number[],
+): Promise<void> {
+  const matchId = detail.match_id
+  const onchainId = get().terms?.onchainMatchId
+  const first = await computeSettlementAwards(detail, onchainId, winnerSeats)
   set((s) =>
-    s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, awards), yourTurn: null, actPending: null },
+    s.settlement
+      ? {}
+      : {
+          settlement: settlementFromDetail(detail, decimals, first.awards),
+          match: s.match ? { ...s.match, phase: 'SETTLED' } : s.match,
+          yourTurn: null,
+          actPending: null,
+        },
   )
   stopMatchPoll()
+  if (first.complete) return
+
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 3000))
+    if (get().settlement?.matchId !== matchId) return // left the table / new match
+    let fresh: MatchDetail
+    try {
+      fresh = await api.getMatch(matchId)
+    } catch {
+      continue
+    }
+    const next = await computeSettlementAwards(fresh, onchainId, winnerSeats)
+    if (!next.complete) continue
+    set((s) =>
+      s.settlement?.matchId === matchId
+        ? { settlement: settlementFromDetail(fresh, decimals, next.awards) }
+        : {},
+    )
+    return
+  }
+  log.warn('[settle] payout amounts never resolved for', matchId)
 }
 
 /**
@@ -2189,11 +2343,7 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
     if (phase === 'SETTLED' && !get().settlement) {
       // Reuse the shared award resolution so the REST self-heal and the WS `settled` frame land
       // an identical ceremony (price + reveals + every seat's real on-chain payout).
-      const decimals = get().terms?.decimals ?? 2
-      const onchainId = get().terms?.onchainMatchId
-      const awards = await computeSettlementAwards(detail, onchainId)
-      set((s) => (s.settlement ? {} : { settlement: settlementFromDetail(detail, decimals, awards), yourTurn: null, actPending: null }))
-      stopMatchPoll()
+      await landSettlement(set, get, detail, get().terms?.decimals ?? 2)
     } else if (phase === 'VOID' && !get().voided) {
       set({ voided: { reason: (detail.void_kind ?? 'Void') as VoidReason }, yourTurn: null, actPending: null })
       stopMatchPoll()
@@ -2263,8 +2413,9 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
       st.yourTurn == null &&
       st.actPending == null
     ) {
-      const t = detail.turn
+      const t = detail.turn ?? detail.open_turn
       if (t && t.seat === mine.seat_index) {
+        adoptTurnHead(t)
         if (Date.now() < t.deadline_ms) {
           log.debug('[turn] recovered from detail — to_call', t.to_call, 'deadline_ms', t.deadline_ms)
           set({ yourTurn: { toCall: t.to_call, minRaiseTo: t.min_raise_to, deadline: t.deadline_ms } })
@@ -2302,6 +2453,18 @@ async function reconcileFillCount(matchId: string, set: SetState): Promise<void>
     set((s) => (s.lobbySeated === count ? {} : { lobbySeated: count }))
   } catch (err) {
     log.warn('[fill] lobby count reconcile failed:', err)
+  }
+}
+
+/** Adopt the action-chain head a turn frame/view carries (`head_hex`). Returns false when
+ *  the server sent none (older builds) so callers can fall back to the journal. */
+function adoptTurnHead(turn: Pick<WsTurn, 'head_hex'>): boolean {
+  if (!turn.head_hex) return false
+  try {
+    actionHead = hexToBytes32(turn.head_hex)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -2345,6 +2508,7 @@ async function refreshBalance(set: SetState, force = false) {
   if (!force && Date.now() - lastBalanceFetchAt < BALANCE_MIN_INTERVAL_MS) return
   balanceInFlight = (async () => {
     try {
+      await ensureServerConfig() // the server's default chip mint (no build-time env needed)
       const balance = await adapters!.chain.chipBalance()
       set({ chipBalance: balance })
     } catch {

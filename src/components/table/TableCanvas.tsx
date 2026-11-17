@@ -49,10 +49,20 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
     // (see coinAudio). The live game stays silent — the pot builds constantly
     // there, so per-coin clinks would be noise, not delight.
     const decorative = pot !== undefined
-    const handle = createTableScene(el, {
-      autoSpin: spin,
-      onCoinLand: decorative ? playCoinClink : undefined,
-    })
+    // The 3D table is presentation only — every game control lives in the DOM HUD on top
+    // of it. If WebGL is unavailable (GPU blocklisted, hardware acceleration off, locked-down
+    // or headless browsers) the renderer throws; without this guard that exception unmounted
+    // the whole app. Degrade to the HUD over a plain backdrop instead.
+    let handle: TableSceneHandle
+    try {
+      handle = createTableScene(el, {
+        autoSpin: spin,
+        onCoinLand: decorative ? playCoinClink : undefined,
+      })
+    } catch (err) {
+      console.warn('[table] 3D scene unavailable — continuing without it:', err)
+      return
+    }
     handleRef.current = handle
 
     // DEV console helpers — cleared on unmount so they don't retain a disposed scene (and
