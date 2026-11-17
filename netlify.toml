@@ -1,0 +1,5 @@
+# The web app lives in apps/web; Netlify builds it from there.
+[build]
+  base = "apps/web"
+  command = "npm run build"
+  publish = "dist"

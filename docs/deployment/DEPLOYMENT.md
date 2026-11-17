@@ -206,8 +206,8 @@ scripts/localnet/down.sh
 - Needs: Solana CLI (`solana-test-validator`, `spl-token`), cargo, node ≥ 20, `psql`, and a
   Postgres superuser URL (`PG_SUPER_URL`, default `postgres://postgres@127.0.0.1:5432/postgres`).
 - `EXTRA_WALLETS="<pubkey> …" scripts/localnet/up.sh` also funds your own browser wallets.
-- The frontend repo runs its browser end-to-end test against this stack
-  (`npm run e2e:localnet` in syn-front): two real app instances play a hand through
+- The web app runs its browser end-to-end test against this stack
+  (`npm run e2e:localnet` in `apps/web`): two real app instances play a hand through
   create → join → seal → bet → settle → claim.
 
 ## 10. Operations runbook

@@ -67,15 +67,15 @@ defaults in that file).
 
 ## Run the whole game locally, end to end
 
-No devnet, no wallet extension, no funds needed — the backend repo ships a one-command
+No devnet, no wallet extension, no funds needed — the repo ships a one-command
 local stack (validator with the program, chips mint, Postgres, price feed, game-server,
 settlement worker):
 
 ```bash
-# 1. in syndicate-backend
+# 1. at the repo root
 scripts/localnet/up.sh          # prints the VITE_* block for .env.local
 
-# 2. here — two headless browsers play one full hand through the real app
+# 2. in apps/web — two headless browsers play one full hand through the real app
 npm run e2e:localnet
 ```
 

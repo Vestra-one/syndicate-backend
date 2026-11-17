@@ -11,7 +11,7 @@
  * wallet — a Wallet Standard wallet injected into the page whose signatures are produced
  * here from the funded e2e keypairs (no extension, no prompts).
  *
- * Prereq: the backend localnet is up (`syndicate-backend/scripts/localnet/up.sh`).
+ * Prereq: the localnet is up (`scripts/localnet/up.sh` at the repo root).
  *
  *   node scripts/e2e-localnet.mjs
  *   LOCALNET_ENV=/path/to/.localnet/env SHOTS=./e2e-shots node scripts/e2e-localnet.mjs
@@ -27,11 +27,8 @@ import { Keypair, Transaction, VersionedTransaction } from '@solana/web3.js'
 import { ed25519 } from '@noble/curves/ed25519'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-// The backend may be checked out beside this repo or inside it (it is git-ignored here).
-const ENV_FILE =
-  process.env.LOCALNET_ENV ??
-  [resolve(ROOT, '../syndicate-backend/.localnet/env'), resolve(ROOT, 'syndicate-backend/.localnet/env')].find(existsSync) ??
-  resolve(ROOT, '../syndicate-backend/.localnet/env')
+// Written by scripts/localnet/up.sh at the repo root.
+const ENV_FILE = process.env.LOCALNET_ENV ?? resolve(ROOT, '../../.localnet/env')
 const SHOTS = resolve(process.env.SHOTS ?? resolve(ROOT, 'e2e-shots'))
 const PORT = Number(process.env.APP_PORT ?? 5199)
 const APP = `http://127.0.0.1:${PORT}/`
@@ -41,7 +38,7 @@ const OBSERVATION_SEC = Number(process.env.OBSERVATION_SEC ?? 5)
 const WALLET_NAME = 'Localnet Test Wallet'
 
 if (!existsSync(ENV_FILE)) {
-  console.error(`localnet env not found at ${ENV_FILE} — run syndicate-backend/scripts/localnet/up.sh first`)
+  console.error(`localnet env not found at ${ENV_FILE} — run scripts/localnet/up.sh (repo root) first`)
   process.exit(1)
 }
 const env = Object.fromEntries(

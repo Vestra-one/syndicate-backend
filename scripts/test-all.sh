@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+echo "== IDL in sync (docs ↔ web app) =="
+cmp docs/frontend/idl/syndicate_program.json apps/web/src/lib/idl/syndicate_program.json
+
 echo "== workspace tests =="
 cargo test --workspace
 

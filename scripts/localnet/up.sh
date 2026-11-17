@@ -223,7 +223,7 @@ localnet is up.
   Chips mint  $MINT
   env         $STATE/env
 
-Frontend (.env.local in syn-front):
+Frontend (apps/web/.env.local):
   VITE_API_URL=http://127.0.0.1:$GAME_PORT/v1
   VITE_WS_URL=ws://127.0.0.1:$GAME_PORT/v1/ws
   VITE_PRICE_WS_URL=ws://127.0.0.1:$PRICE_PORT/ws
@@ -231,5 +231,5 @@ Frontend (.env.local in syn-front):
   VITE_PROGRAM_ID=$PROGRAM_ID
   VITE_CHIPS_TOKEN_MINT=$MINT
 
-Next: scripts/localnet/e2e.sh
+Next: scripts/localnet/e2e.sh   ·   (cd apps/web && npm run e2e:localnet)
 DONE

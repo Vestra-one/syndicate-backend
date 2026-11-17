@@ -28,3 +28,9 @@ services/programs/keys/
 
 # Local offline stack state (scripts/localnet): ledger, logs, pids, keys, env
 .localnet/
+
+# AI assistant instruction files stay local
+CLAUDE.md
+AGENTS.md
+.cursorignore
+.cursorindexingignore
