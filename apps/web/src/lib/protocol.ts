@@ -188,6 +188,9 @@ export interface SettlementView {
   settlementPrice: FixedPrice
   awards: { seat: SeatIndex; amount: Chips }[]
   uncalledReturns: { seat: SeatIndex; amount: Chips }[]
+  /** The pot that was actually contested (bets before rake). `awards` are larger: each
+   *  also returns the seat's un-bet stack. Absent on servers that don't report it. */
+  finalPot?: Chips
   rakeCollected: Chips
   oracleProof?: SignedPriceView
   revealedPredictions: { seat: SeatIndex; prediction: FixedPrice }[]

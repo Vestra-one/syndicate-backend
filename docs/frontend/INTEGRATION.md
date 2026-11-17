@@ -47,6 +47,38 @@ fresh `session` usable on REST. Use this on every reconnect so a dropped socket 
 never needs a wallet prompt.
 Spectating (lobby + match channels, public reads) needs **no** auth.
 
+### One-tap play (session keys)
+
+Every bet/check/call/fold is a signed intent; signing each with the wallet is a popup per
+move against the action timer. Instead, have the wallet sign **one** human-readable grant
+per match that delegates those signatures to an ephemeral ed25519 key held by the client:
+
+```
+POST /v1/matches/{id}/session-key   (Bearer)
+  {session_pubkey: base58, expires_at: ms (≤ 24h ahead), signature: base64}
+```
+
+`signature` is the wallet's `signMessage` over this exact UTF-8 text (the server rebuilds it;
+`services/match-engine/src/verify.rs::session_key_grant_message`):
+
+```
+Satoshi's Table — one-tap play
+
+Let this browser make your moves in this match (bet, check, call, fold, seal) without asking you to sign each one. It cannot move your funds.
+
+match: <onchain_match_id>
+wallet: <wallet base58>
+session key: <session_pubkey base58>
+expires: <expires_at ms>
+```
+
+After that, sign `act`, `set_default` and the seal intent with the session key (ed25519
+over the raw intent bytes, base64) — the intent message is unchanged and still names the
+seat wallet. Scope: one wallet, one match, gameplay only; deposits, the on-chain seal
+commitment, claims and refunds stay wallet-signed transactions. Ask for the grant right
+after the deposit confirms (the table is still filling). `GET /v1/config`.`session_keys`
+tells you the server supports it; wallet signatures keep working either way.
+
 ## 3. Who signs what
 
 | Signed by the **player's wallet** (FE builds from IDL or server template) | Signed by the **backend operator** (automatic) |
@@ -159,7 +191,7 @@ do not start the seal countdown from local fill/full detection or from a pending
 During sealing, `scheduled_end` is the projected latest match end used for timelock
 validation; the live frame replaces it with the actual scheduled end.
 
-**Sealing UX** (the player has `seal_window_sec` — default 90s — to seal):
+**Sealing UX** (the player has `seal_window_sec` — default 60s — to seal):
 
 1. Player picks a price prediction (i128, exponent −18 — e.g. $64,123.50 → `64123.5e18`).
 2. Encrypt it with **tlock** to the drand round the server gave you (`timelock_target` in
@@ -199,6 +231,8 @@ Streets and their durations are exactly what the creator configured. Turn flow o
   `nonce` increments per seat; `prev_head_hex` is the current action-chain head from the
   last `action` message / snapshot top-level `head` (replay protection). Signature layout in Appendix B.
 - Acting early passes the turn immediately — the next `your_turn` fires at once.
+- The authenticated wallet must own `seat_index`: acting for another seat returns
+  `error {code:"not_your_seat"}` whatever the signature.
 - `set_default {policy: check_fold | check_call_any, signature}` — applied automatically
   on timeout (check when free, else fold / call anything).
 - Broadcast to everyone: `action {seq, seat, action, pot, current_bet, to_act, feed_price,

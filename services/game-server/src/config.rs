@@ -7,8 +7,11 @@ use syndicate_chain::{drand_round_publish_ts, DRAND_GENESIS_TIME, DRAND_PERIOD_S
 
 /// Must equal the on-chain `MAX_TIMELOCK_SKEW_SEC`.
 pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
-pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 90;
-pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = DEFAULT_SEAL_WINDOW_SEC;
+/// Sealing is one wallet transaction now (the seal intent is signed by the session key,
+/// and a call locked in while the table fills seals automatically), so the window no
+/// longer has to fit two wallet prompts. 60s keeps headroom for a slow RPC.
+pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 60;
+pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = 45;
 
 /// League of Entropy quicknet.
 pub const DRAND_CHAIN_HASH_DEFAULT: &str =

@@ -191,11 +191,12 @@ async function openPlayer(browser, name, keypairPath) {
   })
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`))
   // Every signMessage is a wallet prompt for a real user — count them by purpose.
-  const prompts = { login: 0, socket: 0, intent: 0 }
+  const prompts = { login: 0, socket: 0, grant: 0, intent: 0 }
   await page.exposeFunction('__e2eSignMsg', (bytes) => {
     const text = Buffer.from(bytes).toString('utf8')
     if (text.startsWith('syndicate-login:')) prompts.login++
     else if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(text)) prompts.socket++
+    else if (text.startsWith("Satoshi's Table — one-tap play")) prompts.grant++
     else prompts.intent++
     return Array.from(ed25519.sign(Uint8Array.from(bytes), kp.secretKey.slice(0, 32)))
   })
@@ -299,6 +300,45 @@ async function shot(p, name) {
   }
 }
 
+/**
+ * "Play someone else's seat": a signed-in outsider sends a perfectly well-formed fold for the
+ * seat whose turn it is — correct chain head, valid signature by the outsider's OWN key.
+ * A valid signature only proves who signed; the server must also check the signer holds
+ * the seat. Returns the server's reply frame.
+ */
+async function forgeFoldForSeat(matchId, onchainMatchId, victimSeat, headHex, attackerKeypairPath) {
+  const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(attackerKeypairPath, 'utf8'))))
+  const sign = (bytes) => Buffer.from(ed25519.sign(bytes, kp.secretKey.slice(0, 32))).toString('base64')
+  const u64 = (v) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); return b }
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16LE(v); return b }
+  const nonce = 424242
+  const intent = Buffer.concat([
+    Buffer.from('syndicate/action/v1'), Buffer.from([0]),
+    u64(onchainMatchId), u64(onchainMatchId), u16(victimSeat), Buffer.from(kp.publicKey.toBytes()),
+    u64(nonce), Buffer.from(headHex, 'hex'), Buffer.from([0 /* fold */]), u64(0),
+  ])
+  const ws = new WebSocket(`${gameUrl.replace(/^http/, 'ws')}/v1/ws`)
+  return await new Promise((resolveReply, reject) => {
+    const timer = setTimeout(() => { ws.close(); reject(new Error('attacker socket timed out')) }, 15_000)
+    ws.onmessage = (ev) => {
+      const f = JSON.parse(ev.data)
+      if (f.t === 'challenge') {
+        ws.send(JSON.stringify({ t: 'auth', wallet: kp.publicKey.toBase58(), signature: sign(Buffer.from(f.nonce)) }))
+      } else if (f.t === 'authenticated') {
+        ws.send(JSON.stringify({
+          t: 'act', match_id: matchId, seat_index: victimSeat, nonce,
+          prev_head_hex: headHex, action: 'fold', signature: sign(intent),
+        }))
+      } else if (f.t === 'error' || f.t === 'action') {
+        clearTimeout(timer)
+        ws.close()
+        resolveReply(f)
+      }
+    }
+    ws.onerror = () => { clearTimeout(timer); reject(new Error('attacker socket error')) }
+  })
+}
+
 const act = (p, action) =>
   p.page.evaluate((a) => {
     const s = window.__gameStore.getState()
@@ -346,7 +386,7 @@ async function main() {
     await waitFor(host, 'table created on-chain → table view', () => {
       const s = window.__gameStore.getState()
       if (s.txProgress?.stage === 'error') throw new Error(s.txProgress.errorRaw ?? s.txProgress.error)
-      return s.view === 'table' && s.seated
+      return s.view === 'table' && s.seated && s.lastTx?.label === 'Table created on-chain'
     }, 120_000)
     await shot(host, '03-waiting-room')
 
@@ -369,7 +409,7 @@ async function main() {
     await waitFor(guest, 'deposit confirmed → table view', () => {
       const s = window.__gameStore.getState()
       if (s.txProgress?.stage === 'error') throw new Error(s.txProgress.errorRaw ?? s.txProgress.error)
-      return s.view === 'table' && s.seated
+      return s.view === 'table' && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
     }, 120_000)
 
     // ---- lock → sealing ----
@@ -405,6 +445,7 @@ async function main() {
     let shotTurn = false
     let severed = false
     const betRounds = new Set()
+    let attack = null
     const socketPromptsBefore = host.prompts.socket
     const liveDeadline = Date.now() + (ROUND_COUNT * (STREET_SEC + OBSERVATION_SEC) + 240) * 1000
     for (;;) {
@@ -414,6 +455,12 @@ async function main() {
       for (let i = 0; i < players.length; i++) {
         const s = snaps[i]
         if (!s.yourTurn || s.actPending || s.phase !== 'LIVE' || !s.bettingOpen) continue
+        // Before the rightful player moves, an outsider tries to fold this seat for them.
+        if (!attack) {
+          const view = await (await fetch(`${gameUrl}/v1/matches/${matchId}`)).json()
+          attack = await forgeFoldForSeat(matchId, view.onchain_match_id, s.yourSeat, view.head, env.ATTACKER_KEYPAIR)
+          log(`     outsider tried to fold seat ${s.yourSeat} → ${attack.t}${attack.code ? ` (${attack.code})` : ''}`)
+        }
         if (!shotTurn) {
           await shot(players[i], '09-your-turn')
           shotTurn = true
@@ -448,6 +495,11 @@ async function main() {
     expect(!hs.voided && !gs.voided, 'match settled (not voided)')
     expect(actions >= 2, `signed actions were accepted by the engine (${actions} sent)`)
     expect(hs.feed > 0 && gs.feed > 0, 'both clients received the live action feed')
+    expect(attack?.t === 'error' && attack.code === 'not_your_seat', `an outsider cannot act for someone else's seat (${attack?.code ?? attack?.t})`)
+    expect(!hs.seats.some((x) => x.folded) && !gs.seats.some((x) => x.folded), 'nobody was folded by the forged action')
+    for (const p of players) {
+      expect(p.prompts.grant === 1 && p.prompts.intent === 0, `[${p.name}] one-tap play: 1 grant, then no wallet prompt for any move or seal (grant ${p.prompts.grant}, per-move ${p.prompts.intent})`)
+    }
     expect(severed, 'host socket was severed mid-hand and the hand still completed')
     expect(host.prompts.socket === socketPromptsBefore, `reconnect needed no wallet signature (socket-auth prompts: ${host.prompts.socket})`)
     for (const p of players) {
@@ -496,6 +548,7 @@ async function main() {
     process.exit(1)
   }
   console.log('\nBROWSER E2E PASSED — create → join → seal → bet → settle → claim')
+  process.exit(0) // the dev server's child processes can otherwise keep node alive
 }
 
 main().catch((e) => {

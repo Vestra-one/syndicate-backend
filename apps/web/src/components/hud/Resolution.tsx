@@ -67,6 +67,8 @@ interface RankedRow {
   dir: 'above' | 'below' | 'exact'
   folded: boolean
   payout: bigint
+  /** Result for the hand: payout minus what the seat put in (buy-in + entry fee). */
+  net: bigint
 }
 
 function SettledCeremony() {
@@ -87,6 +89,11 @@ function SettledCeremony() {
 
   const token = terms?.chipsToken ?? 'USDC'
   const payoutBySeat = new Map(settlement.awards.map((a) => [a.seat, a.amount]))
+  // Every seat gets its un-bet stack back, so a raw payout ("0.98") reads like a win even
+  // when the seat lost. What a player wants to know is the RESULT: payout − what they put in.
+  const staked = (terms?.buyIn ?? 0n) + (terms?.entryFee ?? 0n)
+  const amountsKnown = settlement.awards.some((a) => a.amount > 0n)
+  const netOf = (seat: number) => (payoutBySeat.get(seat) ?? 0n) - staked
   const foldedSeats = new Set(match?.seats.filter((s) => s.folded).map((s) => s.seat))
 
   const ranked: RankedRow[] = [...settlement.revealedPredictions]
@@ -99,6 +106,7 @@ function SettledCeremony() {
         dir: (predFloat > settlePrice ? 'above' : predFloat < settlePrice ? 'below' : 'exact') as RankedRow['dir'],
         folded: foldedSeats.has(r.seat),
         payout: payoutBySeat.get(r.seat) ?? 0n,
+        net: netOf(r.seat),
       }
     })
     .sort((a, b) => a.dist - b.dist)
@@ -110,10 +118,12 @@ function SettledCeremony() {
   // conviction (the REST/on-chain recovery may know the reveal but not every seat's amount).
   const winnerSeat = settlement.awards[0]?.seat ?? active[0]?.seat
 
-  // Rake transparency: the pot everyone contributed, what the house took, what was paid out.
+  // Rake transparency: the pot that was actually bet, and what the house took from it.
+  // (Summing payouts would count every returned stack and make a 0.04 pot read as "2.00".)
   const paid = settlement.awards.reduce((s, a) => s + a.amount, 0n)
   const rake = settlement.rakeCollected ?? 0n
-  const pot = paid + rake
+  const pot = settlement.finalPot ?? paid + rake
+  const yourNet = yourSeat != null ? netOf(yourSeat) : 0n
 
   // You may receive a payout without being the winner: a conviction match returns a partial
   // share to non-winning seats too. Only the top-paid seat "won the pot".
@@ -143,13 +153,13 @@ function SettledCeremony() {
           <span className="reveal-col-rank">#</span>
           <span className="reveal-col-name">Player</span>
           <span className="reveal-col-pred">Sealed call</span>
-          <span className="reveal-col-dist">Δ from settle</span>
-          <span className="reveal-col-pay">Payout</span>
+          <span className="reveal-col-dist">Off by</span>
+          <span className="reveal-col-pay">Result</span>
         </div>
 
         <ul className="reveal-list">
           {active.map((r, i) => (
-            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} delay={i * 280 + 400} />
+            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={i * 280 + 400} />
           ))}
         </ul>
 
@@ -158,7 +168,7 @@ function SettledCeremony() {
             <div className="reveal-folded-head eyebrow">Folded — forfeited pot share</div>
             <ul className="reveal-list">
               {folded.map((r) => (
-                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} delay={0} />
+                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={0} />
               ))}
             </ul>
           </div>
@@ -167,15 +177,17 @@ function SettledCeremony() {
         <div className="ceremony-rake eyebrow">
           Pot <span className="mono">{formatChips(pot, token)}</span>
           <span className="ceremony-rake-sep">·</span>
-          rake <span className="mono">{formatChips(rake, token)}</span>
-          <span className="ceremony-rake-sep">·</span>
-          paid <span className="mono">{formatChips(paid, token)} {token}</span>
+          rake <span className="mono">{formatChips(rake, token)} {token}</span>
         </div>
 
         <div className={`ceremony-result ${won ? 'ceremony-result--win' : ''}`}>
-          {won
-            ? `${isWinner ? 'You won the pot' : 'Your payout'} — ${formatMoney(yourAward, token)}`
-            : 'No award this match'}
+          {!won
+            ? amountsKnown ? 'No award this match' : 'Working out the payouts…'
+            : isWinner
+              ? `You won the pot — ${signedChips(yourNet, token)} ${token}`
+              : yourNet < 0n
+                ? `Down ${formatChips(-yourNet, token)} ${token} this hand · ${formatMoney(yourAward, token)} back to you`
+                : `Even this hand · ${formatMoney(yourAward, token)} back to you`}
         </div>
 
         {won && (
@@ -191,8 +203,14 @@ function SettledCeremony() {
   )
 }
 
+/** "+0.02" / "−0.02" / "0.00" — a hand result, always signed. */
+function signedChips(net: bigint, token: string): string {
+  if (net === 0n) return formatChips(0n, token)
+  return `${net > 0n ? '+' : '−'}${formatChips(net > 0n ? net : -net, token)}`
+}
+
 function RevealRow({
-  r, rank, winner, yourSeat, decimals, token, delay,
+  r, rank, winner, yourSeat, decimals, token, amountsKnown, delay,
 }: {
   r: RankedRow
   rank: number | null
@@ -200,6 +218,7 @@ function RevealRow({
   yourSeat: number | undefined
   decimals: number
   token: string
+  amountsKnown: boolean
   delay: number
 }) {
   const predFloat = r.prediction / 10 ** decimals
@@ -219,8 +238,8 @@ function RevealRow({
           ? 'exact'
           : `${r.dist.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${r.dir}`}
       </span>
-      <span className="reveal-pay mono reveal-col-pay">
-        {r.folded ? '—' : r.payout > 0n ? formatChips(r.payout, token) : '—'}
+      <span className={`reveal-pay mono reveal-col-pay ${amountsKnown ? (r.net > 0n ? 'reveal-pay--up' : r.net < 0n ? 'reveal-pay--down' : '') : ''}`}>
+        {amountsKnown ? signedChips(r.net, token) : '—'}
       </span>
     </li>
   )

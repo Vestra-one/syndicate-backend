@@ -217,6 +217,8 @@ export interface ApiConfig {
   chips_token_mint: string
   /** Operator allowlist of chip mints (first = default). */
   chips_token_mints?: string[]
+  /** Server accepts per-match session keys (`POST /matches/{id}/session-key`). */
+  session_keys?: boolean
   feeds: { feed: string; oracle_symbol: string; oracle_token: string }[]
   bounds: {
     buy_in: Range
@@ -416,6 +418,7 @@ export interface RevealBlock {
     pot_won_chips: number | null
   }[] | null
   rake: number | null
+  /** The contested pot before rake (what was actually bet), excluding returned stacks. */
   final_pot_chips: number | null
   tx_sig: string | null
 }
@@ -566,6 +569,14 @@ export const api = {
     body,
     true,
   ),
+
+  // — one-tap play (Bearer): delegate this match's gameplay signatures to a session key —
+  registerSessionKey: (matchId: string, body: { session_pubkey: string; expires_at: number; signature: string }) =>
+    postJson<{ v: number; server_time_ms: number; expires_at: number }>(
+      `/matches/${encodeURIComponent(matchId)}/session-key`,
+      body,
+      true,
+    ),
 
   // — detail / lists —
   getMatch: (matchId: string) => request<MatchDetail>(`/matches/${encodeURIComponent(matchId)}`),

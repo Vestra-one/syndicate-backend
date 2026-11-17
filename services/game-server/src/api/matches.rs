@@ -201,8 +201,18 @@ pub async fn submit_seal(
         body.timelock_target,
         &commitment,
     );
-    syndicate_engine::verify::verify_ed25519(wallet, &msg, &body.signature)
-        .map_err(|_| ApiError::unauthorized("invalid seal signature"))?;
+    // Signed by the wallet, or by the session key the wallet granted for this match.
+    if syndicate_engine::verify::verify_ed25519(wallet, &msg, &body.signature).is_err() {
+        let by_session = match db::load_session_key(&st.pool, id, wallet).await {
+            Some(key) => {
+                syndicate_engine::verify::verify_ed25519_key(&key, &msg, &body.signature).is_ok()
+            }
+            None => false,
+        };
+        if !by_session {
+            return Err(ApiError::unauthorized("invalid seal signature"));
+        }
+    }
 
     // Record; seal_seq = arrival order among sealers.
     client
@@ -267,6 +277,79 @@ pub async fn submit_seal(
     Ok(Json(json!({
         "v": 1, "server_time_ms": now_ms(),
         "sealed": true, "seat_index": seat_index,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SessionKeyBody {
+    /// base58 ed25519 public key of the browser's ephemeral session key.
+    pub session_pubkey: String,
+    /// ms epoch; at most 24h ahead.
+    pub expires_at: u64,
+    /// base64 wallet signature over `session_key_grant_message`.
+    pub signature: String,
+}
+
+/// `POST /v1/matches/{id}/session-key` — the wallet delegates its gameplay signatures
+/// for THIS match to an ephemeral key (one wallet prompt instead of one per move).
+/// Re-posting replaces the previous key.
+pub async fn post_session_key(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SessionKeyBody>,
+) -> Result<Json<Value>, ApiError> {
+    use syndicate_engine::verify;
+    let wallet = require_session(&st, &headers).await?;
+    let session_pubkey = verify::decode_wallet_pubkey(&body.session_pubkey)
+        .map_err(|_| ApiError::bad_request("session_pubkey must be a base58 ed25519 key"))?;
+    let now = now_ms();
+    if body.expires_at <= now || body.expires_at > now + verify::SESSION_KEY_MAX_TTL_MS {
+        return Err(ApiError::bad_request(
+            "expires_at must be in the future and at most 24h ahead",
+        ));
+    }
+    let client = st.pool.get().await?;
+    let Some(m) = db::load_match(&client, id).await? else {
+        return Err(ApiError::not_found("match not found"));
+    };
+    if m.is_terminal() {
+        return Err(ApiError::conflict("match_over", "match is already over"));
+    }
+    verify::verify_session_key_grant(
+        &wallet,
+        &body.signature,
+        m.onchain_match_id,
+        &session_pubkey,
+        body.expires_at,
+    )
+    .map_err(|_| ApiError::unauthorized("invalid session key grant signature"))?;
+    let expires = chrono::DateTime::from_timestamp_millis(body.expires_at as i64)
+        .ok_or_else(|| ApiError::bad_request("bad expires_at"))?;
+    client
+        .execute(
+            r#"INSERT INTO match_session_keys (match_id, wallet, session_pubkey, expires_at, grant_signature)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (match_id, wallet) DO UPDATE
+               SET session_pubkey = EXCLUDED.session_pubkey, expires_at = EXCLUDED.expires_at,
+                   grant_signature = EXCLUDED.grant_signature, created_at = now()"#,
+            &[&id, &wallet, &session_pubkey.as_slice(), &expires, &body.signature],
+        )
+        .await?;
+    // A live actor may be holding the previous key for this seat.
+    let _ = st
+        .registry
+        .send(
+            &id,
+            Cmd::SessionKey {
+                wallet: wallet.clone(),
+                key: session_pubkey,
+            },
+        )
+        .await;
+    Ok(Json(json!({
+        "v": 1, "server_time_ms": now, "match_id": id, "wallet": wallet,
+        "session_pubkey": body.session_pubkey, "expires_at": body.expires_at,
     })))
 }
 

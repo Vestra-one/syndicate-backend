@@ -252,6 +252,11 @@ pub struct FencedMatchRuntime {
     head: [u8; 32],
     seen_intents: HashSet<(usize, u64)>,
     registered_defaults: HashMap<usize, SignedDefaultPolicy>,
+    /// Per-seat delegated session keys (see `verify::session_key_grant_message`). The
+    /// caller verifies the wallet's grant and the seat's ownership before installing one;
+    /// here it is only an additional accepted signer for that seat's intents. Not part of
+    /// the journal: the grant record lives beside it (replay never re-checks signatures).
+    session_keys: HashMap<usize, [u8; 32]>,
 }
 
 impl FencedMatchRuntime {
@@ -273,6 +278,7 @@ impl FencedMatchRuntime {
             head: GENESIS,
             seen_intents: HashSet::new(),
             registered_defaults: HashMap::new(),
+            session_keys: HashMap::new(),
         };
         runtime.append_event(EngineLogEvent::MatchStarted { config });
         runtime
@@ -296,7 +302,17 @@ impl FencedMatchRuntime {
                 .into_iter()
                 .map(|p| (p.seat_index, p))
                 .collect(),
+            session_keys: HashMap::new(),
         }
+    }
+
+    /// Accept `pubkey` as an additional signer for `seat_index`'s intents.
+    pub fn set_session_key(&mut self, seat_index: usize, pubkey: [u8; 32]) {
+        self.session_keys.insert(seat_index, pubkey);
+    }
+
+    pub fn has_session_key(&self, seat_index: usize) -> bool {
+        self.session_keys.contains_key(&seat_index)
     }
 
     pub fn register_default_policy(
@@ -711,7 +727,7 @@ impl FencedMatchRuntime {
         let (tag, amount) = action_to_tag_amount(intent.action);
         // Both u64 slots of the intent message carry the REAL on-chain match id (the
         // string match_id is a DB key, not signing material — see intent.rs layout).
-        verify::verify_action_intent(
+        let by_wallet = verify::verify_action_intent(
             &intent.wallet,
             &intent.signature,
             self.config.onchain_match_id,
@@ -721,9 +737,29 @@ impl FencedMatchRuntime {
             &intent.prev_head,
             tag,
             amount,
-        )
-        .map_err(map_verify_err)?;
-        Ok(())
+        );
+        let Err(wallet_err) = by_wallet else {
+            return Ok(());
+        };
+        // Same message (still bound to the seat wallet), signed by the seat's session key.
+        if let Some(session_key) = self.session_keys.get(&intent.seat_index) {
+            if let Ok(seat_pubkey) = verify::decode_wallet_pubkey(&intent.wallet) {
+                let msg = intent::action_intent_message(
+                    self.config.onchain_match_id,
+                    self.config.onchain_match_id,
+                    intent.seat_index as u16,
+                    &seat_pubkey,
+                    intent.nonce,
+                    &intent.prev_head,
+                    tag,
+                    amount,
+                );
+                if verify::verify_ed25519_key(session_key, &msg, &intent.signature).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(map_verify_err(wallet_err))
     }
 
     fn validate_default_policy(
@@ -740,15 +776,32 @@ impl FencedMatchRuntime {
             DefaultAction::CheckFold => intent::DEFAULT_TAG_CHECK_FOLD,
             DefaultAction::CheckCallAny => intent::DEFAULT_TAG_CHECK_CALL_ANY,
         };
-        verify::verify_default_policy(
+        let by_wallet = verify::verify_default_policy(
             &policy.wallet,
             &policy.signature,
             self.config.onchain_match_id,
             self.config.onchain_match_id,
             policy.seat_index as u16,
             tag,
-        )
-        .map_err(map_verify_err)
+        );
+        let Err(wallet_err) = by_wallet else {
+            return Ok(());
+        };
+        if let Some(session_key) = self.session_keys.get(&policy.seat_index) {
+            if let Ok(seat_pubkey) = verify::decode_wallet_pubkey(&policy.wallet) {
+                let msg = intent::default_policy_message(
+                    self.config.onchain_match_id,
+                    self.config.onchain_match_id,
+                    policy.seat_index as u16,
+                    &seat_pubkey,
+                    tag,
+                );
+                if verify::verify_ed25519_key(session_key, &msg, &policy.signature).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(map_verify_err(wallet_err))
     }
 
     fn validate_prediction_commitment(

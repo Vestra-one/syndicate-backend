@@ -32,6 +32,14 @@ import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
 import { log } from '@/lib/log'
+import {
+  loadSessionKey,
+  newSessionKey,
+  saveSessionKey,
+  sessionKeyGrantMessage,
+  signWithSessionKey,
+  type SessionKey,
+} from '@/lib/sessionKey'
 import { ed25519 } from '@noble/curves/ed25519' // TEMP: seal signature self-verify diagnostic
 import { walletBridge } from '@/lib/walletBridge' // TEMP: seal signature diagnostic (wallet name)
 import type { PastHand } from '@/lib/protocol'
@@ -293,8 +301,10 @@ const ORACLE_UNAVAILABLE_MSG = 'Settlement paused — the price oracle is unavai
 /** Default street schedule (count + per-street durations/observation) within config bounds. */
 function defaultStreets(config: ApiConfig): { count: number; durations_sec: number[]; observation_sec: number[] } {
   const count = clamp(3, config.bounds.streets.min, config.bounds.streets.max)
-  const dur = clamp(180, config.bounds.street_duration_sec.min, config.bounds.street_duration_sec.max)
-  const obs = clamp(20, config.bounds.observation_sec.min, config.bounds.observation_sec.max)
+  // 3 × (60s betting + 10s watching the price) = a 3½-minute hand. The old 3 × (180 + 20)
+  // was ten minutes of mostly waiting: a street's betting is usually over in seconds.
+  const dur = clamp(60, config.bounds.street_duration_sec.min, config.bounds.street_duration_sec.max)
+  const obs = clamp(10, config.bounds.observation_sec.min, config.bounds.observation_sec.max)
   return {
     count,
     durations_sec: Array.from({ length: count }, () => dur),
@@ -380,6 +390,37 @@ let unsub: (() => void) | null = null
  *  null on a fresh/unauthenticated socket. Acts, seals and defaults need this — spectating
  *  does not. */
 let wsAuthedWallet: string | null = null
+/** The match whose frames drive the table right now. Match-scoped frames for any other
+ *  match are dropped — without this a previous table's `settled` frame put ITS result
+ *  screen over the table the player had just created. */
+let activeMatchId: string | null = null
+
+/** Everything that belongs to one table. Applied whenever the player starts toward a new
+ *  one, so nothing from the last hand (result screen, seal state, feed) leaks into it. */
+const FRESH_TABLE = {
+  match: null,
+  yourTurn: null,
+  actPending: null,
+  sealStatus: 'unsealed',
+  yourPrediction: null,
+  queuedPrediction: null,
+  sealClosed: false,
+  sealedSeats: [],
+  sealDeadline: null,
+  settlement: null,
+  voided: null,
+  reviewing: false,
+  feed: [],
+  roundStartedAt: null,
+  streetSchedule: null,
+} satisfies Partial<GameState>
+
+/** Stop following the current table (new table / back to the lobby). */
+function leaveActiveMatch() {
+  if (activeMatchId) gateway?.send({ t: 'unsubscribe', channel: { match: activeMatchId } })
+  activeMatchId = null
+  stopMatchPoll()
+}
 
 /** Action-chain state for signed betting (§8), reset per match. `head` seeds `prev_head`
  *  for the next `act`; `nonce` increments per action; `engineSeat` is this wallet's seat. */
@@ -410,9 +451,81 @@ let sealContextTries = 0
  */
 const DEV_SIGNATURES = (import.meta.env.VITE_DEV_SIGNATURES as string | undefined) === '1'
 let devSigCounter = 0
+
+/** This match's session key ("one-tap play") once the wallet has granted it. */
+let sessionKey: SessionKey | null = null
+/** In-flight grant, so concurrent callers share one wallet prompt. */
+let sessionKeyGrant: Promise<SessionKey | null> | null = null
+/** The player dismissed the grant prompt (or the server has no session keys) for this
+ *  match — don't nag; fall back to signing each intent with the wallet. */
+let sessionKeyUnavailableFor: string | null = null
+
+/**
+ * Get this match's session key, asking the wallet for the one-time grant if needed. Returns
+ * null when one-tap play is unavailable (old server, prompt dismissed) — callers then sign
+ * with the wallet as before, so nothing depends on it.
+ */
+async function ensureSessionKey(matchId: string, onchainMatchId: string): Promise<SessionKey | null> {
+  if (DEV_SIGNATURES || !adapters) return null
+  const wallet = adapters.wallet.address()
+  if (!wallet) return null
+  const usable = (k: SessionKey | null) =>
+    !!k && k.matchId === matchId && k.wallet === wallet && k.expiresAt - 60_000 > Date.now()
+  if (usable(sessionKey)) return sessionKey
+  const stored = loadSessionKey(matchId, wallet)
+  if (stored) return (sessionKey = stored)
+  if (sessionKeyUnavailableFor === matchId) return null
+  if (sessionKeyGrant) return sessionKeyGrant
+
+  const wal = adapters.wallet
+  sessionKeyGrant = (async () => {
+    try {
+      const config = await api.getConfig()
+      adoptServerConfig(config)
+      if (!config.session_keys) {
+        sessionKeyUnavailableFor = matchId
+        return null
+      }
+      const key = newSessionKey(matchId, wallet)
+      const signature = await wal.signMessageBase64(
+        sessionKeyGrantMessage(onchainMatchId, wallet, key.pubkey, key.expiresAt),
+      )
+      await api.registerSessionKey(matchId, {
+        session_pubkey: bs58.encode(key.pubkey),
+        expires_at: key.expiresAt,
+        signature,
+      })
+      saveSessionKey(key)
+      sessionKey = key
+      log.info('[session-key] one-tap play enabled for match', matchId)
+      return key
+    } catch (err) {
+      log.warn('[session-key] grant failed — falling back to wallet signatures:', err)
+      sessionKeyUnavailableFor = matchId
+      return null
+    } finally {
+      sessionKeyGrant = null
+    }
+  })()
+  return sessionKeyGrant
+}
+
+/**
+ * Sign an intent (act / default / seal). With a session key this is silent and instant —
+ * the key signs the raw intent bytes. Otherwise the wallet signs the wallet-safe TEXT form
+ * (`base58(intent_bytes)`): browser wallets mangle raw binary payloads but sign display-safe
+ * text verbatim, and the server accepts a signature over either form.
+ */
 async function signIntent(msg: Uint8Array): Promise<string> {
   if (DEV_SIGNATURES) return `sig-dev-${++devSigCounter}`
   if (!adapters) throw new Error('adapters not ready')
+  const st = useGameStore.getState()
+  const matchId = st.match?.matchId ?? joinMatchId
+  const onchainMatchId = st.terms?.onchainMatchId
+  if (matchId && onchainMatchId) {
+    const key = await ensureSessionKey(matchId, onchainMatchId)
+    if (key) return signWithSessionKey(key, msg)
+  }
   return adapters.wallet.signMessageBase64(bs58.encode(msg))
 }
 
@@ -426,6 +539,8 @@ function resetActionChain() {
   lastFeedSeq = 0
   defaultArmed = false
   sealContextTries = 0
+  sessionKey = null
+  sessionKeyUnavailableFor = null
 }
 
 /**
@@ -511,6 +626,12 @@ async function ensureActionSocket(get: () => GameState, matchId: string): Promis
 /** Subscribe the open socket to a match channel — server replies with a snapshot then the
  *  ordered event stream (gap-free, dedup by seq). Pass `lastSeq` to fetch only the delta. */
 function subscribeMatch(matchId: string, lastSeq = 0) {
+  // One table at a time: leave the previous match's channel so its late frames (a
+  // settlement that lands while the player is already at a new table) stop arriving.
+  if (activeMatchId && activeMatchId !== matchId) {
+    gateway?.send({ t: 'unsubscribe', channel: { match: activeMatchId } })
+  }
+  activeMatchId = matchId
   gateway?.send({ t: 'subscribe', channel: { match: matchId }, last_seq: lastSeq })
   startMatchPoll()
   // Immediate pre-lock fill-count read so the counter is right on entry instead of waiting for
@@ -947,6 +1068,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   closeRoomModal: () => {
     joinMatchId = null
     createCtx = null
+    leaveActiveMatch()
     set({
       roomModal: null,
       playMode: null,
@@ -968,10 +1090,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
+    leaveActiveMatch()
     set({
+      ...FRESH_TABLE,
       playError: null, pendingInvite: null, inviteFrom: null,
       roomModal: { kind: 'join', matchId }, playResolving: true, playMode: null,
-      match: null, terms: null, seated: false, lobbySeated: null,
+      terms: null, seated: false, lobbySeated: null,
     })
 
     try {
@@ -1025,10 +1149,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
+    leaveActiveMatch()
     set({
+      ...FRESH_TABLE,
       playError: null,
       roomModal: { kind: 'create' }, playResolving: true, playMode: null,
-      match: null, terms: null, seated: false, lobbySeated: null,
+      terms: null, seated: false, lobbySeated: null,
     })
 
     try {
@@ -1149,6 +1275,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   disconnect: () => {
     stopMatchPoll()
+    activeMatchId = null
     unsub?.()
     gateway?.disconnect()
     gateway = null
@@ -1245,6 +1372,9 @@ export const useGameStore = create<GameState>((set, get) => ({
       await get().connect()
       subscribeMatch(matchId)
       void refreshBalance(set)
+      // One-tap play: ask for the session-key grant now, while the table is still filling,
+      // so the seal and every bet later need no wallet prompt.
+      void ensureSessionKey(matchId, onchainMatchId)
     } catch (err) {
       await failCommit(set, err, 'join')
     }
@@ -1341,6 +1471,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         resetActionChain()
         await get().connect()
         subscribeMatch(matchUuid)
+        void ensureSessionKey(matchUuid, String(cp.match_id)) // one-tap play (see joinTable)
       }
       void refreshBalance(set)
     } catch (err) {
@@ -1827,8 +1958,15 @@ function wsEventToFeed(ev: { type: string; body: Record<string, unknown>; seq?: 
       return { kind: 'action', matchId, seat, action, amount, feedPrice, pot, ts: Date.now() }
     }
     case 'street_closed':
-    case 'snapshot.written':
-      return { kind: 'round', matchId, round: Number(ev.body.round ?? 0), ts: Date.now() }
+    case 'snapshot.written': {
+      // The engine's round counter has already advanced past the street that closed, so
+      // after the LAST street it reads count + 1 — "Round 3" in a two-round hand. There is
+      // no such round; don't announce one.
+      const round = Number(ev.body.round ?? 0)
+      const total = useGameStore.getState().terms?.roundCount
+      if (total != null && round > total) return null
+      return { kind: 'round', matchId, round, ts: Date.now() }
+    }
     default:
       return null
   }
@@ -1848,6 +1986,9 @@ function bettingActionToWire(a: BettingAction): { tag: number; amount: Chips; wi
 }
 
 function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameState) {
+  // Match-scoped frames only count for the table on screen.
+  const frameMatch = (frame as { match_id?: string }).match_id
+  if (frameMatch && frameMatch !== activeMatchId) return
   switch (frame.t) {
     case 'authenticated':
       wsAuthedWallet = frame.wallet
@@ -1865,8 +2006,19 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       const t = frame.state.timing
       set((s) => ({
         match: view,
+        // The server's match params are the truth for this table — a host's terms start as
+        // the create sheet's defaults, which need not be what the match was created with.
         terms: s.terms
-          ? { ...s.terms, onchainMatchId: String(frame.state.onchain_match_id), timelockTargetRound: t.timelock_target ?? s.terms.timelockTargetRound }
+          ? {
+              ...s.terms,
+              onchainMatchId: String(frame.state.onchain_match_id),
+              timelockTargetRound: t.timelock_target ?? s.terms.timelockTargetRound,
+              roundCount: frame.state.params.round_count ?? s.terms.roundCount,
+              roundDurationsSec: frame.state.params.round_durations_sec ?? s.terms.roundDurationsSec,
+              actionTimerSec: frame.state.params.action_timeout_ms != null
+                ? Math.round(frame.state.params.action_timeout_ms / 1000)
+                : s.terms.actionTimerSec,
+            }
           : s.terms,
         fillDeadline: t.fill_deadline != null ? toEpochMs(t.fill_deadline) : s.fillDeadline,
         roundStartedAt: t.live_start != null ? toEpochMs(t.live_start) : s.roundStartedAt,
@@ -2214,12 +2366,14 @@ function settlementFromDetail(
     settlement_price_wad?: string | null
     predictions?: { engine_seat: number; prediction_wad: string }[] | null
     rake?: number | null
+    final_pot_chips?: number | null
   } | null
   return {
     matchId: detail.match_id,
     settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
     awards,
     uncalledReturns: [],
+    finalPot: reveal?.final_pot_chips != null ? BigInt(reveal.final_pot_chips) : undefined,
     rakeCollected: BigInt(reveal?.rake ?? 0),
     revealedPredictions: (reveal?.predictions ?? []).map((p) => ({
       seat: p.engine_seat,
@@ -2283,8 +2437,10 @@ async function landSettlement(
   winnerSeats?: number[],
 ): Promise<void> {
   const matchId = detail.match_id
+  if (matchId !== activeMatchId) return // the player has moved on to another table
   const onchainId = get().terms?.onchainMatchId
   const first = await computeSettlementAwards(detail, onchainId, winnerSeats)
+  if (matchId !== activeMatchId) return
   set((s) =>
     s.settlement
       ? {}

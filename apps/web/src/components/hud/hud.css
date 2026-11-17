@@ -3302,8 +3302,12 @@
   color: var(--text-faint);
   font-size: 12px;
 }
-.reveal-dist--above { color: var(--up); }
-.reveal-dist--below { color: var(--down); }
+/* "above/below" is only which side of the settlement the call landed — not good or bad —
+   so it stays neutral; the Result column carries the win/loss colour. */
+.reveal-dist--above,
+.reveal-dist--below { color: var(--text-dim, inherit); }
+.reveal-pay--up { color: var(--up); }
+.reveal-pay--down { color: var(--down); }
 .reveal-row--folded {
   opacity: 0.5;
 }

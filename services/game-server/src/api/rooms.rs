@@ -30,6 +30,9 @@ pub async fn get_config(State(st): State<AppState>) -> Json<Value> {
         // picker to `chips_token_mints`; the backend re-enforces it at create.
         "chips_token_mint": st.cfg.chips_token_mint,
         "chips_token_mints": st.cfg.chips_token_mints,
+        // Clients may delegate gameplay signatures to a per-match session key
+        // (POST /v1/matches/{id}/session-key).
+        "session_keys": true,
         "feeds": config::FEEDS.iter().map(|(feed, sym, token)| json!({
             "feed": feed, "oracle_symbol": sym, "oracle_token": token,
         })).collect::<Vec<_>>(),

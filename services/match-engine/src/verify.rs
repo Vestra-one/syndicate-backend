@@ -45,6 +45,54 @@ pub fn verify_ed25519(
         .map_err(|_| VerifyError::InvalidSignature)
 }
 
+/// Verify a base64 ed25519 signature against a raw 32-byte public key. Like
+/// [`verify_ed25519`], accepts a signature over the raw message or over its base58 text.
+pub fn verify_ed25519_key(
+    pubkey: &[u8; 32],
+    message: &[u8],
+    signature_b64: &str,
+) -> Result<(), VerifyError> {
+    verify_ed25519(&bs58::encode(pubkey).into_string(), message, signature_b64)
+}
+
+/// Longest life a session key may be granted for.
+pub const SESSION_KEY_MAX_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// The human-readable grant a wallet signs ONCE per match to delegate its gameplay
+/// signatures (actions, default policy, seal upload) to an ephemeral browser key, so the
+/// player is not prompted on every move. The text is shown verbatim by the wallet, which
+/// is why it is prose and not opaque bytes. It delegates nothing on-chain: deposits,
+/// seal commitments, claims and refunds remain wallet-signed transactions.
+pub fn session_key_grant_message(
+    onchain_match_id: u64,
+    wallet: &str,
+    session_pubkey: &[u8; 32],
+    expires_at_ms: u64,
+) -> String {
+    format!(
+        "Satoshi's Table — one-tap play\n\n\
+         Let this browser make your moves in this match (bet, check, call, fold, seal) \
+         without asking you to sign each one. It cannot move your funds.\n\n\
+         match: {onchain_match_id}\n\
+         wallet: {wallet}\n\
+         session key: {}\n\
+         expires: {expires_at_ms}",
+        bs58::encode(session_pubkey).into_string()
+    )
+}
+
+/// Verify the wallet's signature over [`session_key_grant_message`].
+pub fn verify_session_key_grant(
+    wallet: &str,
+    signature_b64: &str,
+    onchain_match_id: u64,
+    session_pubkey: &[u8; 32],
+    expires_at_ms: u64,
+) -> Result<(), VerifyError> {
+    let msg = session_key_grant_message(onchain_match_id, wallet, session_pubkey, expires_at_ms);
+    verify_ed25519(wallet, msg.as_bytes(), signature_b64)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn verify_action_intent(
     wallet: &str,
@@ -185,6 +233,38 @@ mod tests {
         );
 
         verify_default_policy(&wallet, &sig_b64, 1, 42, 0, intent::DEFAULT_TAG_CHECK_FOLD).unwrap();
+    }
+
+    #[test]
+    fn session_key_grant_round_trips_and_binds_every_field() {
+        let (wallet, sk) = test_wallet();
+        let session = SigningKey::from_bytes(&[9u8; 32]);
+        let session_pk = session.verifying_key().to_bytes();
+        let msg = session_key_grant_message(42, &wallet, &session_pk, 1_000);
+        // Byte-exact vector shared with the web client (apps/web/src/lib/sessionKey.test.ts).
+        assert_eq!(
+            msg,
+            format!(
+                "Satoshi's Table — one-tap play\n\nLet this browser make your moves in this match (bet, check, call, fold, seal) without asking you to sign each one. It cannot move your funds.\n\nmatch: 42\nwallet: {wallet}\nsession key: {}\nexpires: 1000",
+                bs58::encode(session_pk).into_string()
+            )
+        );
+        let sig = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            sk.sign(msg.as_bytes()).to_bytes(),
+        );
+        verify_session_key_grant(&wallet, &sig, 42, &session_pk, 1_000).unwrap();
+        // Any changed field invalidates the grant.
+        assert!(verify_session_key_grant(&wallet, &sig, 43, &session_pk, 1_000).is_err());
+        assert!(verify_session_key_grant(&wallet, &sig, 42, &session_pk, 1_001).is_err());
+        assert!(verify_session_key_grant(&wallet, &sig, 42, &[1u8; 32], 1_000).is_err());
+        // The session key can sign for itself via the raw-key verifier.
+        let intent_sig = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            session.sign(b"intent").to_bytes(),
+        );
+        verify_ed25519_key(&session_pk, b"intent", &intent_sig).unwrap();
+        assert!(verify_ed25519_key(&session_pk, b"other", &intent_sig).is_err());
     }
 
     #[test]

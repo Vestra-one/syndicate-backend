@@ -93,6 +93,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/matches/{id}/seal",
             post(crate::api::matches::post_seal),
         )
+        .route(
+            "/v1/matches/{id}/session-key",
+            post(crate::api::matches::post_session_key),
+        )
         .route("/v1/matches/{id}", get(crate::api::matches::get_match))
         .route(
             "/v1/matches/{id}/events",

@@ -361,3 +361,22 @@ mod tests {
         assert!(FCFS_PROMOTE_SQL.contains("finalized_slot IS NOT NULL"));
     }
 }
+
+/// The unexpired session key `wallet` granted for `match_id`, if any (see
+/// `syndicate_engine::verify::session_key_grant_message`).
+pub async fn load_session_key(
+    pool: &deadpool_postgres::Pool,
+    match_id: uuid::Uuid,
+    wallet: &str,
+) -> Option<[u8; 32]> {
+    let client = pool.get().await.ok()?;
+    let row = client
+        .query_opt(
+            "SELECT session_pubkey FROM match_session_keys
+             WHERE match_id = $1 AND wallet = $2 AND expires_at > now()",
+            &[&match_id, &wallet],
+        )
+        .await
+        .ok()??;
+    row.get::<_, Vec<u8>>("session_pubkey").try_into().ok()
+}

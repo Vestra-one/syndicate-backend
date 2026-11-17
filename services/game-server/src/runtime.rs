@@ -109,6 +109,7 @@ impl Registry {
             cmd: cmd_rx,
             turn_started_ms: now_ms(),
             last_fill_broadcast_confirmed: None,
+            seat_wallets: HashMap::new(),
         };
         tokio::spawn(actor.run());
         handle
@@ -142,6 +143,8 @@ pub enum Cmd {
     },
     /// A verified seal was recorded (api layer already wrote match_seats); broadcast.
     Sealed { seat_index: u8 },
+    /// The wallet (re)granted a session key for this match — swap it into the runtime.
+    SessionKey { wallet: String, key: [u8; 32] },
     /// Full state view (WS snapshot).
     Snapshot(oneshot::Sender<Value>),
     /// Cheap in-memory pot/round read for list rows — no DB queries, unlike `Snapshot`
@@ -180,6 +183,10 @@ struct Actor {
     /// Wall-clock anchor of the current turn (per-turn timer base).
     turn_started_ms: u64,
     last_fill_broadcast_confirmed: Option<usize>,
+    /// engine seat → owning wallet, loaded once the confirmed seats exist. Every gameplay
+    /// frame is checked against it: a valid signature only proves WHO signed, not that
+    /// the signer owns the seat it names.
+    seat_wallets: HashMap<usize, String>,
 }
 
 impl Actor {
@@ -324,6 +331,16 @@ impl Actor {
             Cmd::Chain(event, row) => self.on_chain_event(event, *row).await,
             Cmd::Sealed { seat_index } => {
                 self.broadcast(self.seal_status_frame(Some(seat_index)).await);
+            }
+            Cmd::SessionKey { wallet, key } => {
+                let seat = self
+                    .seat_wallets
+                    .iter()
+                    .find(|(_, w)| **w == wallet)
+                    .map(|(seat, _)| *seat);
+                if let (Some(seat), Some(rt)) = (seat, self.runtime.as_mut()) {
+                    rt.set_session_key(seat, key);
+                }
             }
             Cmd::Snapshot(reply) => {
                 let _ = reply.send(self.view().await);
@@ -858,10 +875,44 @@ impl Actor {
 
     // ---- gameplay --------------------------------------------------------------------
 
+    /// Gate for every gameplay frame: the authenticated wallet must own the seat it is
+    /// acting for. Without this, any signed-in wallet could send a correctly signed (by
+    /// its OWN key) intent naming someone else's seat — fold them, or shove their stack.
+    /// Also installs the seat's session key (if the wallet granted one) into the runtime.
+    async fn authorize_seat(&mut self, seat_index: usize, wallet: &str) -> Result<(), ApiError> {
+        if self.seat_wallets.is_empty() {
+            self.seat_wallets = self
+                .seats()
+                .await?
+                .into_iter()
+                .map(|s| (s.engine_seat as usize, s.wallet))
+                .collect();
+        }
+        if !seat_owned_by(&self.seat_wallets, seat_index, wallet) {
+            return Err(ApiError::forbidden(
+                "not_your_seat",
+                "this wallet does not hold that seat",
+            ));
+        }
+        let needs_key = self
+            .runtime
+            .as_ref()
+            .is_some_and(|rt| !rt.has_session_key(seat_index));
+        if needs_key {
+            let key = crate::db::load_session_key(&self.st.pool, self.id, wallet).await;
+            if let (Some(key), Some(rt)) = (key, self.runtime.as_mut()) {
+                rt.set_session_key(seat_index, key);
+            }
+        }
+        Ok(())
+    }
+
     async fn apply_action(&mut self, intent: SignedActionIntent) -> Result<Value, ApiError> {
         if self.row.status != "live" {
             return Err(ApiError::conflict("not_live", "match is not live"));
         }
+        self.authorize_seat(intent.seat_index, &intent.wallet)
+            .await?;
         let live_start = self.row.live_start_ts.map(ts_ms).unwrap_or(0);
         let rt = self
             .runtime
@@ -885,6 +936,8 @@ impl Actor {
     }
 
     async fn register_default(&mut self, policy: SignedDefaultPolicy) -> Result<(), ApiError> {
+        self.authorize_seat(policy.seat_index, &policy.wallet)
+            .await?;
         let rt = self
             .runtime
             .as_mut()
@@ -1051,6 +1104,10 @@ impl Actor {
     }
 }
 
+fn seat_owned_by(seat_wallets: &HashMap<usize, String>, seat_index: usize, wallet: &str) -> bool {
+    seat_wallets.get(&seat_index).is_some_and(|w| w == wallet)
+}
+
 fn turn_deadline_ms(turn_started_ms: u64, street_start_ms: u64, action_timeout_ms: u64) -> u64 {
     turn_started_ms
         .max(street_start_ms)
@@ -1060,6 +1117,19 @@ fn turn_deadline_ms(turn_started_ms: u64, street_start_ms: u64, action_timeout_m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_seat_owner_may_act_for_a_seat() {
+        let seats: HashMap<usize, String> =
+            [(0, "alice".to_string()), (1, "bob".to_string())].into();
+        assert!(seat_owned_by(&seats, 0, "alice"));
+        assert!(seat_owned_by(&seats, 1, "bob"));
+        // A signed-in outsider, or another player, naming someone else's seat.
+        assert!(!seat_owned_by(&seats, 0, "mallory"));
+        assert!(!seat_owned_by(&seats, 0, "bob"));
+        // Unknown seat.
+        assert!(!seat_owned_by(&seats, 7, "alice"));
+    }
 
     #[test]
     fn turn_timeout_waits_for_street_open_after_early_advance() {
