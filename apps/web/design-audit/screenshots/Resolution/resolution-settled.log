@@ -1,0 +1,9 @@
+PAGE EXCEPTION: {"exceptionId":1,"text":"Uncaught","lineNumber":145,"columnNumber":52,"scriptId":"68","url":"http://localhost:5173/src/components/hud/Resolution.tsx","stackTrace":{"callFrames":[{"functionName":"","scriptId":"68","url":"http://localhost:5173/src/components/hud/Resolution.tsx","lineNumber":145,"columnNumber":52},{"functionName":"SettledCeremony","scriptId":"68","url":"http://localhost:5173/src/comp
+PAGE EXCEPTION: {"exceptionId":2,"text":"Uncaught","lineNumber":145,"columnNumber":52,"scriptId":"68","url":"http://localhost:5173/src/components/hud/Resolution.tsx","stackTrace":{"callFrames":[{"functionName":"","scriptId":"68","url":"http://localhost:5173/src/components/hud/Resolution.tsx","lineNumber":145,"columnNumber":52},{"functionName":"SettledCeremony","scriptId":"68","url":"http://localhost:5173/src/comp
+CONSOLE ERROR: The above error occurred in the <SettledCeremony> component:
+
+    at SettledCeremony (http://localhost:5173/src/components/hud/Resolution.tsx:116:22)
+    at Resolution (http://localhost:5173/src/components/hud/Resolution.tsx:24:22)
+    at div
+    at Hud (http://localhost:5173/src/components/hud/Hud.
+PAGE EXCEPTION: {"exceptionId":3,"text":"Uncaught","lineNumber":9128,"columnNumber":14,"scriptId":"39","url":"http://localhost:5173/node_modules/.vite/deps/chunk-SM3OW2QE.js?v=465bc848","stackTrace":{"callFrames":[{"functionName":"","scriptId":"68","url":"http://localhost:5173/src/components/hud/Resolution.tsx","lineNumber":145,"columnNumber":52},{"functionName":"SettledCeremony","scriptId":"68","url":"http://loc

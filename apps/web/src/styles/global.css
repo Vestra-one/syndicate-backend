@@ -1,0 +1,118 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg-void);
+  color: var(--text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* ---- the 3D table mount fills the viewport ---- */
+.table-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+.table-canvas canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ---- candlelit vignette + grain, carried over from the prototype ---- */
+.scene-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(
+    115% 92% at 50% 44%,
+    rgba(0, 0, 0, 0) 24%,
+    rgba(0, 0, 0, 0.34) 50%,
+    rgba(0, 0, 0, 0.78) 76%,
+    rgba(0, 0, 0, 0.97) 100%
+  );
+  mix-blend-mode: multiply;
+}
+
+/* ---- HUD overlay layer sits above the scene ---- */
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: var(--pad);
+  gap: var(--hud-gap);
+  pointer-events: none; /* let the table receive parallax; panels re-enable */
+}
+.hud > * {
+  pointer-events: auto;
+}
+
+.hud-top,
+.hud-bottom {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--hud-gap);
+}
+.hud-bottom {
+  align-items: flex-end;
+}
+
+/* ---- shared panel chrome ---- */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(10px) saturate(1.1);
+  padding: var(--pad);
+}
+
+.panel-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 8px;
+}
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

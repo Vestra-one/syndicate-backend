@@ -1,0 +1,108 @@
+import { useMemo } from 'react'
+import { useWallet } from '@solana/wallet-adapter-react'
+import { useWalletModal } from '@solana/wallet-adapter-react-ui'
+import { useGameStore } from '@/store/gameStore'
+import { formatChips } from '@/lib/format'
+import { hostAlias } from '@/lib/seats'
+import type { UpcomingGame } from '@/lib/protocol'
+import { Coin, SeatPips, AvatarStack, FillRing } from './bits'
+import { useNow } from '@/lib/useNow'
+
+function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: boolean; onJoin: () => void }) {
+  const now = useNow(1000)
+  const [base, quote = 'USD'] = game.feed.split('/')
+  const total = Math.max(game.maxPlayers, 1)
+  const oneLeft = total - game.seated === 1
+  const dealtBy = game.creatorHandle ?? hostAlias(game.matchId)
+  return (
+    <button className={`card card--open ${invited ? 'card--invited' : ''}`} type="button" onClick={onJoin}>
+      <span className="card-top">
+        <Coin base={base} />
+        <span className="card-mkt">
+          <b>{base}<i>/{quote}</i></b>
+          <span className="eyebrow">dealt by {dealtBy}</span>
+        </span>
+        <span className="card-flag">
+          {invited && <span className="flag flag--seat">◆ your invite</span>}
+          {oneLeft && <span className="flag flag--seat">One seat left</span>}
+        </span>
+      </span>
+      <span className="card-hero">
+        <span className="amt">
+          <span className="eyebrow">buy-in</span>
+          <b>{formatChips(game.buyIn)}<em>USDC</em></b>
+        </span>
+        {game.fillDeadline ? <FillRing deadline={game.fillDeadline} now={now} /> : null}
+      </span>
+      <span className="card-meta">
+        <span className="m"><SeatPips seated={game.seated} total={total} />{game.seated}/{total} seated</span>
+        <span className="m"><AvatarStack seedKey={game.matchId} seated={game.seated} /></span>
+        <span className="spacer" />
+        {game.entryFee != null && <span className="m">+{formatChips(game.entryFee)} entry</span>}
+      </span>
+      <span className="card-act">
+        <span className="hint">deals when it fills · refund if it never does</span>
+        <span className="btn-gold">Join →</span>
+      </span>
+    </button>
+  )
+}
+
+export function PlayNow() {
+  const upcomingGames = useGameStore((s) => s.upcomingGames)
+  const joinGame = useGameStore((s) => s.joinGame)
+  const createGame = useGameStore((s) => s.createGame)
+  const pendingInvite = useGameStore((s) => s.pendingInvite)
+  const status = useGameStore((s) => s.discoveryStatus)
+  const { connected } = useWallet()
+  const { setVisible } = useWalletModal()
+
+  const sorted = useMemo(
+    () => [...upcomingGames].sort((a, b) => (a.fillDeadline ?? Infinity) - (b.fillDeadline ?? Infinity)),
+    [upcomingGames],
+  )
+
+  const handleJoin = (matchId: string) => {
+    if (!connected) { setVisible(true); return }
+    void joinGame(matchId)
+  }
+  const handleCreate = () => {
+    if (!connected) { setVisible(true); return }
+    void createGame()
+  }
+
+  return (
+    <section className="zone" id="play" aria-labelledby="play-h">
+      <div className="zone-head">
+        <div className="zone-title">
+          <span className="eyebrow"><span className="golddot" />open tables · filling now</span>
+          <h2 id="play-h">Play now</h2>
+        </div>
+        <div className="zone-tools">
+          <button className="btn-gold" type="button" onClick={handleCreate}>Deal a table</button>
+        </div>
+      </div>
+      <div className="engrave" aria-hidden="true" />
+      <p className="zone-sub">Tables waiting on traders, closing soonest first. Take a seat before the fill window shuts — or deal your own and let the room come to you.</p>
+
+      <div className="grid">
+        {sorted.length === 0 && status === 'loading'
+          ? [0, 1].map((i) => <div key={i} className="card card--skeleton"><span className="skel-bar" style={{ height: 120, margin: 16 }} /></div>)
+          : sorted.map((g) => (
+            <OpenCard
+              key={g.matchId}
+              game={g}
+              invited={!!pendingInvite && (g.matchId === pendingInvite || g.onchainMatchId === pendingInvite)}
+              onJoin={() => handleJoin(g.matchId)}
+            />
+          ))}
+        <button className="card card--deal" type="button" onClick={handleCreate}>
+          <span className="deal-seat" aria-hidden="true">+</span>
+          <h3>Start a table</h3>
+          <p>Set the stakes, take seat 1 — the room joins you before it goes live.</p>
+          <span className="btn-gold">Deal a table</span>
+        </button>
+      </div>
+    </section>
+  )
+}

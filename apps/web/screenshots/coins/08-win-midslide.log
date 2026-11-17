@@ -1,0 +1,9 @@
+EXC: {"exceptionId":1,"text":"Uncaught","lineNumber":130,"columnNumber":32,"scriptId":"64","url":"http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863","stackTrace":{"callFrames":[{"functionName":"SettledCeremony","scriptId":"64","url":"http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863","lineNumber":130,"columnNumber":32},{"functionName":"renderWithHooks","scrip
+EXC: {"exceptionId":2,"text":"Uncaught","lineNumber":130,"columnNumber":32,"scriptId":"64","url":"http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863","stackTrace":{"callFrames":[{"functionName":"SettledCeremony","scriptId":"64","url":"http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863","lineNumber":130,"columnNumber":32},{"functionName":"renderWithHooks","scrip
+ERR: The above error occurred in the <SettledCeremony> component:
+
+    at SettledCeremony (http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863:116:22)
+    at Resolution (http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863:24:22)
+    at div
+    at Hud (http://localh
+EXC: {"exceptionId":3,"text":"Uncaught","lineNumber":9128,"columnNumber":14,"scriptId":"35","url":"http://localhost:5173/node_modules/.vite/deps/chunk-SM3OW2QE.js?v=1cb2e5d1","stackTrace":{"callFrames":[{"functionName":"SettledCeremony","scriptId":"64","url":"http://localhost:5173/src/components/hud/Resolution.tsx?t=1783158194863","lineNumber":130,"columnNumber":32},{"functionName":"renderWithHooks","s

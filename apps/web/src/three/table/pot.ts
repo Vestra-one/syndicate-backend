@@ -1,0 +1,914 @@
+import * as THREE from 'three'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+
+/**
+ * The pot — a heap of struck gold "$" sovereigns resting on the felt, lit by the
+ * same candlelight and casting the same shadows as the rest of the table.
+ *
+ * Each coin is modelled as two planar-mapped faces plus a reeded edge cylinder
+ * (merged into one mesh with a 3-group material array). The faces carry a fully
+ * cartesian-drawn strike — a beveled polished rim, an outer band of engraved
+ * glyphs, beaded pearl rings, a baroque scrollwork ring with four cardinal
+ * fleurs, and a large beveled "$" raised over a dark cracked patina field — so
+ * the design reads true from any angle instead of being squashed by a lathe's
+ * polar UVs. The thick edge is heavily milled (reeded) with bright rim lips.
+ * Three subtly different gold alloys are minted so the pile catches light
+ * unevenly like real metal.
+ *
+ * The pile grows monotonically with the pot: every coin has a fixed home slot,
+ * so as the amount climbs only new coins drop in — the ones already on the felt
+ * never shift. A small spill of coins lies flat around the base of the stacks so
+ * even a tiny pot looks scattered and hand-built rather than gridded. When the
+ * pot shrinks (a fresh hand) the surplus is swept away with a quick fade.
+ */
+
+export interface PotPile {
+  group: THREE.Group
+  /**
+   * Set the live pot value; coins animate toward the new amount. Pass
+   * `instant` to place newly-revealed coins at rest (no drop-in) — used to
+   * hydrate an in-progress pot without replaying its build-up.
+   */
+  setAmount: (amount: number, instant?: boolean) => void
+  /** Advance animations. `t` is the scene clock (seconds-ish). */
+  update: (t: number) => void
+  /** Clear the placed coins and re-pour the current target as a fresh cascade. */
+  restart: () => void
+  dispose: () => void
+}
+
+export const COIN_R = 0.21 // coin radius (world units)
+export const COIN_H = 0.06 // coin thickness — chunky enough to show its reeded edge
+const GAP = 0.001 // hairline between stacked coins so edges separate
+const MAX_CHIPS = 115 // total coin budget in the heap
+const HEAP_R = 0.74 // radius of the mound footprint on the felt
+const DOME = 5 // height bias: how much taller the centre piles than the rim
+const LEAVE_DUR = 0.3 // seconds for a swept coin to vanish
+
+// ── coin drop physics ──────────────────────────────────────────────────────
+// Coins are poured onto the heap like a tossed handful: each is released from a
+// scattered point in the air above the mound, falls under constant gravity while
+// its slight sideways throw eases onto its rest column, tumbling as it goes, and
+// lands flat with a barely-there metal-on-felt hop. Vertical fall time is fixed
+// (independent of the sideways glide) and coins are revealed in slot order —
+// which builds each column bottom-up — so a coin always touches down onto its
+// own (x,z) slot AFTER the one it rests on, never onto empty air. The pour is
+// collision-free by construction; no simulation needed.
+const DROP_H = 1.9 // height above each coin's rest that it is released from
+const DROP_SCATTER = 0.34 // sideways throw radius the coin glides in from
+const GRAV = 15 // gravity (world units/s²) — a weighty but lively fall
+const BOUNCE_E = 0.16 // restitution: a subtle hop; struck gold is dead on felt
+const REVEAL_STAGGER = 0.03 // seconds between coins entering the pour (cascade)
+const FALL_DUR = Math.sqrt((2 * DROP_H) / GRAV) // free-fall time to touchdown
+const BOUNCE_V = BOUNCE_E * GRAV * FALL_DUR // rebound speed at impact
+const BOUNCE_DUR = (2 * BOUNCE_V) / GRAV // duration of the single settle hop
+
+/** coins ≈ 1.5·√amount — a satisfying heap that scales gently with the pot. */
+function chipsFor(amount: number): number {
+  if (amount <= 0) return 0
+  return Math.max(1, Math.min(MAX_CHIPS, Math.round(1.5 * Math.sqrt(amount))))
+}
+
+// deterministic pseudo-random in [0,1) from two ints (stable per slot)
+export function hash(a: number, b: number): number {
+  const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453
+  return s - Math.floor(s)
+}
+
+export const easeOutBack = (x: number) => {
+  const c1 = 1.70158,
+    c3 = c1 + 1
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2)
+}
+export const easeInCubic = (x: number) => x * x * x
+export const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3)
+export const easeInOutCubic = (x: number) =>
+  x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
+
+// ---- coin geometry ------------------------------------------------------------
+
+/**
+ * Two planar-mapped disc faces (front +Y, back -Y) plus an open reeded edge,
+ * merged into a single geometry with three material groups: [face, face, edge].
+ * Planar face UVs let the "$" and concentric ornaments be drawn in cartesian
+ * space and stay legible — a lathe's polar UVs would smear them into the centre.
+ */
+function coinGeometry(): THREE.BufferGeometry {
+  const R = COIN_R,
+    H = COIN_H
+  const front = new THREE.CircleGeometry(R, 128)
+  front.rotateX(-Math.PI / 2) // face up (+Y)
+  front.translate(0, H / 2, 0)
+  const back = new THREE.CircleGeometry(R, 128)
+  back.rotateX(Math.PI / 2) // face down (-Y)
+  back.translate(0, -H / 2, 0)
+  const edge = new THREE.CylinderGeometry(R, R, H, 128, 1, true)
+  return mergeGeometries([front, back, edge], true)!
+}
+
+// ---- coin face strike ---------------------------------------------------------
+
+type Mode = 'color' | 'bump' | 'metal' | 'rough'
+const GRY = (v: number) => `rgb(${v | 0},${v | 0},${v | 0})`
+/** Pick the right fill for the current channel: art colour, or grayscale data. */
+function sty(mode: Mode, c: string, b: number, m: number, r: number): string {
+  return mode === 'color' ? c : mode === 'bump' ? GRY(b) : mode === 'metal' ? GRY(m) : GRY(r)
+}
+
+// gold ramp — bright, polished, high-contrast against the dark field
+const G_HI = '#fff4cf'
+const G_LT = '#ffdc84'
+const G = '#f2bd55'
+const G_MD = '#d59a3c'
+const G_LO = '#9c7128'
+const G_DK = '#5a3f16'
+
+/** Paint one face channel onto a SxS canvas context. */
+function paintFace(ctx: CanvasRenderingContext2D, S: number, mode: Mode) {
+  const C = S / 2,
+    R = S / 2
+  const TAU = Math.PI * 2
+  const rad = (f: number) => f * R
+
+  // backdrop (outside the coin — never seen, kept neutral)
+  ctx.fillStyle = sty(mode, '#000', 128, 0, 220)
+  ctx.fillRect(0, 0, S, S)
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(C, C, R, 0, TAU)
+  ctx.clip()
+
+  const ring = (r0: number, r1: number, fill: string) => {
+    ctx.beginPath()
+    ctx.arc(C, C, rad(r1), 0, TAU)
+    ctx.arc(C, C, rad(r0), 0, TAU, true)
+    ctx.fillStyle = fill
+    ctx.fill('evenodd')
+  }
+  const circle = (r: number, fill: string) => {
+    ctx.beginPath()
+    ctx.arc(C, C, rad(r), 0, TAU)
+    ctx.fillStyle = fill
+    ctx.fill()
+  }
+  const strokeRing = (r: number, w: number, fill: string) => {
+    ctx.beginPath()
+    ctx.arc(C, C, rad(r), 0, TAU)
+    ctx.lineWidth = w
+    ctx.strokeStyle = fill
+    ctx.stroke()
+  }
+
+  // ---- dark cracked patina field over the whole disc ----
+  // a warm dark brown rather than near-black, so the face reads the same struck
+  // coin whether it is lit flat-on (stack tops) or tipped into shadow (leaners)
+  if (mode === 'color') {
+    const g = ctx.createRadialGradient(C, C, rad(0.05), C, C, R)
+    g.addColorStop(0, '#3a2614')
+    g.addColorStop(0.5, '#2c1d0f')
+    g.addColorStop(0.85, '#1c1208')
+    g.addColorStop(1, '#120b06')
+    ctx.fillStyle = g
+  } else {
+    ctx.fillStyle = sty(mode, '#000', 112, 70, 188)
+  }
+  circle(1.0, ctx.fillStyle as string)
+
+  // faint warm mottling + hairline cracks across the central field
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(C, C, rad(0.9), 0, TAU)
+  ctx.clip()
+  for (let i = 0; i < 220; i++) {
+    const a = hash(i, 1) * TAU,
+      rr = Math.sqrt(hash(i, 2)) * rad(0.86)
+    const x = C + Math.cos(a) * rr,
+      y = C + Math.sin(a) * rr
+    const s = 4 + hash(i, 3) * 22
+    ctx.fillStyle = sty(mode, `rgba(70,46,22,${0.04 + hash(i, 4) * 0.06})`, 116 + (hash(i, 5) - 0.5) * 16, 64, 198)
+    ctx.beginPath()
+    ctx.ellipse(x, y, s, s * (0.5 + hash(i, 6) * 0.6), a, 0, TAU)
+    ctx.fill()
+  }
+  ctx.lineCap = 'round'
+  for (let i = 0; i < 90; i++) {
+    const a = hash(i, 11) * TAU,
+      r = hash(i, 12) * rad(0.84)
+    let x = C + Math.cos(a) * r,
+      y = C + Math.sin(a) * r
+    ctx.strokeStyle = sty(mode, 'rgba(0,0,0,0.5)', 92, 60, 210)
+    ctx.lineWidth = 0.6 + hash(i, 13) * 1.3
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    let ang = hash(i, 14) * TAU
+    const segs = 2 + (hash(i, 15) * 4) | 0
+    for (let s = 0; s < segs; s++) {
+      ang += (hash(i * 7, s) - 0.5) * 1.4
+      const L = 8 + hash(i * 3, s) * 30
+      x += Math.cos(ang) * L
+      y += Math.sin(ang) * L
+      ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+  }
+  ctx.restore()
+
+  // ---- outer beveled polished rim ----
+  if (mode === 'color') {
+    const g = ctx.createRadialGradient(C, C, rad(0.89), C, C, R)
+    g.addColorStop(0, G_LO)
+    g.addColorStop(0.4, G)
+    g.addColorStop(0.62, G_HI)
+    g.addColorStop(0.82, G_LT)
+    g.addColorStop(1, G_MD)
+    ring(0.89, 1.0, g as unknown as string)
+  } else {
+    ring(0.89, 1.0, sty(mode, '#000', 232, 250, 64))
+  }
+  // bright reeding ticks reading around the very edge
+  for (let i = 0; i < 200; i++) {
+    const a = (i / 200) * TAU
+    ctx.strokeStyle = sty(mode, i % 2 ? 'rgba(255,240,190,0.5)' : 'rgba(70,45,15,0.55)', i % 2 ? 250 : 70, 250, 60)
+    ctx.lineWidth = 1.4
+    ctx.beginPath()
+    ctx.moveTo(C + Math.cos(a) * rad(0.9), C + Math.sin(a) * rad(0.9))
+    ctx.lineTo(C + Math.cos(a) * rad(0.992), C + Math.sin(a) * rad(0.992))
+    ctx.stroke()
+  }
+  strokeRing(0.89, 3, sty(mode, G_DK, 70, 250, 110))
+
+  // beaded pearl ring helper (reused for the three pearl borders)
+  const beadRing = (r: number, n: number, dot: number) => {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU
+      const x = C + Math.cos(a) * rad(r),
+        y = C + Math.sin(a) * rad(r)
+      if (mode === 'color') {
+        const g = ctx.createRadialGradient(x - dot * 0.3, y - dot * 0.3, 0.5, x, y, dot)
+        g.addColorStop(0, G_HI)
+        g.addColorStop(0.6, G)
+        g.addColorStop(1, G_LO)
+        ctx.fillStyle = g
+      } else {
+        ctx.fillStyle = sty(mode, '#000', 224, 250, 64)
+      }
+      ctx.beginPath()
+      ctx.arc(x, y, dot, 0, TAU)
+      ctx.fill()
+    }
+  }
+
+  // ---- engraved outer glyph band (narrow, dark, bright marks) ----
+  ring(0.75, 0.88, sty(mode, '#080503', 124, 60, 192))
+  strokeRing(0.88, 2.5, sty(mode, G_LT, 210, 250, 70))
+  strokeRing(0.75, 2.5, sty(mode, G_LT, 210, 250, 70))
+  beadRing(0.885, 120, R * 0.0085) // dotted ring hugging the rim
+  // repeating ancient/binary-style marks struck in gold
+  const glyphs = ['I', '0', 'I', 'II', '·', '0', 'I', '·', 'II', '0', 'I', '·']
+  const nG = 52
+  const rG = 0.815
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = `bold ${Math.round(R * 0.072)}px "Times New Roman", Georgia, serif`
+  for (let i = 0; i < nG; i++) {
+    const a = (i / nG) * TAU - Math.PI / 2
+    const x = C + Math.cos(a) * rad(rG),
+      y = C + Math.sin(a) * rad(rG)
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(a + Math.PI / 2)
+    const ch = glyphs[i % glyphs.length]
+    if (mode === 'color') {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'
+      ctx.fillText(ch, 1.2, 1.4)
+      ctx.fillStyle = G_LT
+      ctx.fillText(ch, 0, 0)
+    } else {
+      ctx.fillStyle = sty(mode, '#000', 196, 250, 80)
+      ctx.fillText(ch, 0, 0)
+    }
+    ctx.restore()
+  }
+
+  // pearl borders framing the wide scrollwork band
+  beadRing(0.73, 104, R * 0.011)
+  beadRing(0.44, 64, R * 0.0095)
+  strokeRing(0.715, 2, sty(mode, G_MD, 150, 250, 90))
+  strokeRing(0.455, 2, sty(mode, G_MD, 150, 250, 90))
+
+  // ---- baroque scrollwork ring with four cardinal fleurs ----
+  drawScrollRing(ctx, S, mode)
+
+  // ---- the big struck "$" over the patina field ----
+  drawDollar(ctx, S, mode)
+
+  ctx.restore()
+}
+
+/** Filigree S-scrolls repeated around the inner band, with N/E/S/W fleurs. */
+function drawScrollRing(ctx: CanvasRenderingContext2D, S: number, mode: Mode) {
+  const C = S / 2,
+    R = S / 2
+  const rm = 0.585 * R
+  const lw = R * 0.019
+  const goldStroke = (drop: boolean) =>
+    mode === 'color' ? (drop ? 'rgba(0,0,0,0.6)' : G_HI) : sty(mode, '#000', 224, 250, 58)
+
+  const scroll = (cx: number, cy: number, ang: number, sc: number, flip: number) => {
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(ang)
+    ctx.scale(flip * sc, sc)
+    ctx.lineCap = 'round'
+    ctx.lineWidth = lw / sc
+    ctx.beginPath()
+    // a C-scroll curling into a spiral eye
+    ctx.moveTo(0, -R * 0.03)
+    ctx.bezierCurveTo(R * 0.1, -R * 0.04, R * 0.14, R * 0.05, R * 0.1, R * 0.11)
+    ctx.bezierCurveTo(R * 0.066, R * 0.155, R * 0.018, R * 0.12, R * 0.045, R * 0.085)
+    ctx.stroke()
+    // a little leaf bud off the scroll
+    ctx.beginPath()
+    ctx.ellipse(R * 0.12, -R * 0.012, R * 0.03, R * 0.016, 0.6, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  const reps = 14
+  for (let pass = mode === 'color' ? 0 : 1; pass < 2; pass++) {
+    // pass 0 = dark drop shadow (color only), pass 1 = gold
+    ctx.strokeStyle = goldStroke(pass === 0)
+    const off = pass === 0 ? R * 0.004 : 0
+    for (let i = 0; i < reps; i++) {
+      const a = (i / reps) * Math.PI * 2 - Math.PI / 2
+      const cx = C + Math.cos(a) * rm + off,
+        cy = C + Math.sin(a) * rm + off
+      // a symmetric pair of mirrored scrolls per sector
+      scroll(cx, cy, a + Math.PI / 2, 1, 1)
+      scroll(cx, cy, a + Math.PI / 2, 1, -1)
+    }
+  }
+
+  // four cardinal fleurs (diamond + stem + side curls) like the reference,
+  // seated a touch further out so the bold "$" never crowds them
+  const rf = 0.62 * R
+  const fleur = (a: number) => {
+    const cx = C + Math.cos(a) * rf,
+      cy = C + Math.sin(a) * rf
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(a + Math.PI / 2)
+    const drawFleur = (col: string, ox: number, oy: number) => {
+      ctx.fillStyle = col
+      ctx.strokeStyle = col
+      ctx.lineWidth = R * 0.013
+      ctx.lineCap = 'round'
+      // central lozenge (long axis radial)
+      ctx.beginPath()
+      ctx.moveTo(ox + 0, oy - R * 0.1)
+      ctx.lineTo(ox + R * 0.038, oy)
+      ctx.lineTo(ox + 0, oy + R * 0.082)
+      ctx.lineTo(ox - R * 0.038, oy)
+      ctx.closePath()
+      ctx.fill()
+      // top pip
+      ctx.beginPath()
+      ctx.arc(ox + 0, oy - R * 0.124, R * 0.019, 0, Math.PI * 2)
+      ctx.fill()
+      // side curls sweeping up like a trident
+      ctx.beginPath()
+      ctx.moveTo(ox - R * 0.014, oy + R * 0.028)
+      ctx.quadraticCurveTo(ox - R * 0.082, oy + R * 0.014, ox - R * 0.068, oy - R * 0.055)
+      ctx.moveTo(ox + R * 0.014, oy + R * 0.028)
+      ctx.quadraticCurveTo(ox + R * 0.082, oy + R * 0.014, ox + R * 0.068, oy - R * 0.055)
+      ctx.stroke()
+    }
+    if (mode === 'color') {
+      drawFleur('rgba(0,0,0,0.6)', R * 0.004, R * 0.004)
+      drawFleur(G_HI, 0, 0)
+    } else {
+      drawFleur(sty(mode, '#000', 224, 250, 62), 0, 0)
+    }
+    ctx.restore()
+  }
+  for (let k = 0; k < 4; k++) fleur((k / 4) * Math.PI * 2 - Math.PI / 2)
+}
+
+/** A large beveled gold dollar sign struck over the central field. */
+function drawDollar(ctx: CanvasRenderingContext2D, S: number, mode: Mode) {
+  const C = S / 2
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = `bold ${Math.round(S * 0.74)}px Georgia, "Times New Roman", serif`
+  const ch = '$'
+  if (mode === 'color') {
+    // soft cast shadow into the patina
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.fillText(ch, C + S * 0.012, C + S * 0.016)
+    // body gradient
+    const g = ctx.createLinearGradient(0, C - S * 0.3, 0, C + S * 0.3)
+    g.addColorStop(0, G_HI)
+    g.addColorStop(0.4, G_LT)
+    g.addColorStop(0.55, G)
+    g.addColorStop(0.8, G_MD)
+    g.addColorStop(1, G_LO)
+    ctx.fillStyle = g
+    ctx.fillText(ch, C, C)
+    // top-left bevel highlight
+    ctx.fillStyle = 'rgba(255,248,214,0.5)'
+    ctx.fillText(ch, C - S * 0.006, C - S * 0.008)
+  } else if (mode === 'bump') {
+    // dark halo (recessed) then bright body (raised) for a beveled relief
+    ctx.fillStyle = GRY(80)
+    ctx.lineWidth = S * 0.02
+    ctx.strokeStyle = GRY(80)
+    ctx.strokeText(ch, C, C)
+    ctx.fillStyle = GRY(238)
+    ctx.fillText(ch, C, C)
+    ctx.fillStyle = GRY(255)
+    ctx.fillText(ch, C - S * 0.005, C - S * 0.006)
+  } else {
+    ctx.fillStyle = sty(mode, '#000', 0, 250, 58)
+    ctx.fillText(ch, C, C)
+  }
+  ctx.restore()
+}
+
+function buildFaceMaps(): {
+  map: THREE.Texture
+  bumpMap: THREE.Texture
+  metalnessMap: THREE.Texture
+  roughnessMap: THREE.Texture
+} {
+  const S = 1024
+  const make = (mode: Mode, srgb: boolean) => {
+    const cv = document.createElement('canvas')
+    cv.width = cv.height = S
+    paintFace(cv.getContext('2d')!, S, mode)
+    const t = new THREE.CanvasTexture(cv)
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace
+    t.anisotropy = 8
+    return t
+  }
+  return {
+    map: make('color', true),
+    bumpMap: make('bump', false),
+    metalnessMap: make('metal', false),
+    roughnessMap: make('rough', false),
+  }
+}
+
+// ---- reeded edge --------------------------------------------------------------
+
+function paintEdge(ctx: CanvasRenderingContext2D, W: number, H: number, mode: Mode) {
+  // base gold — warm and mid-toned (no near-white highlights) so a stack of
+  // edges reads the same rich gold as the coin face, not pale and over-bright
+  if (mode === 'color') {
+    const g = ctx.createLinearGradient(0, 0, 0, H)
+    g.addColorStop(0, G_LO)
+    g.addColorStop(0.12, G_LT)
+    g.addColorStop(0.2, G)
+    g.addColorStop(0.5, G_MD)
+    g.addColorStop(0.8, G)
+    g.addColorStop(0.88, G_LT)
+    g.addColorStop(1, G_LO)
+    ctx.fillStyle = g
+  } else {
+    ctx.fillStyle = sty(mode, '#000', 150, 250, 96)
+  }
+  ctx.fillRect(0, 0, W, H)
+
+  // vertical reeds (milling)
+  const reeds = 150
+  for (let i = 0; i < reeds; i++) {
+    const x = (i / reeds) * W
+    const w = W / reeds
+    // warm crest highlight (not white)
+    ctx.fillStyle = sty(mode, 'rgba(250,214,128,0.4)', 220, 250, 64)
+    ctx.fillRect(x, 0, w * 0.42, H)
+    // dark groove
+    ctx.fillStyle = sty(mode, 'rgba(48,30,10,0.62)', 70, 250, 130)
+    ctx.fillRect(x + w * 0.5, 0, w * 0.4, H)
+  }
+  // polished rim lips top & bottom — warm gold, gently brighter than the field
+  ctx.fillStyle = sty(mode, 'rgba(250,220,148,0.42)', 230, 250, 60)
+  ctx.fillRect(0, 0, W, H * 0.09)
+  ctx.fillRect(0, H * 0.91, W, H * 0.09)
+  ctx.fillStyle = sty(mode, 'rgba(0,0,0,0.45)', 96, 250, 150)
+  ctx.fillRect(0, H * 0.09, W, H * 0.02)
+  ctx.fillRect(0, H * 0.89, W, H * 0.02)
+}
+
+function buildEdgeMaps(): {
+  map: THREE.Texture
+  bumpMap: THREE.Texture
+  metalnessMap: THREE.Texture
+  roughnessMap: THREE.Texture
+} {
+  const W = 2048,
+    H = 128
+  const make = (mode: Mode, srgb: boolean) => {
+    const cv = document.createElement('canvas')
+    cv.width = W
+    cv.height = H
+    paintEdge(cv.getContext('2d')!, W, H, mode)
+    const t = new THREE.CanvasTexture(cv)
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace
+    t.wrapS = THREE.RepeatWrapping
+    t.anisotropy = 8
+    return t
+  }
+  return {
+    map: make('color', true),
+    bumpMap: make('bump', false),
+    metalnessMap: make('metal', false),
+    roughnessMap: make('rough', false),
+  }
+}
+
+// three gold alloys so the heap doesn't read as one uniform colour
+const ALLOY_TINTS = [0xf3d489, 0xe8c270, 0xead09a]
+
+// ---- shared coin kit ----------------------------------------------------------
+
+/**
+ * The struck-gold coin, boiled down to the three GPU assets every pile needs:
+ * one merged geometry and one [face, face, edge] material array per alloy. It is
+ * EXPENSIVE to build (four 1024² face channels + four 2048×128 edge channels of
+ * hand-painted CanvasTextures), so the whole table mints exactly one kit and
+ * shares it across the pot heap and all six seat stacks. The owner disposes it.
+ */
+export interface CoinKit {
+  geom: THREE.BufferGeometry
+  matSets: THREE.Material[][]
+  dispose: () => void
+}
+
+/** Build one [face, face, edge] material array per alloy tint from shared maps. */
+function buildCoinMatSets(
+  faceMaps: ReturnType<typeof buildFaceMaps>,
+  edgeMaps: ReturnType<typeof buildEdgeMaps>,
+): THREE.Material[][] {
+  return ALLOY_TINTS.map((tint) => {
+    const face = new THREE.MeshStandardMaterial({
+      ...faceMaps,
+      bumpScale: 0.6,
+      color: tint,
+      metalness: 1.0,
+      roughness: 0.24,
+      envMapIntensity: 1.15,
+      emissive: 0xffffff,
+      emissiveMap: faceMaps.map,
+      emissiveIntensity: 0.16,
+    })
+    const edge = new THREE.MeshStandardMaterial({
+      ...edgeMaps,
+      bumpScale: 0.6,
+      color: tint,
+      metalness: 1.0,
+      roughness: 0.34,
+      envMapIntensity: 1.0,
+      emissive: 0xffffff,
+      emissiveMap: edgeMaps.map,
+      emissiveIntensity: 0.06,
+    })
+    return [face, face, edge] as THREE.Material[]
+  })
+}
+
+export function createCoinKit(): CoinKit {
+  const geom = coinGeometry()
+  const faceMaps = buildFaceMaps()
+  const edgeMaps = buildEdgeMaps()
+  const matSets = buildCoinMatSets(faceMaps, edgeMaps)
+  return {
+    geom,
+    matSets,
+    dispose() {
+      geom.dispose()
+      ;[faceMaps, edgeMaps].forEach((m) =>
+        Object.values(m).forEach((t) => (t as THREE.Texture).dispose()),
+      )
+      matSets.forEach((set) => set.forEach((m) => m.dispose()))
+    },
+  }
+}
+
+// ---- coin pile ---------------------------------------------------------------
+
+interface Chip {
+  mesh: THREE.Mesh
+  homeX: number
+  homeY: number
+  homeZ: number
+  offX: number // sideways throw the coin glides in from, eased out by landing
+  offZ: number
+  born: number // scene-clock time the coin was released into the pour
+  leaving: boolean
+  leaveStart: number
+  restQuat: THREE.Quaternion // orientation at rest (the slot's slight lean)
+  tumbleAxis: THREE.Vector3 // axis the coin tumbles about as it falls
+  tumbleAng: number // radians of tumble, eased to 0 by touchdown
+  landed: boolean // has fired its touchdown (used to ping the clink once)
+}
+
+interface Slot {
+  x: number
+  z: number
+  homeY: number
+  rotY: number
+  lean: number
+  leanAxis: number
+  matIdx: number
+}
+
+export function createPotPile(opts: {
+  feltY: number
+  center: THREE.Vector3
+  kit?: CoinKit
+  /** Fired once the moment a poured coin touches down — used to sync a clink. */
+  onLand?: () => void
+}): PotPile {
+  const group = new THREE.Group()
+  group.position.copy(opts.center)
+  group.position.y = opts.feltY
+
+  // Use the table's shared coin kit when given (the pot and every seat stack
+  // draw from one set of textures); otherwise mint a private kit — the
+  // decorative coming-soon table has no scene to share with.
+  const ownKit = opts.kit ? null : createCoinKit()
+  const kit = opts.kit ?? ownKit!
+  const geom = kit.geom
+  const matSets = kit.matSets
+
+  // Precompute every coin's fixed home slot as a physically sound mound. Coins
+  // stack into a hexagonal lattice of columns whose centres are more than one
+  // coin-diameter apart, so coins in neighbouring columns can never overlap —
+  // nothing intertwines. Each new coin drops into the column that keeps the heap
+  // a rounded dome (centre piles tallest, the rim gets a coin or two for a
+  // natural scattered base). The order is monotonic — slot i never changes, so
+  // growing the pot only reveals later slots and placed coins hold still.
+  const slots: Slot[] = []
+  {
+    // hex lattice of column centres, spaced enough over a diameter that each
+    // coin can be jostled off-centre without its neighbours ever touching
+    const S = 2 * COIN_R * 1.16
+    const ROW = S * 0.8660254
+    const JIT = 0.022 // max in-cell offset — keeps min centre gap above 2·COIN_R
+    const cols: { x: number; z: number; r: number; h: number; top: number; bias: number }[] = []
+    const jmax = Math.ceil(HEAP_R / ROW) + 1
+    const kmax = Math.ceil(HEAP_R / S) + 1
+    for (let j = -jmax; j <= jmax; j++) {
+      const cz = j * ROW
+      const xoff = j & 1 ? S / 2 : 0
+      for (let k = -kmax; k <= kmax; k++) {
+        const cx = k * S + xoff
+        const r = Math.hypot(cx, cz)
+        // a fixed per-column reluctance breaks the even fill into an organic,
+        // hand-stacked profile — some columns end up taller than their neighbours
+        if (r <= HEAP_R) cols.push({ x: cx, z: cz, r, h: 0, top: 0, bias: hash(k * 13 + 1, j * 7 + 3) * 2.2 })
+      }
+    }
+    // a few coins are propped up on edge against a stack — caught mid-slide,
+    // clearly tilted and taking the column's support rather than lying flat
+    const leaners = new Set([33, 46, 57, 66, 72])
+    const usedSupports = new Set<typeof cols[number]>()
+    for (let i = 0; i < MAX_CHIPS; i++) {
+      if (leaners.has(i)) {
+        // find a tall mid-ring column with open felt on its outward side
+        let sup: (typeof cols)[number] | null = null,
+          supScore = -Infinity
+        for (const c of cols) {
+          if (c.h < 3 || usedSupports.has(c)) continue
+          const score = c.h - 7 * Math.abs(c.r - 0.42)
+          if (score > supScore) {
+            supScore = score
+            sup = c
+          }
+        }
+        if (sup) {
+          usedSupports.add(sup)
+          const ang = Math.atan2(sup.z, sup.x) || hash(i, 31) * Math.PI * 2 // outward
+          // a gentle lean (≈34–48° off the felt) so the face still catches the
+          // overhead light like the stack tops — a near-vertical coin falls into
+          // shadow and reads as a different, dark coin
+          const phi = 0.6 + hash(i, 30) * 0.25
+          // a disc of radius COIN_R tilted by phi reaches inward by COIN_R·cos(phi)
+          // from its centre, so the centre must sit this far out for the whole
+          // coin to stay outside the stack (radius COIN_R, plus jitter slack) and
+          // only graze it at the top edge — never sink into the column
+          const off = COIN_R * (1 + Math.cos(phi)) + 0.03
+          slots.push({
+            x: sup.x + Math.cos(ang) * off,
+            z: sup.z + Math.sin(ang) * off,
+            // low edge rests on the felt; centre lifted by the steep tilt
+            homeY: COIN_R * Math.sin(phi) + (COIN_H / 2) * Math.cos(phi) + 0.004,
+            rotY: hash(i, 3) * Math.PI * 2,
+            lean: phi,
+            leanAxis: ang, // tip along the radial so it leans onto the stack
+            matIdx: i % matSets.length,
+          })
+          continue
+        }
+        // no suitable stack yet — fall through to a normal coin
+      }
+      // pick the column that best keeps a domed profile (low + central wins),
+      // nudged by each column's reluctance so heights stagger naturally
+      let best = cols[0],
+        bestCost = Infinity
+      for (const c of cols) {
+        const cost = c.h + DOME * (c.r / HEAP_R) ** 2 + c.bias
+        if (cost < bestCost) {
+          bestCost = cost
+          best = c
+        }
+      }
+      const h = best.h++
+      // each coin slips off-centre and tilts a little, so stacks look tossed
+      // rather than machine-stacked; the column's running top accounts for the
+      // tilt so a leaning coin never sinks into the one below it
+      const jx = (hash(i, 1) - 0.5) * 2 * JIT
+      const jz = (hash(i, 2) - 0.5) * 2 * JIT
+      const lean = (hash(i, 4) - 0.5) * 0.12
+      const lift = COIN_R * Math.sin(Math.abs(lean))
+      const homeY = best.top + COIN_H / 2 + lift + (h > 0 ? GAP : 0)
+      best.top = homeY + COIN_H / 2 + lift
+      slots.push({
+        x: best.x + jx,
+        z: best.z + jz,
+        homeY,
+        rotY: hash(i, 3) * Math.PI * 2,
+        lean,
+        leanAxis: hash(i, 5) * Math.PI * 2,
+        matIdx: i % matSets.length,
+      })
+    }
+  }
+
+  const chips: Chip[] = []
+  let target = 0
+  let lastT = -1
+  let instantNext = false // next reveal drops straight to rest (mid-hand hydrate)
+  let nextReveal = -1 // scene-clock time the next coin may enter the pour
+  const _q = new THREE.Quaternion() // scratch — reused each frame, never allocates
+
+  function grow(to: number, t: number, instant: boolean) {
+    for (let i = chips.length; i < to; i++) {
+      const sl = slots[i]
+      const mesh = new THREE.Mesh(geom, matSets[sl.matIdx])
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      // rest orientation — the slot's slight lean so stacks aren't columnar.
+      const restQuat = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          Math.cos(sl.leanAxis) * sl.lean,
+          sl.rotY,
+          Math.sin(sl.leanAxis) * sl.lean,
+        ),
+      )
+      // a gentle tumble while airborne — a near-horizontal axis so the coin
+      // flips like a tossed sovereign, unwinding to flat exactly at touchdown.
+      const tumbleAxis = new THREE.Vector3(
+        hash(i, 20) - 0.5,
+        (hash(i, 21) - 0.5) * 0.35,
+        hash(i, 22) - 0.5,
+      ).normalize()
+      const tumbleAng = (0.55 + hash(i, 23) * 0.9) * Math.PI // 0.55π–1.45π
+      // sideways throw it glides in from — uniform over a disc (√ for area)
+      const oa = hash(i, 24) * Math.PI * 2
+      const om = Math.sqrt(hash(i, 25)) * DROP_SCATTER
+      const offX = Math.cos(oa) * om
+      const offZ = Math.sin(oa) * om
+      if (instant) {
+        mesh.position.set(sl.x, sl.homeY, sl.z)
+        mesh.quaternion.copy(restQuat)
+      } else {
+        // start at the released pose so the coin never flashes at rest for a frame
+        mesh.position.set(sl.x + offX, sl.homeY + DROP_H, sl.z + offZ)
+      }
+      group.add(mesh)
+      // born:-Infinity makes the drop-in maths resolve to "already settled",
+      // so a hydrated coin sits at rest on its first frame with no pour.
+      chips.push({
+        mesh,
+        homeX: sl.x,
+        homeY: sl.homeY,
+        homeZ: sl.z,
+        offX,
+        offZ,
+        born: instant ? -Infinity : t,
+        leaving: false,
+        leaveStart: 0,
+        restQuat,
+        tumbleAxis,
+        tumbleAng,
+        landed: instant, // hydrated coins are born at rest — no clink
+      })
+    }
+  }
+
+  function setAmount(amount: number, instant = false) {
+    target = chipsFor(amount)
+    if (instant) instantNext = true
+  }
+
+  function update(t: number) {
+    if (lastT < 0) lastT = t
+
+    const live = chips.filter((c) => !c.leaving).length
+    if (target > live) {
+      if (instantNext) {
+        grow(target, t, true) // hydrate: reveal the whole heap at rest, no pour
+        nextReveal = -1
+      } else {
+        // Pour coins in on a fixed cadence so the heap rains down and builds up
+        // over ~2–3s, instead of the whole pile blinking in on a single frame.
+        if (nextReveal < 0) nextReveal = t
+        while (chips.length < target && t >= nextReveal) {
+          grow(chips.length + 1, t, false)
+          nextReveal += REVEAL_STAGGER
+        }
+      }
+    } else {
+      nextReveal = -1
+      if (target < live) {
+        let excess = live - target
+        for (let i = chips.length - 1; i >= 0 && excess > 0; i--) {
+          const c = chips[i]
+          if (!c.leaving) {
+            c.leaving = true
+            c.leaveStart = t
+            excess--
+          }
+        }
+      }
+    }
+
+    for (let i = chips.length - 1; i >= 0; i--) {
+      const c = chips[i]
+      if (c.leaving) {
+        const p = Math.min(1, (t - c.leaveStart) / LEAVE_DUR)
+        const s = 1 - easeInCubic(p)
+        c.mesh.scale.setScalar(Math.max(0.0001, s))
+        c.mesh.position.y = c.homeY + p * 0.5
+        if (p >= 1) {
+          group.remove(c.mesh)
+          chips.splice(i, 1)
+        }
+      } else {
+        const age = t - c.born
+        if (age >= FALL_DUR + BOUNCE_DUR) {
+          // settled — flat on its slot at rest orientation
+          c.mesh.position.set(c.homeX, c.homeY, c.homeZ)
+          c.mesh.quaternion.copy(c.restQuat)
+        } else if (age < FALL_DUR) {
+          // free fall from DROP_H up (accelerating down) while the sideways
+          // throw decelerates onto the slot — a shallow toss arc that flattens
+          // out right as it lands, so it settles instead of stopping dead
+          const glide = 1 - easeOutCubic(age / FALL_DUR) // 1 → 0 by touchdown
+          c.mesh.position.set(
+            c.homeX + c.offX * glide,
+            c.homeY + DROP_H - 0.5 * GRAV * age * age,
+            c.homeZ + c.offZ * glide,
+          )
+          // tumble spins fast at first, unwinding to flat exactly at touchdown
+          _q.setFromAxisAngle(c.tumbleAxis, c.tumbleAng * glide)
+          c.mesh.quaternion.copy(c.restQuat).multiply(_q)
+        } else {
+          // one small hop after impact, then it comes to rest
+          const at = age - FALL_DUR
+          const h = BOUNCE_V * at - 0.5 * GRAV * at * at
+          c.mesh.position.set(c.homeX, c.homeY + Math.max(0, h), c.homeZ)
+          c.mesh.quaternion.copy(c.restQuat)
+        }
+        if (!c.landed && age >= FALL_DUR) {
+          c.landed = true
+          opts.onLand?.() // touchdown — clink in sync with the impact
+        }
+      }
+    }
+    instantNext = false // consumed: only the reveal right after setAmount snaps
+    lastT = t
+  }
+
+  function restart() {
+    // Re-drop the heap from scratch: clear the placed coins and reset the reveal
+    // clock so `update` pours the same target in again as a fresh cascade. The
+    // meshes share the kit's geometry/materials, so removing them frees nothing
+    // to dispose — they're simply dereferenced and rebuilt on the next grow.
+    for (const c of chips) group.remove(c.mesh)
+    chips.length = 0
+    nextReveal = -1
+    instantNext = false
+  }
+
+  function dispose() {
+    // Only dispose the kit if we minted it ourselves; a shared kit is owned by
+    // the scene and released once, alongside the seat stacks that also use it.
+    ownKit?.dispose()
+  }
+
+  return { group, setAmount, update, restart, dispose }
+}
