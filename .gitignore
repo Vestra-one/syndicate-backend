@@ -25,3 +25,6 @@ deploy/secrets/*
 
 # Program deploy keypairs (devnet program id keypair — keep off git)
 services/programs/keys/
+
+# Local offline stack state (scripts/localnet): ledger, logs, pids, keys, env
+.localnet/

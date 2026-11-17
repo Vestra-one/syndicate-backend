@@ -39,6 +39,12 @@ FE                                  backend
 
 Use `Authorization: Bearer <session>` on wallet-bound REST routes. The same
 challenge/response runs inside the WS (`challenge` → `auth` → `authenticated`).
+A client that already holds a session can skip the second wallet prompt: answer the WS
+challenge with `auth {wallet, session}` instead of `auth {wallet, signature}`. A stale
+token gets `error {code:"bad_session"}` and the challenge stays valid, so fall back to
+signing the nonce. Conversely the `authenticated` frame of a signature auth carries a
+fresh `session` usable on REST. Use this on every reconnect so a dropped socket mid-hand
+never needs a wallet prompt.
 Spectating (lobby + match channels, public reads) needs **no** auth.
 
 ## 3. Who signs what
@@ -252,7 +258,7 @@ Envelope: every server frame is `{"v":1, "t":"<type>", "server_time_ms":…, …
 frames: `{"t":"<type>", …}`. Unknown fields/types MUST be ignored (additive versioning;
 breaking changes bump `v`). Heartbeat: `ping`/`pong` every 30s.
 
-Client → server: `auth {wallet, signature}` · `subscribe {channel: "lobby"|{"match":id}|"wallet", last_seq?}` ·
+Client → server: `auth {wallet, signature | session}` · `subscribe {channel: "lobby"|{"match":id}|"wallet", last_seq?}` ·
 `unsubscribe {channel}` · `act {…}` (§8) · `set_default {…}` · `seal {…}` (§7) · `ping`.
 
 Server → client: `challenge {nonce}` · `authenticated {wallet, session}` ·

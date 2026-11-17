@@ -30,9 +30,16 @@ pub async fn upgrade(State(st): State<AppState>, ws: WebSocketUpgrade) -> Respon
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum ClientMsg {
+    /// Authenticate the socket as `wallet`: either a fresh ed25519 `signature` over the
+    /// challenge nonce, or an existing REST `session` token for that wallet (lets a client
+    /// that already signed in over HTTP — or is reconnecting mid-hand — authenticate
+    /// without another wallet prompt).
     Auth {
         wallet: String,
-        signature: String,
+        #[serde(default)]
+        signature: Option<String>,
+        #[serde(default)]
+        session: Option<String>,
     },
     Subscribe {
         channel: Value,
@@ -148,7 +155,18 @@ impl Conn {
                 self.send(json!({ "v":1, "t":"pong", "server_time_ms": now_ms() }))
                     .await;
             }
-            ClientMsg::Auth { wallet, signature } => self.auth(wallet, signature).await,
+            ClientMsg::Auth {
+                wallet,
+                signature,
+                session,
+            } => match (session, signature) {
+                (Some(session), _) => self.auth_session(wallet, session).await,
+                (None, Some(signature)) => self.auth(wallet, signature).await,
+                (None, None) => {
+                    self.error("bad_frame", "auth needs a signature or a session")
+                        .await
+                }
+            },
             ClientMsg::Subscribe { channel, last_seq } => self.subscribe(channel, last_seq).await,
             ClientMsg::Unsubscribe { channel } => {
                 if let Some(t) = self.subs.remove(&channel_key(&channel)) {
@@ -240,6 +258,34 @@ impl Conn {
         // Fresh challenge for potential re-auth.
         let nonce = uuid::Uuid::new_v4().to_string();
         self.nonce = Some(nonce);
+    }
+
+    /// Authenticate with an existing session token (the one `POST /v1/auth/verify` or a
+    /// previous WS `authenticated` frame returned). The challenge nonce is left untouched so
+    /// a client whose token turned out stale can still fall back to signing it.
+    async fn auth_session(&mut self, wallet: String, session: String) {
+        let owner = crate::auth::session::wallet_for_token(&self.st, &session)
+            .await
+            .ok()
+            .flatten();
+        if owner.as_deref() != Some(wallet.as_str()) {
+            return self
+                .error(
+                    "bad_session",
+                    "session is invalid, expired, or for another wallet",
+                )
+                .await;
+        }
+        if let Ok(mut current) = self.wallet.write() {
+            *current = Some(wallet.clone());
+        }
+        self.send(json!({
+            "v":1, "t":"authenticated", "server_time_ms": now_ms(),
+            "wallet": wallet,
+            "session": Value::Null,
+            "expires_at": Value::Null,
+        }))
+        .await;
     }
 
     async fn subscribe(&mut self, channel: Value, last_seq: i64) {
@@ -562,6 +608,30 @@ mod tests {
         let sub: ClientMsg =
             serde_json::from_str(r#"{"t":"subscribe","channel":"lobby"}"#).unwrap();
         assert!(matches!(sub, ClientMsg::Subscribe { .. }));
+    }
+
+    #[test]
+    fn auth_frame_accepts_signature_or_session() {
+        let by_sig: ClientMsg =
+            serde_json::from_str(r#"{"t":"auth","wallet":"w","signature":"sig"}"#).unwrap();
+        assert!(matches!(
+            by_sig,
+            ClientMsg::Auth {
+                signature: Some(_),
+                session: None,
+                ..
+            }
+        ));
+        let by_session: ClientMsg =
+            serde_json::from_str(r#"{"t":"auth","wallet":"w","session":"tok"}"#).unwrap();
+        assert!(matches!(
+            by_session,
+            ClientMsg::Auth {
+                signature: None,
+                session: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

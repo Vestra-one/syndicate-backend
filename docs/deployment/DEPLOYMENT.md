@@ -184,6 +184,32 @@ SOLANA_RPC_URL=<keyed-devnet-rpc> scripts/e2e-local-devnet.sh          # add RUN
 > with `TIMELOCK_OPEN_MODE=mock` (set in `docker-compose.devnet.yml`) so settlement decrypts
 > a deterministic seal without waiting on a live drand round; unset it for real tlock.
 
+### 9a. Local stack — the whole system offline, one command
+
+For development and CI there is a fully local stack that needs **no devnet RPC, no drand,
+no exchange feed and no Docker**:
+
+```bash
+scripts/localnet/up.sh      # validator (program preloaded) + chips mint + funded wallets
+                            # + protocol init + Postgres + mock price server
+                            # + game-server + chain-worker
+scripts/localnet/e2e.sh     # the full lifecycle + fund-theft suite against it
+scripts/localnet/down.sh
+```
+
+- State (ledger, logs, pids, keys, the generated `env`) lives in `.localnet/` (git-ignored).
+- The program is loaded at its declared id straight from `target/deploy` — no deploy step.
+- Prices come from `scripts/localnet/mock-price-server.mjs`: same wire surface and the same
+  EIP-191 signing as the Go server (so on-chain `verify_signed_price` runs for real) over a
+  synthetic price walk. Its signer is registered as the protocol price signer.
+- Timelock runs in **mock** mode (`TIMELOCK_OPEN_MODE=mock`). Never use that with real money.
+- Needs: Solana CLI (`solana-test-validator`, `spl-token`), cargo, node ≥ 20, `psql`, and a
+  Postgres superuser URL (`PG_SUPER_URL`, default `postgres://postgres@127.0.0.1:5432/postgres`).
+- `EXTRA_WALLETS="<pubkey> …" scripts/localnet/up.sh` also funds your own browser wallets.
+- The frontend repo runs its browser end-to-end test against this stack
+  (`npm run e2e:localnet` in syn-front): two real app instances play a hand through
+  create → join → seal → bet → settle → claim.
+
 ## 10. Operations runbook
 
 - **Logs**: `docker compose logs -f game-server chain-worker` (JSON; filter by `match_id`).

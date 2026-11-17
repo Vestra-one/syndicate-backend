@@ -1,0 +1,11 @@
+{
+  "name": "syndicate-localnet-tools",
+  "private": true,
+  "type": "module",
+  "description": "Offline stand-ins used by scripts/localnet (never deployed).",
+  "dependencies": {
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.8.0",
+    "ws": "^8.18.0"
+  }
+}
