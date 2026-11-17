@@ -1,7 +1,7 @@
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
-import { formatChips } from '@/lib/format'
+import { formatChips, formatChipsPrecise } from '@/lib/format'
 import { hostAlias } from '@/lib/seats'
 import { PAST_FILLING_PHASES } from '@/lib/protocol'
 import { SeatPips, mmss } from './bits'
@@ -82,10 +82,10 @@ export function JoinSheet({ matchId }: { matchId: string }) {
       <div className="terms">
         <div className="term"><span>buy-in</span><b>{formatChips(terms.buyIn)} <i>USDC</i></b></div>
         <div className="term"><span>entry fee</span><b>{formatChips(terms.entryFee)} <i>USDC</i></b></div>
-        <div className="term"><span>blinds</span><b>{formatChips(terms.smallBlind)} / {formatChips(terms.bigBlind)}</b></div>
-        <div className="term"><span>rake</span><b>{(terms.rakeBps / 100).toFixed(2)}% <i>cap {formatChips(terms.rakeCap)}</i></b></div>
+        <div className="term"><span>blinds</span><b>{formatChipsPrecise(terms.smallBlind)} / {formatChipsPrecise(terms.bigBlind)}</b></div>
+        <div className="term"><span>rake</span><b>{(terms.rakeBps / 100).toFixed(2)}% <i>cap {formatChipsPrecise(terms.rakeCap)}</i></b></div>
         <div className="term"><span>rounds</span><b>{terms.roundCount} × {terms.roundDurationsSec[0] ?? 0}s</b></div>
-        <div className="term"><span>action timer</span><b>{terms.actionTimerSec}s <i>+{terms.timeBankSec}s bank</i></b></div>
+        <div className="term"><span>action timer</span><b>{terms.actionTimerSec}s{terms.timeBankSec > 0 && <i> +{terms.timeBankSec}s bank</i>}</b></div>
       </div>
 
       <div className="total">

@@ -22,6 +22,7 @@ export function RoundStatus() {
   const match = useGameStore((s) => s.match)
   const terms = useGameStore((s) => s.terms)
   const schedule = useGameStore((s) => s.streetSchedule)
+  const sealDeadline = useGameStore((s) => s.sealDeadline)
   const { active: waiting } = useWaiting()
   const now = useNow(500)
 
@@ -47,27 +48,26 @@ export function RoundStatus() {
   // When we have a schedule, trust it for BOTH the total and the current round, and never
   // let either overflow it.
   const roundCount = live && schedule?.length ? schedule.length : (terms?.roundCount ?? match.round)
-  const scheduleRound =
-    live && schedule?.length
-      ? ((schedule.find((e) => now < e.end) ?? schedule[schedule.length - 1]).street + 1)
-      : 0
-  const round = Math.min(roundCount, Math.max(match.round, scheduleRound))
+  // The street the CLOCK is in. The engine's own round runs ahead of it: the moment a
+  // street's betting completes it advances, while the next street only opens on schedule.
+  // Showing the engine round here produced "Round 2 of 2 · betting closes in 0:24" while
+  // the banner said round 2 had not opened — the title and the countdown were about
+  // different rounds.
+  const cur = live && schedule?.length ? (schedule.find((e) => now < e.end) ?? schedule[schedule.length - 1]) : null
+  const round = cur ? Math.min(roundCount, cur.street + 1) : Math.min(roundCount, match.round)
   const label = live ? `Round ${round} of ${roundCount}` : PHASE_COPY[match.phase]
 
-  // Whose-move-it-is lives solely in the top TurnBanner now — this card is the
-  // calm round/pot reference, so it no longer repeats the turn (was a third,
-  // redundant "Your move" competing with the banner and the action panel).
-
-  // Streets advance on the server's street schedule, not on betting — so a matched pot
-  // with nobody to act is a WAIT, not a stall. Count the window down so it reads that way.
+  // Streets advance on the schedule, not on betting — so a finished street is a WAIT with
+  // a known end, not a stall. Always say what is being waited for and for how long.
   let clock: string | null = null
-  if (live && schedule) {
-    const cur = schedule.find((e) => now < e.end)
-    if (cur) {
-      clock = now < cur.close
-        ? `betting closes in ${formatCountdown(cur.close - now)}`
-        : `observing price — round ends in ${formatCountdown(cur.end - now)}`
-    }
+  if (cur) {
+    const bettingDone = match.round > round || now >= cur.close
+    const next = schedule?.[cur.street + 1]
+    if (!bettingDone) clock = `betting closes in ${formatCountdown(cur.close - now)}`
+    else if (next) clock = `betting done · round ${round + 1} opens in ${formatCountdown(next.open - now)}`
+    else clock = `betting done · price settles in ${formatCountdown(cur.end - now)}`
+  } else if (match.phase === 'SEALING' && sealDeadline != null && sealDeadline > now) {
+    clock = `betting starts in ${formatCountdown(sealDeadline - now)}`
   }
 
   return (

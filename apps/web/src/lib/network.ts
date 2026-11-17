@@ -47,3 +47,13 @@ export function networkInfo(url = RPC_URL): NetworkInfo {
     solFaucetUrl: cluster === 'devnet' || cluster === 'testnet' ? 'https://faucet.solana.com/' : null,
   }
 }
+
+/** Solana Explorer link for a transaction on the cluster this build talks to. */
+export function explorerTxUrl(sig: string, url = RPC_URL): string {
+  const cluster = detectCluster(url)
+  const q =
+    cluster === 'mainnet' ? ''
+    : cluster === 'localnet' ? `?cluster=custom&customUrl=${encodeURIComponent(url)}`
+    : `?cluster=${cluster}`
+  return `https://explorer.solana.com/tx/${sig}${q}`
+}

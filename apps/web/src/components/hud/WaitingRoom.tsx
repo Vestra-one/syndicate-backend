@@ -283,7 +283,11 @@ function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; ma
   else if (locking) clock = `Seats locked — dealing in ${formatCountdown(remaining ?? 0)}`
   else if (counting) clock = `Match starts in ${formatCountdown(remaining)} · more can still join`
   else if (expired) clock = 'Fill window closed'
-  else clock = `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'}`
+  // Still short of the minimum: the table closes (and refunds) at the deadline — a player
+  // waiting alone needs to know how long that is.
+  else clock = remaining != null
+    ? `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'} · closes in ${formatCountdown(remaining)}`
+    : `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'}`
 
   const eyebrow = full ? 'Table ready' : counting ? 'Match starting' : 'Table filling'
 
@@ -430,7 +434,7 @@ function HowItWorksCard({ max }: { max: number }) {
     `The table fills up to ${max} players`,
     'Seal the prediction',
     'Match begins automatically',
-    'Winners share the pot',
+    'Closest call takes the pot',
   ]
   return (
     <section className="wr-card">
@@ -499,7 +503,9 @@ function RoomInfoCard({ filled, max }: { filled: number; max: number }) {
   const terms = useGameStore((s) => s.terms)
   if (!terms) return null
   const matchId = terms.onchainMatchId ?? terms.matchPda ?? null
-  const shortId = matchId ? `${matchId.slice(0, 4)}…${matchId.slice(-4)}` : '—'
+  // Only abbreviate long ids (a PDA); a short on-chain id reads fine whole — "20000" was
+  // being rendered as "2000…0000".
+  const shortId = !matchId ? '—' : matchId.length > 12 ? `${matchId.slice(0, 4)}…${matchId.slice(-4)}` : matchId
 
   // No "Status" row here — the felt centre is the single status source (§5). This
   // card is just the static table facts.

@@ -389,6 +389,8 @@ async function main() {
       return s.view === 'table' && s.seated && s.lastTx?.label === 'Table created on-chain'
     }, 120_000)
     await shot(host, '03-waiting-room')
+    await waitFor(host, 'create ceremony dismissed', () => !window.__gameStore.getState().txProgress, 30_000).catch(() => {})
+    await shot(host, '03b-waiting-room-alone')
 
     // ---- join (discovered from the lobby, like a real second player) ----
     let matchId = null
@@ -412,6 +414,8 @@ async function main() {
       return s.view === 'table' && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
     }, 120_000)
 
+    await sleep(1500)
+    await shot(guest, '05b-waiting-room-full')
     // ---- lock → sealing ----
     for (const p of [host, guest]) {
       await waitFor(p, 'table locked → SEALING with a server-assigned timelock round', () => {
@@ -434,6 +438,8 @@ async function main() {
     }
     await waitFor(host, 'both seats show as sealed', () => window.__gameStore.getState().sealedSeats.length === 2, 30_000)
     await shot(host, '07-sealed')
+    await sleep(8000)
+    await shot(guest, '07b-sealed-waiting-for-live')
 
     // ---- live betting ----
     for (const p of [host, guest]) {
@@ -445,6 +451,7 @@ async function main() {
     let shotTurn = false
     let severed = false
     const betRounds = new Set()
+    const shots = new Set()
     let attack = null
     const socketPromptsBefore = host.prompts.socket
     const liveDeadline = Date.now() + (ROUND_COUNT * (STREET_SEC + OBSERVATION_SEC) + 240) * 1000
@@ -454,6 +461,18 @@ async function main() {
       if (Date.now() > liveDeadline) throw new Error(`match never settled\n${JSON.stringify(snaps)}`)
       for (let i = 0; i < players.length; i++) {
         const s = snaps[i]
+        if (s.phase === 'LIVE' && !s.yourTurn && !shots.has('opp')) {
+          shots.add('opp')
+          await shot(players[i], '09b-opponents-turn')
+        }
+        if (s.phase === 'LIVE' && s.yourTurn && !s.bettingOpen && !shots.has('queued')) {
+          shots.add('queued')
+          await shot(players[i], '09c-turn-queued-until-round-opens')
+        }
+        if (s.phase === 'SETTLEMENT_WINDOW' && !shots.has('settling')) {
+          shots.add('settling')
+          await shot(players[i], '09d-settling')
+        }
         if (!s.yourTurn || s.actPending || s.phase !== 'LIVE' || !s.bettingOpen) continue
         // Before the rightful player moves, an outsider tries to fold this seat for them.
         if (!attack) {

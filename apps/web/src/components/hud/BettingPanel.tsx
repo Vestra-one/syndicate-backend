@@ -324,6 +324,9 @@ function SealClosedPanel() {
  */
 function SealedWaitingPanel() {
   const [collapsed, setCollapsed] = useState(false)
+  const sealDeadline = useGameStore((s) => s.sealDeadline)
+  const now = useNow(500)
+  const startsIn = sealDeadline != null && sealDeadline > now ? sealDeadline - now : null
   useEffect(() => {
     const t = setTimeout(() => setCollapsed(true), 5000)
     return () => clearTimeout(t)
@@ -333,7 +336,10 @@ function SealedWaitingPanel() {
     return (
       <div className="betpanel panel seal-sealed-bar">
         <span className="seal-lock" aria-hidden="true">🔒</span>
-        <span className="seal-sealed-bar-text">Prediction sealed — secret until the hand ends</span>
+        <span className="seal-sealed-bar-text">
+          Prediction sealed — secret until the hand ends
+          {startsIn != null && <> · betting starts in <b className="mono">{formatCountdown(startsIn)}</b></>}
+        </span>
         <SealStatusStrip />
       </div>
     )

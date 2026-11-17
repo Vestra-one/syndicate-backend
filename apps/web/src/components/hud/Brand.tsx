@@ -2,7 +2,7 @@ import { useGameStore } from '@/store/gameStore'
 
 const STATUS_LABEL: Record<string, string> = {
   connecting: 'connecting',
-  live: 'live',
+  live: 'connected', // the socket, not the hand — "LIVE" next to a settled table misled
   reconnecting: 'reconnecting',
   offline: 'offline',
 }

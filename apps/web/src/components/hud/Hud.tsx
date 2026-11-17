@@ -12,6 +12,7 @@ import { WaitingRoom, useWaiting } from './WaitingRoom'
 import { PriceBoardTabs } from './PriceBoardTabs'
 import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
+import { explorerTxUrl } from '@/lib/network'
 import './hud.css'
 
 /**
@@ -22,6 +23,18 @@ import './hud.css'
  */
 function SpectatorPanel() {
   const phase = useGameStore((s) => s.match?.phase)
+  // A player who has deposited is NOT a spectator. For a few seconds after the table
+  // locks their engine seat is still being resolved; telling someone who just paid in
+  // that they are "spectating" reads as "your deposit didn't count".
+  const seated = useGameStore((s) => s.seated)
+  if (seated) {
+    return (
+      <div className="betpanel panel">
+        <div className="panel-title">Taking your seat…</div>
+        <p className="seal-note eyebrow">Your deposit is in. The table just locked — your seat opens in a moment.</p>
+      </div>
+    )
+  }
   const hint =
     phase === 'SEALING' ? 'Predictions are sealing — no one can see a call until reveal.'
     : phase === 'LIVE' ? 'Predictions stay sealed until the hand ends.'
@@ -49,7 +62,7 @@ function TxBanner() {
 
   if (!lastTx || dismissed) return null
 
-  const explorerUrl = `https://explorer.solana.com/tx/${lastTx.sig}?cluster=devnet`
+  const explorerUrl = explorerTxUrl(lastTx.sig)
 
   return (
     <div className="tx-banner">

@@ -59,6 +59,17 @@ export function formatMoney(base: bigint | number, token = 'USDC', opts?: { sign
 }
 
 /** ms → a countdown that grows an hours field when needed: "4:07", "1:02:30". */
+/**
+ * Chips with enough precision to be truthful for small table amounts (blinds, rake):
+ * two decimals normally, up to four when two would round the value to something else
+ * (a 0.005 small blind printed as "0.01" makes it look equal to the 0.01 big blind).
+ */
+export function formatChipsPrecise(base: bigint | number): string {
+  const v = Number(base) / 1e6
+  const exactAtTwo = Math.abs(v * 100 - Math.round(v * 100)) < 1e-9
+  return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: exactAtTwo ? 2 : 4 })
+}
+
 export function formatCountdown(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))
   const h = Math.floor(total / 3600)

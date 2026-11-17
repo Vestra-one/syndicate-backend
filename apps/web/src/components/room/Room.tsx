@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useWallet, useConnection } from '@solana/wallet-adapter-react'
+import { useWallet } from '@solana/wallet-adapter-react'
 import { useGameStore } from '@/store/gameStore'
 import { networkInfo } from '@/lib/network'
 import { NetworkPill, updatedAgo } from './bits'
@@ -128,8 +128,6 @@ export function Room() {
   const createGame = useGameStore((s) => s.createGame)
 
   const { connected } = useWallet()
-  const { connection } = useConnection()
-  const [wrongNetwork, setWrongNetwork] = useState(false)
   const net = useMemo(() => networkInfo(), [])
   const firstLoad = useRef(false)
 
@@ -154,13 +152,11 @@ export function Room() {
     return () => clearInterval(id)
   }, [loadHistory, loadLeaderboard])
 
-  // Detect a mainnet wallet connected to a devnet app via genesis hash.
-  useEffect(() => {
-    if (!connected) { setWrongNetwork(false); return }
-    connection.getGenesisHash().then((hash) => {
-      setWrongNetwork(hash !== 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG')
-    }).catch(() => { /* ignore */ })
-  }, [connected, connection])
+  // (A "wrong network — your wallet is on Mainnet" banner used to live here. It compared the
+  // APP's own RPC genesis hash to devnet's, which says nothing about the wallet: it fired on
+  // every non-devnet build — localnet, and it would have on mainnet for every player. A
+  // wallet on the wrong cluster surfaces where it actually matters, as a failed deposit
+  // simulation with its own message.)
 
   const handleJoin = (matchId: string) => void joinGame(matchId)
   const handleCreate = () => void createGame()
@@ -183,7 +179,7 @@ export function Room() {
 
       <div className="room">
         <main>
-          {(pendingInvite || wrongNetwork || playError || walletError) && (
+          {(pendingInvite || playError || walletError) && (
             <div className="room-notices">
               {pendingInvite && (
                 <InviteBanner
@@ -201,17 +197,6 @@ export function Room() {
                   <div>
                     <strong>Wallet connection failed</strong>
                     <span> — {walletError}</span>
-                  </div>
-                </div>
-              )}
-              {wrongNetwork && (
-                <div className="dash-network-warn">
-                  <span className="dash-network-warn-icon">⚠</span>
-                  <div>
-                    <strong>Wrong network</strong>
-                    <span> — your wallet is on Mainnet. Switch to </span>
-                    <strong>Solana Devnet</strong>
-                    <span> in your wallet settings before depositing.</span>
                   </div>
                 </div>
               )}

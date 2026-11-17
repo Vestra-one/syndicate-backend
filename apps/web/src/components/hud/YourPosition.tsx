@@ -71,7 +71,8 @@ export function YourPosition() {
           <span>seat {match.yourSeat + 1}</span>
           {yourTurn == null && (
             <>
-              <span className="mono">stack {formatMoney(match.yourStack ?? 0, token)}</span>
+              {/* Stacks only exist once the hand is live; before that the seat holds its buy-in. */}
+              <span className="mono">stack {formatMoney(match.phase === 'FILLING' || match.phase === 'SEALING' ? (terms?.buyIn ?? 0n) : (match.yourStack ?? 0), token)}</span>
               <span className="mono">committed {formatMoney(match.yourExposure ?? 0, token)}</span>
             </>
           )}
