@@ -36,7 +36,7 @@ use error::SyndicateError;
 use settle_args::SettleArgs;
 use state::{MatchAccount, MatchStatus, ProtocolState, SeatAccount};
 
-declare_id!("91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK");
+declare_id!("EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv");
 
 /// Pinned drand beacon (League of Entropy `quicknet`, 3s period, time-lock capable).
 /// Used to bound each seat's `timelock_target` to publish AFTER projected match end.

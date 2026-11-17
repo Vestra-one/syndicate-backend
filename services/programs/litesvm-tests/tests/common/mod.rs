@@ -55,7 +55,7 @@ pub use syndicate_engine_core::GENESIS_HEAD;
 
 // Must match `declare_id!` in the program source (the `.so` is built from it); Anchor rejects a
 // load address that differs (error 4100, DeclaredProgramIdMismatch).
-pub const PROGRAM_ID: Pubkey = pubkey!("91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK");
+pub const PROGRAM_ID: Pubkey = pubkey!("EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv");
 pub const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 

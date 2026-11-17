@@ -12,7 +12,7 @@ reconnect, and claims. This is the single authoritative frontend guide for v2.
 | WebSocket | `wss://api.devnet.satoshitable.fun/v1/ws` |
 | Price feed (read-only) | `https://price.devnet.satoshitable.fun` (`GET /prices`, WS `/ws`) |
 | Solana cluster | devnet |
-| Program id | `91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK` |
+| Program id | `EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv` |
 | Chips mint (SPL) | default `3Gdd9ew2Dq63QeJETc7krKB2JJ1GaHfBZvMzBdAy541X` (6 decimals). **Not fixed** — the operator configures an allowlist; read `chips_token_mints` from `/v1/config` and let the creator pick one. |
 | IDL | [`docs/frontend/idl/syndicate_program.json`](idl/syndicate_program.json) |
 | drand beacon | quicknet — chain `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`, genesis `1692803367`, period `3s`, scheme `bls-unchained-g1-rfc9380` |

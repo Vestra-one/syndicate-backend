@@ -19,7 +19,7 @@ pub mod verify;
 use solana_sdk::pubkey::Pubkey;
 
 /// The deployed v2 program id (must match `declare_id!` in the program source).
-pub const PROGRAM_ID_STR: &str = "91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK";
+pub const PROGRAM_ID_STR: &str = "EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv";
 
 pub fn program_id() -> Pubkey {
     PROGRAM_ID_STR.parse().expect("valid program id")

@@ -7,13 +7,13 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-syndicate_program = "91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK"
+syndicate_program = "EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv"
 
 [programs.localnet]
-syndicate_program = "91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK"
+syndicate_program = "EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv"
 
 [programs.mainnet]
-syndicate_program = "91BSZ2pEGCk7Scq9bnfTwrHCYGo8CzGBq5mbpKHAR5FK"
+syndicate_program = "EQsNZV4bBqaXFSSDkYKxuu57eBB9s83ouTjC4imDNvTv"
 
 [registry]
 url = "https://api.apr.dev"

@@ -35,6 +35,24 @@ already present on most VPSes) can terminate TLS and proxy to them — see §8. 
 `nginx` container is **opt-in** (`--profile edge`) for a *dedicated* VPS where nothing else
 owns 80/443; enabling it alongside a host nginx makes the two fight over those ports.
 
+## 0. One command (blank server → running devnet backend)
+
+```bash
+scripts/deploy-remote.sh root@<server-ip>      # from your machine; asks for the password once
+```
+
+It copies the working tree to `/opt/satoshi-table` and runs `scripts/server-bootstrap.sh`
+there: packages + firewall, Rust + Solana CLI, fresh secrets, program build + deploy,
+protocol init, chips mint, `deploy/.env`, house bots, the Docker stack, nginx and TLS.
+Every step is skipped when already done, so the same command ships new code later.
+
+- It waits until the operator wallet it prints holds ~7 devnet SOL (it tries the airdrop
+  first; otherwise fund it at faucet.solana.com).
+- TLS is issued once `api.$DOMAIN` and `price.$DOMAIN` (default `devnet.satoshitable.fun`)
+  resolve to the server; until then it tells you which A records to set — re-run after.
+- The program keypair (`services/programs/keys/`, not in git) must be present locally.
+- Sections 2–8 below describe the same steps by hand.
+
 ## 2. Prerequisites
 
 - VPS: **4 vCPU / 8 GB RAM / 160 GB NVMe** (handles 1000 concurrent users with ~5× headroom; 2 vCPU/4 GB is fine for devnet). Ubuntu 22.04+.
