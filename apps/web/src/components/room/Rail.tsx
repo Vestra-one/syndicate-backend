@@ -3,10 +3,9 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips, formatSigned } from '@/lib/format'
-import { hostAlias } from '@/lib/seats'
 import { personaEmblem } from '@/components/hud/Seats'
 import type { LeaderboardPeriod } from '@/store/gameStore'
-import { displayName } from '@/lib/seats'
+import { displayName, setSelfName } from '@/lib/seats'
 
 function PersonaAvatar({ alias, large }: { alias: string; large?: boolean }) {
   const emblem = personaEmblem(alias)
@@ -53,7 +52,9 @@ export function ProfilePanel() {
     )
   }
 
-  const alias = profile?.handle ?? hostAlias(walletAddress)
+  // Registered before anything below renders a name, so a rename shows everywhere at once.
+  setSelfName(walletAddress, profile?.handle ?? null)
+  const alias = walletAddress ? displayName(walletAddress, profile?.handle) : ''
   const netChips = profile?.stats.netChips ?? 0n
   const netUp = netChips >= 0n
 

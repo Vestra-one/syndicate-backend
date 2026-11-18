@@ -103,10 +103,11 @@ export function levelOf(fibs: number): { level: number; title: string; into: num
   return { level, title: TITLES[Math.min(level, TITLES.length) - 1], into: fibs - floor, span }
 }
 
-/** Adopt the server's Fibs total when it is ahead (another device, or cleared storage). */
+/** The server's Fibs total is the one every screen shows (it caps and rate-limits what a
+ *  browser reports), so the local count follows it — up or down. */
 export function adoptServerFibs(wallet: string | null, serverFibs: number): SessionStats {
   const cur = readStats(wallet)
-  if (!wallet || serverFibs <= (cur.fibs ?? 0)) return cur
+  if (!wallet || serverFibs === (cur.fibs ?? 0)) return cur
   const next = { ...cur, fibs: serverFibs }
   try {
     localStorage.setItem(`${KEY}:${wallet}`, JSON.stringify(next))

@@ -123,7 +123,7 @@ export function YourPosition() {
             <>
               {/* Stacks only exist once the hand is live; before that the seat holds its buy-in. */}
               <span className="mono">stack {formatMoney(match.phase === 'FILLING' || match.phase === 'SEALING' ? (terms?.buyIn ?? 0n) : (match.yourStack ?? 0), token)}</span>
-              <span className="mono">committed {formatMoney(match.yourExposure ?? 0, token)}</span>
+              <span className="mono" title={terms?.ante ? `Everyone puts in a ${formatMoney(terms.ante, token)} ${token} ante to be dealt in; the two blinds (${formatMoney(terms.smallBlind, token)} and ${formatMoney(terms.bigBlind, token)}) start the betting.` : undefined}>committed {formatMoney(match.yourExposure ?? 0, token)}{terms?.ante && match.phase === 'LIVE' && (match.yourExposure ?? 0n) <= terms.ante + terms.bigBlind ? ' · ante' : ''}</span>
             </>
           )}
         </div>

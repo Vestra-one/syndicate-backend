@@ -246,7 +246,10 @@ impl Default for Overlay {
         Self {
             bounds: Bounds::default(),
             seal_window_sec: DEFAULT_SEAL_WINDOW_SEC,
-            begin_live_window_sec: 30,
+            // Sealed calls unlock only after the latest moment the hand could end, which
+            // includes this whole window — every second of it is a second players wait for
+            // the result. The operator goes live within a second or two of the seal close.
+            begin_live_window_sec: 12,
             action_timeout_ms: 25_000,
             time_bank_sec: 60,
             rake_bps: 300,
@@ -270,6 +273,9 @@ pub fn validate_overlay(overlay: &Overlay) -> Result<(), String> {
 pub fn derive_blinds(buy_in: u64) -> (u64, u64) {
     let bb = (buy_in / 100).max(2);
     let sb = (bb / 2).max(1);
+    // Whole cents once a cent fits (6-decimal chips): half of an odd-cent big blind would
+    // otherwise put half-cents on the table, and stack + committed stop adding up on screen.
+    let sb = if sb >= 10_000 { (sb + 5_000) / 10_000 * 10_000 } else { sb };
     (sb, bb)
 }
 

@@ -55,7 +55,14 @@ export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
  * House bots always wear their table alias (never an internal handle); a person is the
  * handle they chose, or their alias until they choose one.
  */
+/** The connected player's own wallet and chosen handle — theirs wins everywhere, at once. */
+let self: { wallet: string; handle: string | null } | null = null
+export function setSelfName(wallet: string | null, handle: string | null): void {
+  self = wallet ? { wallet, handle } : null
+}
+
 export function displayName(wallet: string, handle?: string | null): string {
+  if (self && wallet === self.wallet && self.handle) return self.handle
   if (handle && !isHouseBot(wallet)) return handle
   return ALIASES[canonicalIndex(wallet)]
 }

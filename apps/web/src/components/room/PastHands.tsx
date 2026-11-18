@@ -90,7 +90,7 @@ function PastCard({ hand }: { hand: PastHand }) {
               <span>{hand.winner.wallet.slice(0, 4)}…{hand.winner.wallet.slice(-4)}</span>
             </span>
             <span className="edge">
-              <b>{margin ? `closest by $${margin}` : loading ? 'loading…' : '—'}</b>
+              <b>{margin ? `$${margin} from the price` : loading ? 'loading…' : '—'}</b>
               {hand.settlementPriceWad && <span>settled {formatWad(hand.settlementPriceWad)}</span>}
             </span>
           </span>
@@ -157,7 +157,8 @@ export function PastHands() {
       ) : (
         <>
           <div className="grid">
-            {historyGames.map((h) => <PastCard key={h.matchId} hand={h} />)}
+            {/* Tables that never dealt (voided, refunded) are not hands — they only make the room look broken. */}
+            {historyGames.filter((h) => h.voidKind == null).map((h) => <PastCard key={h.matchId} hand={h} />)}
           </div>
           {historyCursor && (
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>

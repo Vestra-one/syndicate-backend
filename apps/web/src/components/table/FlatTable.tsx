@@ -15,6 +15,8 @@ export function FlatTable() {
   const pts = history.slice(-180)
   const last = pts.at(-1)?.price
   const callPx = call != null ? Number(call) / scale : null
+  // Your own seat, at the near edge of the table like everyone else's.
+  const seatedAs = useGameStore((st) => (st.view === 'table' && st.match?.yourSeat != null && (st.match.phase === 'SEALING' || st.match.phase === 'LIVE') ? `You · seat ${st.match.yourSeat + 1}` : null))
   // Once the hand settles, every call goes on the chart against the print: this is the
   // picture of the hand — who was where when the clock ran out.
   const settlement = useGameStore((s) => s.settlement)
@@ -88,6 +90,7 @@ export function FlatTable() {
   return (
     <div className="flat-table" aria-hidden="true">
       <div className="flat-felt" />
+      {seatedAs && <div className="flat-you">{seatedAs}</div>}
       {chart}
     </div>
   )

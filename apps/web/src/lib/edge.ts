@@ -33,7 +33,35 @@ export function typicalMove(history: PricePoint[], seconds: number): number | nu
   const last = history.at(-1)?.price
   if (last == null || seconds <= 0) return null
   const vol = volPerSqrtSec(history) ?? last * FALLBACK_VOL_PER_SQRT_SEC
-  return vol * Math.sqrt(seconds)
+  const walk = vol * Math.sqrt(seconds)
+  // Tick-to-tick volatility scaled by √time assumes the market wanders without direction.
+  // When it trends, that badly understates how far it travels — so also measure what the
+  // price has actually covered over spans of this length, and never claim less than that.
+  const observed = observedMove(history, seconds)
+  return observed != null ? Math.max(walk, observed) : walk
+}
+
+/** RMS distance the price has actually travelled over windows of ~`seconds` (or the longest
+ *  window the history allows, scaled up), from the recent tape. */
+function observedMove(history: PricePoint[], seconds: number): number | null {
+  if (history.length < 8) return null
+  const pts = history.slice(-1800)
+  const span = (pts.at(-1)!.ts - pts[0].ts) / 1000
+  if (span < 10) return null
+  const window = Math.min(seconds, span / 2)
+  const w = window * 1000
+  let j = 0
+  let sumSq = 0
+  let n = 0
+  for (let i = 0; i < pts.length; i++) {
+    while (j < pts.length && pts[j].ts - pts[i].ts < w) j++
+    if (j >= pts.length) break
+    const d = pts[j].price - pts[i].price
+    sumSq += d * d
+    n++
+  }
+  if (n < 3) return null
+  return Math.sqrt(sumSq / n) * Math.sqrt(seconds / window)
 }
 
 export type EdgeLevel = 'in-range' | 'needs-move' | 'long-shot'

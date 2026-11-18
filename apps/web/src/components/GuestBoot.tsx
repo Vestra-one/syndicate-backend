@@ -80,7 +80,7 @@ export function GuestBoot() {
 
   if (!pending) return finding ? <Curtain title="Finding you the next table…" note="Dealing you in as soon as a seat is free." /> : null
   return (
-    <Curtain title={step} note="No wallet, no sign-ups. This takes about ten seconds." />
+    <Curtain title={step} note="While we seat you: you are about to guess where the price will be two minutes from now, then bet on that guess like a poker hand. Closest guess still in takes the pot. You get 30 seconds to make it." />
   )
 }
 
@@ -92,6 +92,25 @@ function Curtain({ title, note }: { title: string; note: string }) {
         <b>{title}</b>
         <small>{note}</small>
       </div>
+    </div>
+  )
+}
+
+/** In the lobby, say it when chips land (a hand left early settling, a claim): the table
+ *  has its own banner for this, the lobby had nothing. */
+export function LobbyToast() {
+  const tx = useGameStore((s) => (s.view === 'discovery' ? s.lastTx : null))
+  const [seen, setSeen] = useState<string | null>(null)
+  useEffect(() => {
+    if (!tx) return
+    const t = setTimeout(() => setSeen(tx.sig), 9000)
+    return () => clearTimeout(t)
+  }, [tx])
+  if (!tx || seen === tx.sig || tx.label.startsWith('Deposit')) return null
+  return (
+    <div className="lobby-toast" role="status">
+      <span className="lobby-toast-dot" aria-hidden="true" />
+      {tx.label}
     </div>
   )
 }

@@ -17,7 +17,7 @@ import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
 import { explorerTxUrl } from '@/lib/network'
 import './hud.css'
-import { hasHouseBots } from '@/lib/houseBots'
+import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { isGuestWallet } from '@/lib/guestWallet'
 
 /**
@@ -85,6 +85,8 @@ function EarlyExit() {
   const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
   const moveOn = useGameStore((s) => s.moveOn)
   const [stay, setStay] = useState<string | null>(null)
+  // "Next hand" always means the open house table — say so when that is a different table.
+  const atHouse = useGameStore((s) => !!s.match?.seats.some((x) => x.seat !== s.match?.yourSeat && isHouseBot(x.wallet)) && s.match.seats.filter((x) => isHouseBot(x.wallet)).length >= 3)
   const matchId = useGameStore((s) => s.match?.matchId ?? null)
   if (!state || !hasHouseBots() || stay === matchId) return null
   return (
@@ -100,7 +102,7 @@ function EarlyExit() {
       </div>
       <div className="early-exit-actions">
         <button className="ghost-btn" onClick={() => setStay(matchId)}>Watch it finish</button>
-        <button className="ghost-btn ghost-btn--primary" onClick={() => void moveOn()}>Next hand now</button>
+        <button className="ghost-btn ghost-btn--primary" onClick={() => void moveOn()}>{atHouse ? 'Next hand now' : 'Next hand at the house table'}</button>
       </div>
     </div>
   )

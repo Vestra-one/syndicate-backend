@@ -50,7 +50,11 @@ const RowsIcon = (
   </svg>
 )
 
-function LiveCard({ game, onWatch }: { game: LiveGame; onWatch: () => void }) {
+function LiveCard({ game, onWatch: watch }: { game: LiveGame; onWatch: () => void }) {
+  // Our own hand is not something to "watch": say we are seated and take us back to it.
+  const mine = useGameStore((s) => s.mySeats.includes(game.matchId))
+  const back = useGameStore((s) => s.returnToSeat)
+  const onWatch = mine ? () => void back(game.matchId) : watch
   const now = useNow(1000)
   const [base, quote = 'USD'] = game.feed.split('/')
   const roundCount = game.roundCount ?? 4
@@ -66,7 +70,7 @@ function LiveCard({ game, onWatch }: { game: LiveGame; onWatch: () => void }) {
           {(game.creatorHandle || game.creatorWallet) && <span className="eyebrow">dealt by {game.creatorWallet ? displayName(game.creatorWallet, game.creatorHandle) : game.creatorHandle}</span>}
         </span>
         <span className="card-flag">
-          <span className="flag flag--live"><span className="livedot" />Live</span>
+          <span className="flag flag--live"><span className="livedot" />{mine ? 'You are seated' : 'Live'}</span>
         </span>
       </span>
       <span className="card-hero">
@@ -90,7 +94,7 @@ function LiveCard({ game, onWatch }: { game: LiveGame; onWatch: () => void }) {
       </span>
       <span className="card-act">
         <span className="hint">predictions sealed until reveal</span>
-        <span className="go">Watch →</span>
+        <span className="go">{mine ? 'Return to your seat →' : 'Watch →'}</span>
       </span>
     </button>
   )

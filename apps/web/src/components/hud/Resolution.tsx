@@ -6,6 +6,7 @@ import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
 import { getFibsBoard, reportFibs } from '@/lib/api'
 import type { VoidReason } from '@/lib/protocol'
+import { isGuestWallet } from '@/lib/guestWallet'
 
 const STEP_MS = 850 // between one call turning over and the next
 
@@ -37,7 +38,14 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const leave = useGameStore((s) => s.leaveToDiscovery)
   const [left, setLeft] = useState(20)
   const [sitOut, setSitOut] = useState(false)
-  const rolling = house && autoNext && !sitOut
+  // Dealing the next hand spends another buy-in, so it is the player's choice and it is
+  // on show: free test chips (the table wallet) default to on, a real wallet to off.
+  const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
+  const [auto, setAuto] = useState<boolean>(() => {
+    try { const v = localStorage.getItem('st-autodeal'); return v == null ? guest : v === 'on' } catch { return guest }
+  })
+  const toggleAuto = () => setAuto((v) => { try { localStorage.setItem('st-autodeal', v ? 'off' : 'on') } catch { /* private mode */ } return !v })
+  const rolling = house && autoNext && !sitOut && auto
   useEffect(() => {
     if (!rolling) return
     if (left <= 0) {
@@ -48,6 +56,12 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
     return () => clearTimeout(t)
   }, [rolling, left, playHouse])
   return (
+    <>
+    {house && autoNext && (
+      <label className="ceremony-auto">
+        <input type="checkbox" checked={auto} onChange={toggleAuto} /> Deal me into the next hand automatically
+      </label>
+    )}
     <div className="ceremony-actions">
       <button className="ghost-btn" onClick={() => { setSitOut(true); setReviewing(true) }}>
         Review table
@@ -68,6 +82,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
         </button>
       )}
     </div>
+    </>
   )
 }
 
@@ -179,13 +194,15 @@ function SettledCeremony() {
   const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
   useEffect(() => {
     if (yourSeat == null || !amountsKnown) return
-    // Head-to-head: against each rival still in the hand, who finished closer?
+    // Head-to-head is about chips, the only thing a hand settles: whoever came out of it
+    // better off took that hand from the other. Equal results (two players who both just
+    // lost their ante) count for nobody — a bot that never won a pot leads no one.
     const mine = ranked.find((r) => r.seat === yourSeat)
     const faced = ranked
-      .filter((r) => r.seat !== yourSeat && walletOf(r.seat))
+      .filter((r) => r.seat !== yourSeat && walletOf(r.seat) && !!mine && r.net !== mine.net)
       .map((r) => ({
         wallet: walletOf(r.seat)!,
-        beat: !!mine && !mine.folded && (r.folded || mine.dist < r.dist),
+        beat: mine!.net > r.net,
       }))
     const before = readStats(wallet).hands
     const after = recordHand(wallet, settlement.matchId, yourNet, isWinner, faced)
@@ -215,12 +232,17 @@ function SettledCeremony() {
     const name = (seat: number) => seatAlias(seat, yourSeat)
     if (isWinner) {
       const pushed = folded.filter((r) => r.dist < me.dist).sort((a, b) => a.dist - b.dist)[0]
-      if (pushed) return `You bet ${name(pushed.seat)} off a call that was only ${usd(pushed.dist)} from the price — yours was ${usd(me.dist)} away.`
+      if (pushed) return `${name(pushed.seat)} folded a call that was only ${usd(pushed.dist)} from the price. Yours was ${usd(me.dist)} away — and it took the pot.`
       const second = active.find((r) => r.seat !== yourSeat)
       if (second) return `Closest at the showdown: you beat ${name(second.seat)} by ${usd(second.dist - me.dist)}.`
       return 'Nobody stayed to see it — the pot was yours without a showdown.'
     }
-    if (me.folded && me.dist < win.dist) return `You folded the best number at the table: ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
+    if (me.folded && me.dist < win.dist) {
+      const best = ranked.every((r) => r.seat === yourSeat || me.dist <= r.dist)
+      return best
+        ? `You folded the best number at the table: ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
+        : `You folded a winner: your number was ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
+    }
     if (me.folded) return `Good fold — ${name(win.seat)} was ${usd(me.dist - win.dist)} closer than you.`
     return `${name(win.seat)} beat you by ${usd(me.dist - win.dist)}.`
   })()
@@ -263,6 +285,11 @@ function SettledCeremony() {
   return (
     <div className="ceremony">
       <div className={`ceremony-card panel ${isWinner ? 'ceremony-card--win' : ''}`}>
+        {isWinner && amountsKnown && (
+          <div className="ceremony-crown ceremony-late" style={{ animationDelay: `${verdictAt}ms` }}>
+            <span aria-hidden="true">♛</span> You took the pot <b className="mono">{signedChips(yourNet, token)} {token}</b>
+          </div>
+        )}
         <div className="ceremony-eyebrow eyebrow">settlement · {terms?.priceFeedId ?? 'BTC/USD'}</div>
         {settlePrice > 0 && ranked.length > 0 ? (
           <>
@@ -317,7 +344,8 @@ function SettledCeremony() {
                 ? `Down ${formatChips(-yourNet, token)} ${token} this hand · ${formatMoney(yourAward, token)} back to you`
                 : `Even this hand · ${formatMoney(yourAward, token)} back to you`}
         </div>
-        {run.hands > 0 && (
+        {/* A hand we only watched is not part of our run and must never deal us in. */}
+        {run.hands > 0 && yourSeat != null && (
           <div className="ceremony-run eyebrow">
             your run · {run.hands} hand{run.hands === 1 ? '' : 's'} · {signedChips(BigInt(run.net), token)} {token}
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
@@ -333,7 +361,7 @@ function SettledCeremony() {
         )}
         {claimError && <div className="ceremony-error eyebrow" role="alert">{claimError}</div>}
 
-        <CeremonyActions autoNext={amountsKnown && (!!tx || yourAward === 0n) && !!seats?.some((x) => x.seat !== yourSeat && isHouseBot(x.wallet))} />
+        <CeremonyActions autoNext={yourSeat != null && amountsKnown && (!!tx || yourAward === 0n) && !!seats?.some((x) => x.seat !== yourSeat && isHouseBot(x.wallet))} />
       </div>
     </div>
   )

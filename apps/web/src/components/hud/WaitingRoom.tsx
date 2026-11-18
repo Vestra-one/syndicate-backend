@@ -612,8 +612,10 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
           <path d="M43 6v6M46 9h-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       </div>
+      {/* The link itself, on show: a button that says "copied" and shows nothing is not an invite. */}
+      <input className="wr-invite-link mono" readOnly value={url} onFocus={(e) => e.currentTarget.select()} aria-label="Invite link" />
       <button className={`wr-invite-primary ${copied ? 'wr-invite-primary--done' : ''}`} onClick={copy}>
-        {copied ? '✓ Invite link copied' : 'Invite friends'}
+        {copied ? '✓ Link copied — send it to a friend' : 'Copy invite link'}
       </button>
       {canShare && (
         <button className="wr-invite-secondary" onClick={share}>↗ Share link</button>
@@ -640,6 +642,9 @@ function Toast({ show, text }: { show: boolean; text: string }) {
 
 function Dock({ seatsLocked }: { seatsLocked: boolean }) {
   const leave = useGameStore((s) => s.leaveToDiscovery)
+  // Chips paid into a table cannot be pulled out before it deals (or closes and refunds).
+  // Leaving only steps away — say so before the player thinks they cashed out.
+  const [leaving, setLeaving] = useState(false)
   const [sound, setSound] = useState(() => (typeof localStorage !== 'undefined' ? localStorage.getItem('st-sound') !== 'off' : true))
   const toggleSound = () => {
     setSound((v) => {
@@ -651,14 +656,20 @@ function Dock({ seatsLocked }: { seatsLocked: boolean }) {
 
   return (
     <div className="wr-dock">
+      {leaving && (
+        <div className="wr-leave-note panel" role="alert">
+          Your buy-in stays on this table until it deals or closes (then it is refunded). You keep your seat and can return from the lobby.
+          <button className="ghost-btn" onClick={() => setLeaving(false)}>Stay</button>
+        </div>
+      )}
       <div className="wr-dock-left">
         <button
           className="wr-dock-btn"
-          onClick={() => leave()}
+          onClick={() => (leaving ? leave() : setLeaving(true))}
           disabled={seatsLocked}
           title={seatsLocked ? 'Seats are locked — the hand is being dealt' : undefined}
         >
-          Leave table
+          {leaving ? 'Go to the lobby' : 'Leave table'}
         </button>
         <button className="wr-dock-btn wr-dock-btn--sound" onClick={toggleSound}>
           {sound ? '🔊' : '🔈'} Sound: {sound ? 'On' : 'Off'}

@@ -8,6 +8,7 @@ import type { BettingAction } from '@/lib/protocol'
 import { TimerRing } from './TimerRing'
 import { useWaiting } from './WaitingRoom'
 import { useRoundGate } from './useRoundGate'
+import { readStats } from '@/lib/sessionStats'
 
 /** A pre-selected action armed while it's not your turn — auto-fires when the turn lands (§13.3). */
 type Armed = 'fold' | 'check_call' | null
@@ -127,6 +128,8 @@ const SEAL_PICKS = [-1, -0.5, 0, 0.5, 1] as const
 const SEAL_BOUND = 0.5
 
 function SealPanel({ waiting }: { waiting?: boolean }) {
+  // The first few hands get the rules in two lines, right where the decision is.
+  const newcomer = readStats(useGameStore.getState().walletAddress).hands < 3
   const terms = useGameStore((s) => s.terms)
   const sealStatus = useGameStore((s) => s.sealStatus)
   const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
@@ -182,7 +185,12 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
   const handSec =
     (remaining != null ? remaining / 1000 : 0) +
     (terms?.roundDurationsSec ?? []).reduce((a, b) => a + b + 10, 0)
-  const move = typicalMove(history, handSec)
+  // Measured once when the seal box opens and then held: buttons whose numbers change every
+  // second cannot be aimed at.
+  const liveMove = typicalMove(history, handSec)
+  const heldMove = useRef<number | null>(null)
+  if (heldMove.current == null && liveMove != null && history.length > 20) heldMove.current = liveMove
+  const move = heldMove.current ?? liveMove
   const fmtMove = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })
   const moveText = move != null ? `$${fmtMove(move)}` : null
 
@@ -250,6 +258,12 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
         ))}
       </div>
 
+      {newcomer && (
+        <p className="seal-guide seal-guide--how">
+          <b>How this works:</b> guess where the price will be when this hand ends, about two minutes from now, and seal it.
+          Then bet on your guess like a poker hand. The closest guess still in at the end takes the pot.
+        </p>
+      )}
       {moveText && (
         <p className="seal-guide">
           The market typically moves about <b className="mono">±{moveText}</b> by settlement.
@@ -524,7 +538,8 @@ function ActionPanel() {
 
   const presetValue = useMemo(() => ({
     min: minRaiseTo,
-    half: clampRaise(currentBet + Math.round(potNum * 0.5)),
+    // Whole cents: a half-cent bet makes stack + committed disagree on screen.
+    half: clampRaise(Math.floor((currentBet + potNum * 0.5) / 10_000) * 10_000),
     pot: clampRaise(currentBet + potNum),
     max: maxRaiseTo,
   }), [minRaiseTo, maxRaiseTo, currentBet, potNum]) // eslint-disable-line react-hooks/exhaustive-deps

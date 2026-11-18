@@ -973,6 +973,8 @@ async fn act_if_ours(
     let raise_to = min_raise_to
         .max(current_bet + (pot as f64 * frac) as u64)
         .min(max_total);
+    // Whole cents (chips have six decimals): no half-cent bets on the table.
+    let raise_to = if raise_to < max_total { (raise_to / 10_000 * 10_000).max(min_raise_to) } else { raise_to };
     let raise = if current_bet > 0 {
         (
             ACTION_TAG_RAISE_TO,

@@ -206,6 +206,10 @@ interface GameState {
   playResolving: boolean // true while deciding join-vs-create
   /** Looking for the next house table to sit at (shown as a curtain, not an empty lobby). */
   findingTable: boolean
+  /** Tables (match ids) the connected wallet holds a seat at right now. */
+  mySeats: string[]
+  /** Back to a table we are seated at (from the lobby). */
+  returnToSeat: (matchId: string) => Promise<void>
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
   walletError: string | null // wallet-extension connect failure (set by main.tsx's onError, cleared on connect)
@@ -329,7 +333,9 @@ function defaultStreets(config: ApiConfig): { count: number; durations_sec: numb
   const count = clamp(3, config.bounds.streets.min, config.bounds.streets.max)
   // 3 × (60s betting + 10s watching the price) = a 3½-minute hand. The old 3 × (180 + 20)
   // was ten minutes of mostly waiting: a street's betting is usually over in seconds.
-  const dur = clamp(60, config.bounds.street_duration_sec.min, config.bounds.street_duration_sec.max)
+  // Same pace as the house tables: 3 × (25s betting + 10s watching) — a hand in under two
+  // minutes. Turns that open late in a round borrow from the watching gap.
+  const dur = clamp(25, config.bounds.street_duration_sec.min, config.bounds.street_duration_sec.max)
   const obs = clamp(10, config.bounds.observation_sec.min, config.bounds.observation_sec.max)
   return {
     count,
@@ -962,6 +968,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   reviewing: false,
   seated: false,
 
+  mySeats: [],
   findingTable: false,
   playResolving: false,
   playMode: null,
@@ -1006,6 +1013,13 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (!silent) set({ activeGames: [], upcomingGames: [], discoveryStatus: 'error' })
     } else {
       set({ activeGames: active, upcomingGames: upcoming, discoveryStatus: 'ready', discoveryUpdatedAt: Date.now() })
+      // Which of these tables is the player sitting at? The lobby must say so.
+      const me = adapters?.wallet.address() ?? get().walletAddress
+      if (me) {
+        void api.getActive(me)
+          .then((r) => set({ mySeats: r.active.filter((a) => a.phase in RESUME_PHASE_RANK).map((a) => a.match_id) }))
+          .catch(() => {})
+      }
     }
   },
 
@@ -1850,6 +1864,15 @@ export const useGameStore = create<GameState>((set, get) => ({
     } finally {
       set({ findingTable: false })
     }
+  },
+
+  returnToSeat: async (matchId) => {
+    const wallet = adapters?.wallet.address() ?? get().walletAddress
+    if (!wallet) return
+    // We are going back in: this hand is no longer one we walked away from.
+    saveCollects(wallet, pendingCollects(wallet).filter((c) => c.matchId !== matchId))
+    resumedForWallet = null
+    await get().resumeActiveTable(wallet)
   },
 
   leaveHand: () => {

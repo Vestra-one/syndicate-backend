@@ -10,7 +10,11 @@ import type { UpcomingGame } from '@/lib/protocol'
 import { Coin, SeatPips, AvatarStack, FillRing } from './bits'
 import { useNow } from '@/lib/useNow'
 
-function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: boolean; onJoin: () => void }) {
+function OpenCard({ game, invited, onJoin: join }: { game: UpcomingGame; invited: boolean; onJoin: () => void }) {
+  // A table we already paid into is ours to return to, not to "join" again.
+  const mine = useGameStore((s) => s.mySeats.includes(game.matchId))
+  const back = useGameStore((s) => s.returnToSeat)
+  const onJoin = mine ? () => void back(game.matchId) : join
   const now = useNow(1000)
   const [base, quote = 'USD'] = game.feed.split('/')
   const total = Math.max(game.maxPlayers, 1)
@@ -47,7 +51,7 @@ function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: bool
       </span>
       <span className="card-act">
         <span className="hint">deals when it fills · refund if it never does</span>
-        <span className="btn-gold">Join →</span>
+        <span className="btn-gold">{mine ? 'You are seated — return →' : 'Join →'}</span>
       </span>
     </button>
   )

@@ -13,7 +13,7 @@ import {
 import type { WalletError, Adapter } from '@solana/wallet-adapter-base'
 import App from './App.tsx'
 import { registerGuestWallet } from '@/lib/guestWallet'
-import { GuestBoot } from '@/components/GuestBoot'
+import { GuestBoot, LobbyToast } from '@/components/GuestBoot'
 import { WalletBridgeSync } from '@/components/WalletBridgeSync.tsx'
 import { useGameStore } from '@/store/gameStore'
 import './styles/global.css'
@@ -73,6 +73,7 @@ function SolanaProviders({ children }: { children: ReactNode }) {
     <>
       <WalletBridgeSync />
       <GuestBoot />
+      <LobbyToast />
       {children}
     </>
   )

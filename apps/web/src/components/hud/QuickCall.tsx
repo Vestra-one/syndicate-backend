@@ -52,7 +52,10 @@ export function QuickCall() {
     const earned = won ? BASE_FIBS * Math.min(nextStreak, 5) : 0
     if (earned > 0) {
       setFibs(addFibs(wallet, earned).fibs ?? 0)
-      void reportFibs(earned).catch(() => {})
+      void reportFibs(earned)
+        .then(() => getFibsBoard(wallet))
+        .then((b) => { if (b.you) setFibs(adoptServerFibs(wallet, b.you.fibs).fibs ?? 0) })
+        .catch(() => {})
     }
     setStreak(nextStreak)
     setOutcome({ won, fibs: earned, move, until: Date.now() + 2600 })

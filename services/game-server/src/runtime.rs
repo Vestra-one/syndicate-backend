@@ -267,19 +267,20 @@ impl Actor {
 
     /// When the current round stops taking bets. Normally the round's scheduled close —
     /// but a player whose turn opened late in the round still gets `FAIR_TURN_MS` to act,
-    /// borrowed from the quiet gap before the next round (never from the last gap: bets
-    /// must stay shut while the price runs to settlement).
+    /// borrowed from the quiet gap after the round. In the last round the borrowing stops
+    /// short of the end, so bets are always shut for the final seconds before settlement.
     fn fair_close_ms(&self, rt: &FencedMatchRuntime, live_ms: u64) -> u64 {
         const FAIR_TURN_MS: u64 = 12_000;
         let close = rt.current_street_close_ms(live_ms);
         let round = rt.engine().round;
-        if rt.engine().to_act.is_none() || round == 0 || round >= rt.config().round_count {
+        if rt.engine().to_act.is_none() || round == 0 || round > rt.config().round_count {
             return close;
         }
         let street_start = live_ms + rt.street_start_offset_sec(round).saturating_mul(1_000);
         let gap_end = live_ms + rt.street_end_offset_sec(round).saturating_mul(1_000);
         let fair = self.turn_started_ms.max(street_start) + FAIR_TURN_MS;
-        close.max(fair.min(gap_end.saturating_sub(500)))
+        let keep_shut = if round == rt.config().round_count { 4_000 } else { 500 };
+        close.max(fair.min(gap_end.saturating_sub(keep_shut)))
     }
 
     fn turn_view(&self) -> Option<Value> {
