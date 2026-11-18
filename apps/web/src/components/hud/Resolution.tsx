@@ -1,5 +1,6 @@
 import { hasHouseBots } from '@/lib/houseBots'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
@@ -140,6 +141,15 @@ function SettledCeremony() {
   // share to non-winning seats too. Only the top-paid seat "won the pot".
   const isWinner = yourSeat != null && yourSeat === winnerSeat
 
+  // Your run on this device: counted once per hand, shown under the result.
+  const wallet = useGameStore((s) => s.walletAddress)
+  const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
+  useEffect(() => {
+    if (yourSeat == null || !amountsKnown) return
+    setRun(recordHand(wallet, settlement.matchId, yourNet, isWinner))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settlement.matchId, amountsKnown, yourSeat, wallet])
+
   const onClaim = async () => {
     setClaiming(true)
     setClaimError(null)
@@ -152,6 +162,21 @@ function SettledCeremony() {
       setClaiming(false)
     }
   }
+
+  // Winnings come back on their own: the claim is sent a moment after the reveal, so the
+  // next hand is one click away. The button stays as the fallback if the wallet declines.
+  const autoClaimed = useRef(false)
+  useEffect(() => {
+    if (autoClaimed.current || !amountsKnown || yourAward <= 0n || tx) return
+    // Marked inside the timer: the amounts can still be refined in the first seconds,
+    // which re-runs this effect and must not cancel the claim for good.
+    const t = setTimeout(() => {
+      autoClaimed.current = true
+      void onClaim()
+    }, 2500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amountsKnown, yourAward, tx])
 
   return (
     <div className="ceremony">
@@ -200,6 +225,12 @@ function SettledCeremony() {
                 ? `Down ${formatChips(-yourNet, token)} ${token} this hand · ${formatMoney(yourAward, token)} back to you`
                 : `Even this hand · ${formatMoney(yourAward, token)} back to you`}
         </div>
+        {run.hands > 0 && (
+          <div className="ceremony-run eyebrow">
+            your run · {run.hands} hand{run.hands === 1 ? '' : 's'} · {signedChips(BigInt(run.net), token)} {token}
+            {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
+          </div>
+        )}
 
         {won && (
           <button className="seal-btn ceremony-claim" onClick={onClaim} disabled={claiming || !!tx}>

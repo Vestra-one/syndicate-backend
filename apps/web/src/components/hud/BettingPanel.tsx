@@ -132,12 +132,14 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
   // in-match it would vanish, making a failed seal look like a dead button. Surface it here.
   const sealError = useGameStore((s) => s.playError)
   const [text, setText] = useState('')
+  const [touched, setTouched] = useState(false)
   const now = useNow(500)
 
   // seed the input with the live price once
   useEffect(() => {
-    if (text === '' && lastPrice != null) setText(lastPrice.toFixed(terms?.decimals ?? 2))
-  }, [lastPrice, terms, text])
+    // Until the player types or picks, the box tracks the market (a stale prefill reads as a view).
+    if (!touched && lastPrice != null) setText(lastPrice.toFixed(terms?.decimals ?? 2))
+  }, [lastPrice, terms, touched])
 
   const decimals = terms?.decimals ?? 2
   const value = Number(text)
@@ -182,6 +184,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
 
   const setPick = (k: number) => {
     if (lastPrice == null) return
+    setTouched(k !== 0)
     setText((lastPrice + k * (move ?? 0)).toFixed(decimals))
   }
   const pickLabel = (k: number) =>
@@ -214,7 +217,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
           className="seal-input mono"
           inputMode="decimal"
           value={text}
-          onChange={(e) => { setText(e.target.value); if (sealError) useGameStore.setState({ playError: null }) }}
+          onChange={(e) => { setTouched(true); setText(e.target.value); if (sealError) useGameStore.setState({ playError: null }) }}
           placeholder="price"
           aria-label="Sealed prediction price"
           aria-invalid={!!error}

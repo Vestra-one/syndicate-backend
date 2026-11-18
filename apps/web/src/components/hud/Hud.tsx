@@ -1,3 +1,4 @@
+import { SoundCues } from '@/components/hud/SoundCues'
 import { useState, useEffect } from 'react'
 import { Brand } from './Brand'
 import { WalletMenu } from './WalletMenu'
@@ -104,6 +105,7 @@ export function Hud() {
   const seatedHere = useGameStore((s) => s.match?.yourSeat != null)
   return (
     <div className="hud">
+      <SoundCues />
       {inMatch && <Seats />}
       {inMatch && <TurnBanner />}
 

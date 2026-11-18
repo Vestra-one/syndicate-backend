@@ -35,6 +35,8 @@ pub async fn get_config(State(st): State<AppState>) -> Json<Value> {
         "session_keys": true,
         // House bots keep a public table open; clients label these wallets as bots.
         "house_bot_wallets": st.cfg.house_bot_wallets,
+        // Test-chips faucet (devnet): null when this deployment has none.
+        "faucet": crate::api::faucet::public_info(),
         "feeds": config::FEEDS.iter().map(|(feed, sym, token)| json!({
             "feed": feed, "oracle_symbol": sym, "oracle_token": token,
         })).collect::<Vec<_>>(),

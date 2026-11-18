@@ -1,3 +1,4 @@
+import { TestChips } from '@/components/hud/TestChips'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
 import type { Connection, PublicKey } from '@solana/web3.js'
@@ -157,6 +158,7 @@ export function WalletMenu() {
           {/* faucets — devnet only */}
           <div className="wc-faucets">
             <div className="wc-faucet-label">Get testnet tokens</div>
+            <TestChips compact />
             <div className="wc-faucet-links">
               <a
                 className="wc-faucet-link"
@@ -167,17 +169,6 @@ export function WalletMenu() {
               >
                 <span className="wc-faucet-stripe wc-faucet-stripe--sol" />
                 SOL
-                <span className="wc-faucet-arrow">↗</span>
-              </a>
-              <a
-                className="wc-faucet-link"
-                href="https://faucet.circle.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="wc-faucet-stripe wc-faucet-stripe--usdc" />
-                USDC
                 <span className="wc-faucet-arrow">↗</span>
               </a>
             </div>

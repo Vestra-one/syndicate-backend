@@ -92,7 +92,11 @@ services:
       DRAND_API: ${DRAND_API:-https://api.drand.sh}
       DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH}
       HOUSE_BOT_WALLETS: ${HOUSE_BOT_WALLETS:-}
+      # Test-chips faucet (devnet only): empty = off. Key lives in deploy/secrets/faucet/.
+      FAUCET_KEYPAIR_PATH: ${FAUCET_KEYPAIR_PATH:-}
+      FAUCET_CHIPS: ${FAUCET_CHIPS:-100000000}
     volumes:
+      - ./secrets/faucet:/run/faucet:ro
       - ./secrets/postgres-password:/run/secrets/postgres-password:ro
       - ./secrets/session-signing-key:/run/secrets/session-signing-key:ro
     # Loopback-only publish. This is the contract for a HOST reverse proxy

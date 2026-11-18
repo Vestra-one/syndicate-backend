@@ -122,6 +122,11 @@ fund() { # pubkey, label
 for p in "${PLAYERS[@]}"; do fund "$(solana-keygen pubkey "$ROOT/deploy/e2e-keys/$p.json")" "$p"; done
 for w in $EXTRA_WALLETS; do fund "$w" "extra"; done
 
+# Test-chips faucet wallet (the game-server pays visitors from it).
+FAUCET_KEY="$STATE/keys/faucet.json"
+keygen "$FAUCET_KEY"
+fund "$(solana-keygen pubkey "$FAUCET_KEY")" "faucet"
+
 # House bots (BOTS=1): two funded wallets that keep a public table open.
 BOTS="${BOTS:-0}"
 BOT_KEYS=("$STATE/keys/bot1.json" "$STATE/keys/bot2.json")
@@ -213,6 +218,8 @@ PLAYER2_KEYPAIR=$ROOT/deploy/e2e-keys/player2.json
 PLAYER3_KEYPAIR=$ROOT/deploy/e2e-keys/player3.json
 ATTACKER_KEYPAIR=$ROOT/deploy/e2e-keys/attacker.json
 HOUSE_BOT_WALLETS=$HOUSE_BOT_WALLETS
+FAUCET_KEYPAIR_PATH=$FAUCET_KEY
+FAUCET_COOLDOWN_SEC=5
 HOUSE_BOT_KEYPAIRS=${BOT_KEYS[0]},${BOT_KEYS[1]}
 PRICE_URL=http://127.0.0.1:$PRICE_PORT
 ENV

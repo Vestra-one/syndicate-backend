@@ -1,3 +1,4 @@
+import { formatChips } from '@/lib/format'
 import { create } from 'zustand'
 import type {
   BettingAction,
@@ -52,6 +53,7 @@ import {
   type CreateIntentResponse,
   type MatchDetail,
   type LeaderboardEntry,
+  requestFaucet,
 } from '@/lib/api'
 
 /** Resolved Play Now action: join an existing open table, or create a new one. */
@@ -143,6 +145,13 @@ interface GameState {
   status: ConnectionStatus
   walletAddress: string | null
   chipBalance: Chips | null
+  /** Test-chips faucet on this deployment (devnet), or null. */
+  faucet: { chips: number } | null
+  faucetBusy: boolean
+  /** Last faucet outcome, shown next to the button. */
+  faucetNote: string | null
+  /** Ask the server for test chips (signs in first if needed). */
+  getTestChips: () => Promise<void>
 
   terms: TableTerms | null
   match: MatchStateView | null
@@ -695,6 +704,7 @@ function adoptServerConfig(config: ApiConfig) {
   serverDrand = config.drand
   setServerChipsMint(config.chips_token_mint)
   setHouseBots(config.house_bot_wallets)
+  useGameStore.setState({ faucet: config.faucet ? { chips: config.faucet.chips } : null })
 }
 let serverConfigLoad: Promise<void> | null = null
 /** Load the server config once (deduped); failures are retried on the next call. */
@@ -888,6 +898,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   status: 'offline',
   walletAddress: null,
   chipBalance: null,
+  faucet: null,
+  faucetBusy: false,
+  faucetNote: null,
 
   terms: null,
   match: null,
@@ -1740,6 +1753,23 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   /** Leave the finished match and matchmake into a fresh one — no page refresh.
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
+  getTestChips: async () => {
+    if (!adapters) adapters = createAdapters()
+    const wallet = get().walletAddress ?? adapters.wallet.address()
+    if (!wallet || get().faucetBusy) return
+    set({ faucetBusy: true, faucetNote: null })
+    try {
+      if (!(await ensureRestSession(adapters, wallet, set))) throw new Error('Sign in to get chips')
+      const res = await requestFaucet()
+      set({ faucetNote: `${formatChips(BigInt(res.chips))} test chips sent` })
+      await refreshBalance(set, true)
+    } catch (err) {
+      set({ faucetNote: err instanceof Error ? err.message : 'Could not send chips — try again' })
+    } finally {
+      set({ faucetBusy: false })
+    }
+  },
+
   playHouse: async () => {
     get().leaveToDiscovery()
     await get().loadDiscovery()

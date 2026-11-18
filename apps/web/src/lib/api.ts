@@ -221,6 +221,8 @@ export interface ApiConfig {
   session_keys?: boolean
   /** Wallets of the house bots that keep a public table open; label them in the UI. */
   house_bot_wallets?: string[]
+  /** Test-chips faucet (devnet); null/absent when the deployment has none. */
+  faucet?: { chips: number; cooldown_sec: number } | null
   feeds: { feed: string; oracle_symbol: string; oracle_token: string }[]
   bounds: {
     buy_in: Range
@@ -627,3 +629,9 @@ export const api = {
 
 /** Re-export for callers that annotate amounts. */
 export type { Chips }
+
+/** `POST /v1/faucet` — test chips (and a little SOL for fees) to the signed-in wallet. */
+export function requestFaucet(): Promise<{ ok: boolean; chips: number; lamports: number; signature: string }> {
+  // The server waits for the transfer to confirm, so allow well past the default timeout.
+  return request('/faucet', { method: 'POST', auth: true, signal: AbortSignal.timeout(45_000) })
+}

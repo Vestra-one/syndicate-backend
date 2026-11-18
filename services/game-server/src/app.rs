@@ -121,6 +121,7 @@ pub fn router(state: AppState) -> Router {
         // leaderboard + profiles
         .route("/v1/leaderboard", get(crate::api::profiles::get_leaderboard))
         .route("/v1/profiles/me", put(crate::api::profiles::put_profile_me))
+        .route("/v1/faucet", post(crate::api::faucet::post_faucet))
         .route("/v1/profiles/{wallet}", get(crate::api::profiles::get_profile))
         // admin
         .route(

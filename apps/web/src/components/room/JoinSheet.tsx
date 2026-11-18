@@ -1,3 +1,4 @@
+import { TestChips } from '@/components/hud/TestChips'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
@@ -15,6 +16,7 @@ import { useNow } from '@/lib/useNow'
 export function JoinSheet({ matchId }: { matchId: string }) {
   const now = useNow(1000)
   const terms = useGameStore((s) => s.terms)
+  const chipBalance = useGameStore((s) => s.chipBalance)
   const match = useGameStore((s) => s.match)
   const lobbySeated = useGameStore((s) => s.lobbySeated)
   const playResolving = useGameStore((s) => s.playResolving)
@@ -101,6 +103,7 @@ export function JoinSheet({ matchId }: { matchId: string }) {
 
       {playError && <div className="sheet-inline-error">{playError}</div>}
 
+      {connected && chipBalance != null && chipBalance < total && <TestChips />}
       <button className="btn-gold" type="button" disabled={busy} onClick={handleCommit}>
         {connected ? `Take your seat · deposit ${formatChips(total)} USDC` : 'Connect wallet to continue'}
       </button>

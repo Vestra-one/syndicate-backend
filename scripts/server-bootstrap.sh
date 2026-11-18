@@ -121,6 +121,23 @@ spl create-account "$MINT" --owner "$OPERATOR_PUB" >/dev/null 2>&1 || true
 TREASURY="$(spl address --token "$MINT" --owner "$OPERATOR_PUB" --verbose | awk '/Associated token address:/{print $NF}')"
 ok "mint $MINT (6 decimals, authority = operator), treasury $TREASURY"
 
+# Test-chips faucet: a separate low-value wallet the game-server pays visitors from, so the
+# operator key never leaves the chain-worker.
+FAUCET=$SECRETS/faucet/faucet-keypair.json
+mkdir -p $SECRETS/faucet
+[ -f "$FAUCET" ] || solana-keygen new --no-bip39-passphrase --silent -o "$FAUCET" >/dev/null
+chmod 755 $SECRETS/faucet && chmod 644 "$FAUCET"
+FAUCET_PUB="$(solana-keygen pubkey "$FAUCET")"
+faucet_sol() { solana balance "$FAUCET_PUB" --url "$RPC" 2>/dev/null | awk '{print int($1 * 100)}'; }
+[ "$(faucet_sol || echo 0)" -ge 50 ] ||
+  solana transfer "$FAUCET_PUB" 1 --url "$RPC" --keypair "$OPERATOR" --allow-unfunded-recipient >/dev/null
+spl create-account "$MINT" --owner "$FAUCET_PUB" >/dev/null 2>&1 || true
+FAUCET_ATA="$(spl address --token "$MINT" --owner "$FAUCET_PUB" --verbose | awk '/Associated token address:/{print $NF}')"
+FAUCET_CHIPS_HELD="$(spl balance --address "$FAUCET_ATA" 2>/dev/null | awk '{print int($1)}')"
+[ "${FAUCET_CHIPS_HELD:-0}" -ge 100000 ] ||
+  spl mint "$MINT" 1000000 "$FAUCET_ATA" --mint-authority "$OPERATOR" >/dev/null
+ok "faucet $FAUCET_PUB (100 test chips per visitor per hour)"
+
 # ---- 7. deploy/.env ---------------------------------------------------------------------
 say "deploy/.env"
 [ -f deploy/.env ] || cp deploy/.env.example deploy/.env
@@ -143,6 +160,7 @@ setenv TREASURY_TOKEN_ACCOUNT "$TREASURY"
 setenv GEOFENCE_BLOCKLIST ""   # devnet chips have no value; nobody is blocked
 setenv CORS_ALLOWED_ORIGINS "https://satoshitable.fun,https://www.satoshitable.fun,http://localhost:5173"
 setenv TLS_EMAIL "$TLS_EMAIL"
+setenv FAUCET_KEYPAIR_PATH /run/faucet/faucet-keypair.json
 [ -z "${EDGE_NETWORK:-}" ] || setenv EDGE_NETWORK "$EDGE_NETWORK"
 grep -qE '^ADMIN_TOKENS=.+' deploy/.env && ! grep -qE '^ADMIN_TOKENS=\s*#' deploy/.env ||
   setenv ADMIN_TOKENS "$(openssl rand -hex 24)"

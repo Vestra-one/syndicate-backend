@@ -368,3 +368,10 @@ the pot as dead money: it is not part of the bet to match, so `to_call` is uncha
 match is one hand; the ante is what makes that hand worth contesting, and a seat that
 folds everyone else out collects the antes.
 
+## Test chips (devnet)
+
+`GET /v1/config`.`faucet` is `{ chips, cooldown_sec }` when the deployment runs a faucet,
+otherwise `null`. `POST /v1/faucet` (session-authed, no body) sends the signed-in wallet
+that many chips plus a little SOL for fees if it is low, and answers once the transfer is
+confirmed: `{ ok, chips, lamports, signature }`. One grant per wallet per cooldown (429).
+

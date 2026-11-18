@@ -371,6 +371,10 @@ async function houseHand(browser) {
   await sleep(500)
   await shot(me, 'h1-lobby-house-table')
   const before = BigInt((await state(me)).chipBalance ?? 0)
+  if (cfg.faucet) {
+    await me.page.evaluate(() => window.__gameStore.getState().getTestChips())
+    await waitFor(me, 'faucet: test chips arrived', (b) => { const s = window.__gameStore.getState(); if (s.faucetNote && !/sent/.test(s.faucetNote)) throw new Error(`faucet: ${s.faucetNote}`); return BigInt(s.chipBalance ?? 0) >= BigInt(b) + 100000000n }, 60_000, before.toString())
+  }
   const t0 = Date.now(); const T = (l) => log(`     ⏱ ${l}: +${((Date.now() - t0) / 1000).toFixed(0)}s`)
   await me.page.evaluate((id) => void window.__gameStore.getState().joinGame(id), table.match_id)
   await waitFor(me, 'join sheet ready', () => window.__gameStore.getState().playMode === 'join')
@@ -643,7 +647,9 @@ async function main() {
         log(`     ${p.name} has no payout to claim`)
         continue
       }
-      await p.page.evaluate(() => window.__gameStore.getState().claim())
+      // The result screen claims on its own a moment after the reveal; this call is the
+      // manual fallback and loses the race harmlessly when the auto-claim already landed.
+      await p.page.evaluate(() => window.__gameStore.getState().claim().catch(() => null))
       await waitFor(p, 'payout claimed → wallet balance updated', (exp) => {
         const b = window.__gameStore.getState().chipBalance
         return b != null && b.toString() === exp
