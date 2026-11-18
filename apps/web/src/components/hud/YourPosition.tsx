@@ -57,7 +57,7 @@ export function YourPosition() {
         ) : (
           <span className="position-pred-empty eyebrow">
             {defaulted
-              ? 'defaulted — can’t win prediction rank'
+              ? 'not sealed — you are playing the market price at close'
               : sealStatus === 'sealed'
                 ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
                 : sealStatus === 'sealing'

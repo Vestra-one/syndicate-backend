@@ -336,9 +336,9 @@ function SealClosedPanel() {
         <span className="seal-lock" aria-hidden="true">⚠</span>
       </div>
       <p className="seal-note eyebrow">
-        You didn’t seal in time — your prediction defaults to the market price at seal close
-        ({defaulted}). You stay in the hand and can still win the pot on poker play, but you
-        can’t take the prediction rank.
+        You didn’t seal in time, so your call is the market price at seal close ({defaulted}).
+        You are still in the hand and can win it like anyone else — but the whole table can
+        work out your number, so you are playing with your call face up.
       </p>
       <SealStatusStrip />
     </div>

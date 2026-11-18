@@ -29,7 +29,7 @@ function SpectatorPanel() {
   // A player who has deposited is NOT a spectator. For a few seconds after the table
   // locks their engine seat is still being resolved; telling someone who just paid in
   // that they are "spectating" reads as "your deposit didn't count".
-  const seated = useGameStore((s) => s.seated)
+  const seated = useGameStore((s) => s.seated && !s.settlement && !s.voided)
   if (seated) {
     return (
       <div className="betpanel panel">
@@ -50,8 +50,24 @@ function SpectatorPanel() {
   )
 }
 
+/** Something went wrong with the player's seat at this table — say it where they are looking. */
+function TableNotice() {
+  const msg = useGameStore((s) => (s.view === 'table' && !s.seated && !s.settlement ? s.playError : null))
+  if (!msg) return null
+  return (
+    <div className="table-notice panel" role="alert">
+      <span>{msg}</span>
+      <button className="ghost-btn ghost-btn--primary" onClick={() => { useGameStore.setState({ playError: null }); void useGameStore.getState().playHouse({ sit: true }) }}>
+        Next table
+      </button>
+      <button className="ghost-btn" onClick={() => useGameStore.setState({ playError: null })}>Keep watching</button>
+    </div>
+  )
+}
+
 function TxBanner() {
   const lastTx = useGameStore((s) => s.lastTx)
+  const resultUp = useGameStore((s) => (s.settlement != null || s.voided != null) && !s.reviewing)
   const [dismissed, setDismissed] = useState(false)
 
   // Reset dismissed when a new tx comes in, then auto-dismiss after 10s so the
@@ -63,7 +79,8 @@ function TxBanner() {
     return () => clearTimeout(t)
   }, [lastTx])
 
-  if (!lastTx || dismissed) return null
+  // The result card says "Claimed ✓" itself; a banner on top of it only covers the buttons.
+  if (!lastTx || dismissed || resultUp) return null
 
   const explorerUrl = explorerTxUrl(lastTx.sig)
 
@@ -104,7 +121,13 @@ export function Hud() {
   // truth for "do I actually hold a seat here" regardless of how we arrived.
   const { active: waiting } = useWaiting()
   const inMatch = !waiting
-  const seatedHere = useGameStore((s) => s.match?.yourSeat != null)
+  // Seated = you paid in. The engine seat number arrives a moment after the table locks;
+  // the player panels must not wait for it — the seal box in particular has to be there the
+  // instant sealing opens (a call entered before the seat resolves is held and sealed for you).
+  // While the result card is up it owns the screen: the seat panels behind it only clutter
+  // (they return for "Review table").
+  const resultUp = useGameStore((s) => (s.settlement != null || s.voided != null) && !s.reviewing)
+  const seatedHere = useGameStore((s) => s.match?.yourSeat != null || (s.seated && !s.settlement && !s.voided))
   return (
     <div className="hud">
       <SoundCues />
@@ -126,7 +149,7 @@ export function Hud() {
         </div>
       )}
 
-      {inMatch && (
+      {inMatch && !resultUp && (
         <footer className="hud-bottom">
           {seatedHere ? (
             <>
@@ -142,6 +165,7 @@ export function Hud() {
 
       <WaitingRoom />
       <TxBanner />
+      <TableNotice />
       <Resolution />
       <PriceChartOverlay />
     </div>

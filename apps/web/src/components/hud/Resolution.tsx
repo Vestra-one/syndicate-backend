@@ -140,6 +140,15 @@ function SettledCeremony() {
     })
     .sort((a, b) => a.dist - b.dist)
 
+  // The settled record does not carry folds, so after a reload (or for a late spectator)
+  // the live fold flags are gone. One thing is still certain: a seat that was closer than
+  // the paid winner and took nothing can only have folded. Without this the card shows a
+  // "closest" player who lost, which reads as a wrong result.
+  if (amountsKnown) {
+    const winnerDist = Math.min(...ranked.filter((r) => r.net > 0n).map((r) => r.dist))
+    for (const r of ranked) if (r.net <= 0n && r.dist < winnerDist) r.folded = true
+  }
+
   const active = ranked.filter((r) => !r.folded)
   const folded = ranked.filter((r) => r.folded)
 
@@ -226,16 +235,25 @@ function SettledCeremony() {
     <div className="ceremony">
       <div className="ceremony-card panel">
         <div className="ceremony-eyebrow eyebrow">settlement · {terms?.priceFeedId ?? 'BTC/USD'}</div>
-        <div className="ceremony-price mono">{formatPrice(settlePrice)}</div>
-        <div className="ceremony-sub eyebrow">the closest conviction takes the pot</div>
+        {settlePrice > 0 && ranked.length > 0 ? (
+          <>
+            <div className="ceremony-price mono">{formatPrice(settlePrice)}</div>
+            <div className="ceremony-sub eyebrow">the closest conviction takes the pot</div>
+          </>
+        ) : (
+          <>
+            <div className="ceremony-price ceremony-price--reading">Reading the result…</div>
+            <div className="ceremony-sub eyebrow">the hand is over · the settle price and every call are on their way</div>
+          </>
+        )}
 
-        <div className="reveal-head">
+        {ranked.length > 0 && <div className="reveal-head">
           <span className="reveal-col-rank">#</span>
           <span className="reveal-col-name">Player</span>
           <span className="reveal-col-pred">Sealed call</span>
           <span className="reveal-col-dist">Off by</span>
           <span className="reveal-col-pay">Result</span>
-        </div>
+        </div>}
 
         <ul className="reveal-list">
           {active.map((r, i) => (
@@ -274,7 +292,7 @@ function SettledCeremony() {
             your run · {run.hands} hand{run.hands === 1 ? '' : 's'} · {signedChips(BigInt(run.net), token)} {token}
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
             {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
-            {` · +${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} Fibs · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
+            {` · ${run.fibs ?? 0} Fibs (+${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} this hand) · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
             {boardRank != null ? ` · #${boardRank} on today's board` : ''}
           </div>
         )}

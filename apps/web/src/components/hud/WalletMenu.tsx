@@ -1,4 +1,5 @@
 import { guestAllowed, startGuest } from '@/lib/guestWallet'
+import { liteReason, setLite, useLite } from '@/lib/liteMode'
 import { TestChips } from '@/components/hud/TestChips'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
@@ -38,6 +39,7 @@ async function getBalanceWithRetry(connection: Connection, publicKey: PublicKey)
  * reflected with one click even before the app's own refresh lands.
  */
 export function WalletMenu() {
+  const lite = useLite()
   const usdcBalance = useGameStore((s) => s.chipBalance)
   const fetchBalance = useGameStore((s) => s.fetchBalance)
   const { connected, connecting, disconnect, publicKey } = useWallet()
@@ -180,6 +182,22 @@ export function WalletMenu() {
                 <span className="wc-faucet-arrow">↗</span>
               </a>
             </div>
+          </div>
+
+          {/* table look */}
+          <div className="wc-faucet">
+            <div className="wc-faucet-label">Table</div>
+            <button
+              className="wc-lite"
+              type="button"
+              onClick={() => setLite(!lite)}
+              title="The flat table is lighter on slow computers and phones. The game is the same."
+            >
+              {lite ? 'Flat table (fast) — switch to 3D' : '3D table — switch to flat (faster)'}
+            </button>
+            {lite && liteReason() !== 'user' && (
+              <div className="wc-lite-note">Switched on for you: this device was struggling with the 3D room.</div>
+            )}
           </div>
 
           {/* disconnect */}

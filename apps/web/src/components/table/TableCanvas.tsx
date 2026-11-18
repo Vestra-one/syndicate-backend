@@ -5,6 +5,9 @@ import { useGameStore } from '@/store/gameStore'
 import { seatFanAngles } from '@/three/table/tableView'
 import type { SeatChipState } from '@/three/table/seatChips'
 import type { MatchStateView } from '@/lib/protocol'
+import { fallbackLite, useLite } from '@/lib/liteMode'
+import { setFlatTableView } from '@/three/table/tableView'
+import { FlatTable } from './FlatTable'
 
 /**
  * Snapshot the live seat state into the shape the 3D chip system consumes:
@@ -41,8 +44,17 @@ function seatChipStates(match: MatchStateView | null | undefined): SeatChipState
 export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolean } = {}) {
   const mountRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<TableSceneHandle | null>(null)
+  // Lite mode: no 3D scene at all on machines that cannot carry it (the showpiece landing
+  // page keeps its table — nothing there depends on the page staying responsive).
+  const lite = useLite() && pot === undefined
 
   useEffect(() => {
+    setFlatTableView(lite)
+    return () => setFlatTableView(false)
+  }, [lite])
+
+  useEffect(() => {
+    if (lite) return
     const el = mountRef.current
     if (!el) return
     // Decorative landing pour: ring a synthesised coin clink as each coin lands
@@ -60,7 +72,8 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
         onCoinLand: decorative ? playCoinClink : undefined,
       })
     } catch (err) {
-      console.warn('[table] 3D scene unavailable — continuing without it:', err)
+      console.warn('[table] 3D scene unavailable — using the flat table:', err)
+      fallbackLite()
       return
     }
     handleRef.current = handle
@@ -185,7 +198,8 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
       handle.dispose()
       handleRef.current = null
     }
-  }, [pot, spin])
+  }, [pot, spin, lite])
 
+  if (lite) return <FlatTable />
   return <div ref={mountRef} className="table-canvas" aria-hidden="true" />
 }

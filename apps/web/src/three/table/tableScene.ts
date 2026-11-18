@@ -14,6 +14,7 @@ import {
   unbindPriceChartButton,
 } from './tableView'
 import roomBgUrl from '@/assets/room-bg.png'
+import { reportFrame } from '@/lib/liteMode'
 
 // Decode the room backdrop once at module load. Doing it here (rather than per
 // mount) avoids racing React StrictMode's double-mount, and a single shared
@@ -1047,6 +1048,7 @@ export function createTableScene(
     const now = performance.now()
     let dt = (now - lastNow) / 1000
     lastNow = now
+    if (dt > 0 && dt < 2) reportFrame(dt * 1000)
     // First frame and background-tab resume (RAF pauses, then a huge gap): clamp
     // so animations advance by one nominal step instead of teleporting to their end.
     if (!(dt > 0) || dt > 0.1) dt = 0.016
@@ -1115,7 +1117,7 @@ export function createTableScene(
     // pile up live contexts and trip the browser's ~16-context cap (killing older canvases).
     renderer.forceContextLoss()
     if (renderer.domElement.parentNode === container) {
-      container.removeChild(renderer.domElement)
+      if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement)
     }
     if (import.meta.env.DEV) {
       const w = window as unknown as Record<string, unknown>

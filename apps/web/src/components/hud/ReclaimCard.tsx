@@ -1,4 +1,6 @@
 import { useReclaimMatch } from '@/hooks/useReclaimMatch'
+import { isGuestWallet } from '@/lib/guestWallet'
+import { useGameStore } from '@/store/gameStore'
 
 // USDC has 6 decimals — mirrors the fmt() convention used across Lobby/Dashboard.
 const fmt = (base: bigint | number) => (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
@@ -15,6 +17,7 @@ function fmtCountdown(seconds: number): string {
  * standalone "my matches" list, with no active gateway/match state required.
  */
 export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null | undefined }) {
+  const silent = isGuestWallet(useGameStore((st) => st.walletAddress))
   const { phase, status, seat, reclaimable, secondsToFillDeadline, error, refundedAmount, txSig, cancelAndReclaim } =
     useReclaimMatch(onchainMatchId)
 
@@ -86,7 +89,7 @@ export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null 
       </button>
       {busy && (
         <div className="reclaim-sub eyebrow">
-          Approve the transaction in your wallet — this can take a few seconds to finalize.
+          {silent ? 'Sending it back to your table wallet — a few seconds.' : 'Approve the transaction in your wallet — this can take a few seconds to finalize.'}
         </div>
       )}
     </div>

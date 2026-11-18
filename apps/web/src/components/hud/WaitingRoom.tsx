@@ -281,7 +281,9 @@ function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; ma
   let clock: string
   if (full) clock = 'All seated — dealing you in'
   else if (locking) clock = `Seats locked — dealing in ${formatCountdown(remaining ?? 0)}`
-  else if (counting) clock = `Match starts in ${formatCountdown(remaining)} · more can still join`
+  // Two ways this table deals: the moment the last seat is taken, or when this clock runs
+  // out with enough players. Say both — a countdown alone reads as a promise of a wait.
+  else if (counting) clock = `Deals when full · or in ${formatCountdown(remaining)}`
   else if (expired) clock = 'Fill window closed'
   // Still short of the minimum: the table closes (and refunds) at the deadline — a player
   // waiting alone needs to know how long that is.

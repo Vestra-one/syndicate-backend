@@ -217,7 +217,9 @@ function OpponentPod({
         seatNo={seat.seat + 1}
         emblem={sigil ?? monogram(alias)}
         status={shownStatus}
-        stack={`${formatChips(seat.stack)} ${token}`}
+        // Before the first bet the engine has not stacked the seats yet: a zero there is
+        // "not dealt in", not "broke" — show nothing rather than a false 0.00.
+        stack={seat.stack === 0n && match.phase === 'SEALING' ? undefined : `${formatChips(seat.stack)} ${token}`}
         tag={seatTag(seat.seat, match.yourSeat, seat.wallet, feed)}
         history={history}
         active={active}
@@ -291,7 +293,11 @@ const SIGILS: Record<string, ReactElement> = {
   ),
 }
 
-function Pot({ amount, token }: { amount: bigint; token: string }) {
+function Pot({ amount: live, token }: { amount: bigint; token: string }) {
+  // Once the hand settles the pot is what was actually paid out of (uncalled bets go
+  // back), and it must match the figure on the result card.
+  const final = useGameStore((s) => s.settlement?.finalPot)
+  const amount = final ?? live
   const ref = useAnchor(useCallback(() => projectPot(), []))
   // The chips themselves are real 3D coins in the Three.js scene (see pot.ts);
   // the HUD only carries the amount label, floated just above the pile.

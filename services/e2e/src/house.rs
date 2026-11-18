@@ -619,7 +619,7 @@ async fn fill(ctx: &Ctx, room: &Room, bots: &[Player], house: &House, running: &
         let person_here = present > seated;
         let showcase =
             house.play_without_humans && running.load(Ordering::SeqCst) == 0 && left_ms < 45_000;
-        // A deposit needs ~20s to finalize; past that point sitting down would only strand it.
+        // Leave a deposit time to land; past that point sitting down would only strand it.
         if !all_in(seated) && (person_here || showcase) && left_ms > 20_000 {
             let why = if person_here {
                 "a player sat down"
@@ -638,7 +638,7 @@ async fn fill(ctx: &Ctx, room: &Room, bots: &[Player], house: &House, running: &
         if opened.elapsed() > Duration::from_secs(house.fill_sec + 180) {
             return;
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -895,9 +895,9 @@ async fn act_if_ours(
         let bet_freq = style.0
             * match read {
                 Read::InRange => 0.80,
-                Read::NeedsMove => 0.40,
-                Read::LongShot => 0.15,
-                Read::Blind => 0.35,
+                Read::NeedsMove => 0.50,
+                Read::LongShot => 0.22,
+                Read::Blind => 0.40,
             };
         if can_raise && roll < bet_freq {
             raise
@@ -915,6 +915,9 @@ async fn act_if_ours(
             Read::Blind => (0.0, 0.40),
         };
         let (raise_freq, call_freq) = (raise_freq * style.0, (call_freq * style.1).min(1.0));
+        // Nobody folds for pennies: at 10:1 or better even a long shot is a call. Folding
+        // the blind into a pot of antes is what makes a table feel asleep.
+        let call_freq = if to_call.saturating_mul(10) <= pot { 1.0 } else { call_freq };
         if can_raise && roll < raise_freq {
             raise
         } else if roll < call_freq {

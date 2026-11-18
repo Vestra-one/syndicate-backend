@@ -151,6 +151,8 @@ export interface ChainClient {
   getMatchStatus(onchainMatchId: string): Promise<OnchainMatchStatus | null>
   /** Read the connected wallet's own seat for a match, if any. */
   getMySeat(onchainMatchId: string): Promise<OnchainSeatInfo | null>
+  /** The signature of the connected wallet's deposit into a match, read back from the chain. */
+  findDepositSig(onchainMatchId: string): Promise<string | null>
   /**
    * Read the on-chain payout for EVERY seat in a settled match, given the seat wallets (from
    * the server match view). Per-seat payout amounts live only on-chain — no server view carries

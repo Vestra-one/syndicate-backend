@@ -1866,17 +1866,18 @@ async fn expect_tx_fails(ctx: &Ctx, signer: &Keypair, ixs: Vec<Instruction>, lab
 }
 
 async fn wait_finalized(ctx: &Ctx, sig: &solana_sdk::signature::Signature) {
-    for _ in 0..60 {
+    for _ in 0..170 {
         if let Ok(resp) = ctx.rpc.get_signature_statuses_with_history(&[*sig]).await {
             if let Some(Some(status)) = resp.value.first() {
                 if status.err.is_none()
-                    && status.satisfies_commitment(CommitmentConfig::finalized())
+                    && status.satisfies_commitment(syndicate_chain::verify::verify_commitment())
                 {
                     return;
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // As deep as the server asks for and no deeper — see `verify_commitment`.
+        tokio::time::sleep(Duration::from_millis(700)).await;
     }
     panic!("tx {sig} never finalized");
 }

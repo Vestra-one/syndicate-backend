@@ -58,8 +58,16 @@ const PROGRAM_ID = new PublicKey(
   (import.meta.env.VITE_PROGRAM_ID as string) ?? (IDL as { address: string }).address,
 )
 
+/**
+ * How long the player waits on their own transactions. `confirmed` is about a second;
+ * `finalized` is ~13s more. The server verifies deposits on its own schedule (it keeps a
+ * not-yet-deep-enough report and retries), so the page never needs to sit through finality.
+ */
+const TX_COMMITMENT: 'confirmed' | 'finalized' =
+  (import.meta.env.VITE_TX_COMMITMENT as string) === 'finalized' ? 'finalized' : 'confirmed'
+
 const CONFIRM_OPTS: ConfirmOptions = {
-  commitment: 'finalized', // deposit/claim/refund need finality so the backend verifies
+  commitment: TX_COMMITMENT,
   preflightCommitment: 'processed',
 }
 
@@ -246,7 +254,7 @@ async function simulateSignAndSend(
   // signature-subscribe WS never fires (common on congested/public endpoints), this hangs
   // forever with no error surfaced. Passing the blockhash strategy bounds it to the
   // blockhash's ~90s validity window, so a stalled confirmation always eventually throws.
-  const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'finalized')
+  const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, TX_COMMITMENT)
   if (confirmation.value.err) {
     const code = anchorErrorCode(confirmation.value.err)
     throw new Error(code ?? `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`)
@@ -625,7 +633,7 @@ function createLiveChain(): ChainClient {
       // Bounded confirm: the bare (sig, commitment) form has no expiry and hangs forever if
       // the RPC's signature-subscribe never fires (see simulateSignAndSend). The blockhash
       // strategy caps the wait at the blockhash's validity window.
-      const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'finalized')
+      const confirmation = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, TX_COMMITMENT)
       if (confirmation.value.err) {
         throw new Error(anchorErrorCode(confirmation.value.err) ?? `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`)
       }
@@ -819,6 +827,16 @@ function createLiveChain(): ChainClient {
       const program = getProgram() as any
       const acct = await program.account.seatAccount.fetchNullable(seat)
       return acct ? mapSeat(acct) : null
+    },
+
+    async findDepositSig(onchainMatchId: string): Promise<string | null> {
+      const adapter = walletBridge.adapter
+      if (!adapter?.publicKey) return null
+      const seat = seatPda(matchPda(onchainMatchId), adapter.publicKey)
+      // The seat account is created by the deposit, so its oldest successful signature is it.
+      const sigs = await getConnection().getSignaturesForAddress(seat, { limit: 25 }, 'confirmed')
+      const ok = sigs.filter((s) => s.err == null)
+      return ok.length > 0 ? ok[ok.length - 1].signature : null
     },
 
     async getSeatPayouts(onchainMatchId, wallets): Promise<{ wallet: string; engineSeat: number; payout: Chips }[]> {

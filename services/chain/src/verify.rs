@@ -52,6 +52,19 @@ pub struct VerifiedCreate {
 
 /// Fetch a finalized, successful transaction and return its decoded static account keys
 /// + per-instruction (program_id, accounts, data).
+/// How deep a player's transaction must be before the server acts on it.
+///
+/// `confirmed` (the default) is a supermajority vote — about a second — and is what makes
+/// taking a seat feel instant. `finalized` adds ~13s of waiting for a rollback that has not
+/// happened on Solana in practice; set `SYNDICATE_VERIFY_COMMITMENT=finalized` to require it
+/// (e.g. for high-stakes mainnet tables).
+pub fn verify_commitment() -> CommitmentConfig {
+    match std::env::var("SYNDICATE_VERIFY_COMMITMENT").as_deref() {
+        Ok("finalized") => CommitmentConfig::finalized(),
+        _ => CommitmentConfig::confirmed(),
+    }
+}
+
 async fn fetch_finalized_tx(
     rpc: &RpcClient,
     tx_sig: &Signature,
@@ -65,10 +78,13 @@ async fn fetch_finalized_tx(
     if status.err.is_some() {
         return Err(VerifyError::TxFailed(format!("{:?}", status.err)));
     }
-    if !matches!(
-        status.confirmation_status,
-        Some(solana_transaction_status::TransactionConfirmationStatus::Finalized)
-    ) {
+    use solana_transaction_status::TransactionConfirmationStatus as Level;
+    let deep_enough = match status.confirmation_status {
+        Some(Level::Finalized) => true,
+        Some(Level::Confirmed) => !verify_commitment().is_finalized(),
+        _ => false,
+    };
+    if !deep_enough {
         return Err(VerifyError::NotFinalized);
     }
 
@@ -77,7 +93,7 @@ async fn fetch_finalized_tx(
             tx_sig,
             RpcTransactionConfig {
                 encoding: Some(UiTransactionEncoding::Base64),
-                commitment: Some(CommitmentConfig::finalized()),
+                commitment: Some(verify_commitment()),
                 max_supported_transaction_version: Some(0),
             },
         )
@@ -253,7 +269,7 @@ pub async fn enumerate_seats(
         ]),
         account_config: solana_client::rpc_config::RpcAccountInfoConfig {
             encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
-            commitment: Some(CommitmentConfig::finalized()),
+            commitment: Some(verify_commitment()),
             ..Default::default()
         },
         ..Default::default()

@@ -35,6 +35,11 @@ export function guestAddress(): string | null {
   return load()?.publicKey.toBase58() ?? null
 }
 
+/** True when the connected wallet is this browser's table wallet (it signs silently). */
+export function isGuestWallet(address: string | null | undefined): boolean {
+  return address != null && address === guestAddress()
+}
+
 let registered = false
 
 /** Register the table wallet with the page (idempotent). No-op without a key. */
@@ -114,21 +119,31 @@ export function registerGuestWallet(): void {
 /**
  * Start playing as a guest: create the key if needed, remember the table wallet as the
  * selected wallet, and reload so the wallet layer connects to it like any other wallet.
- * `resumeJoin` re-opens that table's join sheet after the reload.
+ * After the reload the guest is seated at `resumeJoin` — a table id, or by default the
+ * open house table — without pressing anything else.
  */
-export function startGuest(resumeJoin?: string): void {
+export function startGuest(resumeJoin: string = 'house'): void {
   if (!guestAllowed()) return
   try {
     if (!load()) localStorage.setItem(KEY, JSON.stringify(Array.from(Keypair.generate().secretKey)))
     localStorage.setItem('walletName', JSON.stringify(GUEST_WALLET_NAME))
-    if (resumeJoin) sessionStorage.setItem('st-resume-join', resumeJoin)
+    sessionStorage.setItem('st-resume-join', resumeJoin)
   } catch {
     return // storage blocked: a guest wallet cannot persist, so do not pretend
   }
   window.location.reload()
 }
 
-/** The table to re-open after `startGuest` reloaded the page (consumed once). */
+/** Where the guest was headed when the page reloaded: a table id, or 'house'. */
+export function peekResumeJoin(): string | null {
+  try {
+    return sessionStorage.getItem('st-resume-join')
+  } catch {
+    return null
+  }
+}
+
+/** Consume it (once). */
 export function takeResumeJoin(): string | null {
   try {
     const id = sessionStorage.getItem('st-resume-join')

@@ -101,7 +101,29 @@ export function unbindTableView() {
   canvas = null
 }
 export function isTableViewReady() {
-  return !!camera && !!canvas
+  return flat || (!!camera && !!canvas)
+}
+
+/**
+ * Flat table (lite mode): no camera to project through, so the same anchors resolve to
+ * fixed places on the screen — opponents across the top, the pot above the chart, your
+ * own seat at the front. Everything that pins to the table keeps working unchanged.
+ */
+let flat = false
+export function setFlatTableView(on: boolean) {
+  flat = on
+}
+function flatAt(fx: number, fy: number): ScreenPoint {
+  return { x: window.innerWidth * fx, y: window.innerHeight * fy, behind: false }
+}
+function flatSeat(angleDeg: number): ScreenPoint {
+  const a = Math.abs(angleDeg)
+  const side = angleDeg < 0 ? -1 : 1
+  if (a < 8) return flatAt(0.5, 0.7) // your own seat, at the front
+  // Opponents sit at 42°…78° a side: the outer pair at the table's shoulders, the inner
+  // pair (and a lone opponent) either side of the chart's top edge.
+  if (a >= 72) return flatAt(0.5 + side * 0.4, 0.38)
+  return flatAt(0.5 + side * 0.24, 0.19)
 }
 
 const _v = new THREE.Vector3()
@@ -117,6 +139,7 @@ function project(world: THREE.Vector3): ScreenPoint | null {
 }
 
 export function projectSeatAngle(angleDeg: number): ScreenPoint | null {
+  if (flat) return flatSeat(angleDeg)
   return project(seatWorld(angleDeg))
 }
 /**
@@ -127,12 +150,16 @@ export function projectSeatAngle(angleDeg: number): ScreenPoint | null {
 const R_WAIT = 3.35
 const Y_WAIT = 0.5
 export function projectWaitingSeat(angleDeg: number): ScreenPoint | null {
+  // The waiting fan runs −40°…+40°: lay it out as one row at the front of the felt.
+  if (flat) return flatAt(0.5 + (angleDeg / 40) * 0.3, 0.68)
   return project(seatWorld(angleDeg, R_WAIT, Y_WAIT))
 }
 export function projectPot(): ScreenPoint | null {
+  if (flat) return flatAt(0.5, 0.2)
   return project(POT_WORLD)
 }
 export function projectFeltCentre(): ScreenPoint | null {
+  if (flat) return flatAt(0.5, 0.47)
   return project(FELT_CENTRE_WORLD)
 }
 

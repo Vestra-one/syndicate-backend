@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { createAdapters } from '@/lib/adapters'
 import { useGameStore } from '@/store/gameStore'
+import { isGuestWallet } from '@/lib/guestWallet'
 
 // USDC has 6 decimals — mirrors the fmt() convention used across Lobby/Dashboard/Reclaim.
 const fmt = (base: bigint | number) => (Number(base) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })
@@ -29,6 +30,7 @@ export function ClaimWinningsCard({
   staked?: bigint
   onDone?: (onchainMatchId: string) => void
 }) {
+  const silent = isGuestWallet(useGameStore((st) => st.walletAddress))
   const chain = useMemo(() => createAdapters().chain, [])
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -115,7 +117,7 @@ export function ClaimWinningsCard({
       </button>
       {busy && (
         <div className="reclaim-sub eyebrow">
-          Approve the transaction in your wallet — this can take a few seconds to finalize.
+          {silent ? 'Sending it back to your table wallet — a few seconds.' : 'Approve the transaction in your wallet — this can take a few seconds to finalize.'}
         </div>
       )}
     </div>

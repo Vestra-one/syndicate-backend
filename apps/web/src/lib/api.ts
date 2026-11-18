@@ -147,7 +147,9 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
     method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    signal: opts.signal ?? AbortSignal.timeout(12_000),
+    // Generous on purpose: a slow phone or a congested RPC behind the server should cost a
+    // wait, not an error box. Callers that poll pass their own, shorter signal.
+    signal: opts.signal ?? AbortSignal.timeout(25_000),
   })
 
   if (!res.ok) {

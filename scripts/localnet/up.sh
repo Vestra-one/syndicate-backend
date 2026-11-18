@@ -147,7 +147,10 @@ spawn price-server env ECDSA_PRIVATE_KEY="$PRICE_KEY" PORT="$PRICE_PORT" node "$
 wait_http "http://127.0.0.1:$PRICE_PORT/health" '"ok":true' "price server"
 
 say "protocol"
-(cd "$ROOT" && cargo run -q -p syndicate-chain --features rpc --bin init-protocol -- \
+# SKIP_BUILD=1 reuses the binaries already in $TARGET (no cargo at all) — for re-running the
+# stack when no Rust changed.
+if [ "${SKIP_BUILD:-0}" = "1" ]; then INIT=("${CARGO_TARGET_DIR:-$ROOT/target}/debug/init-protocol"); else INIT=(cargo run -q -p syndicate-chain --features rpc --bin init-protocol --); fi
+(cd "$ROOT" && "${INIT[@]}" \
   init --rpc-url "$RPC" --program-id "$PROGRAM_ID" --price-signer "$PRICE_SIGNER_ETH" \
   --keypair "$OPERATOR" --fill-window-min-sec 20 --betting-duration-min-sec 30)
 ok "protocol initialized (price signer $PRICE_SIGNER_ETH)"
@@ -227,7 +230,7 @@ set -a; . "$STATE/env"; set +a
 
 # ---- 7. backend services ---------------------------------------------------------------
 say "backend services"
-(cd "$ROOT" && cargo build -q -p syndicate-game-server -p syndicate-chain-worker)
+[ "${SKIP_BUILD:-0}" = "1" ] || (cd "$ROOT" && cargo build -q -p syndicate-game-server -p syndicate-chain-worker)
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}/debug"
 spawn chain-worker "$TARGET/syndicate-chain-worker"
 spawn game-server "$TARGET/syndicate-game-server"
@@ -236,7 +239,7 @@ wait_http "http://127.0.0.1:$WORKER_PORT/healthz" '"rpc":true' "chain-worker"
 
 if [ "$BOTS" = "1" ]; then
   say "house table"
-  (cd "$ROOT" && cargo build -q -p syndicate-e2e --bin e2e-devnet)
+  [ "${SKIP_BUILD:-0}" = "1" ] || (cd "$ROOT" && cargo build -q -p syndicate-e2e --bin e2e-devnet)
   spawn house-bots env E2E_MODE=house BUY_IN="${HOUSE_BUY_IN:-10000000}" \
     STREET_SEC="${HOUSE_STREET_SEC:-30}" ROUND_COUNT="${HOUSE_ROUND_COUNT:-3}" \
     HOUSE_FILL_SEC="${HOUSE_FILL_SEC:-120}" HOUSE_EVENT_EVERY_SEC="${HOUSE_EVENT_EVERY_SEC:-600}" "$TARGET/e2e-devnet"

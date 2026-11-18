@@ -202,6 +202,8 @@ interface GameState {
 
   // Play Now matchmaking
   playResolving: boolean // true while deciding join-vs-create
+  /** Looking for the next house table to sit at (shown as a curtain, not an empty lobby). */
+  findingTable: boolean
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
   walletError: string | null // wallet-extension connect failure (set by main.tsx's onError, cleared on connect)
@@ -665,6 +667,8 @@ function subscribeMatch(matchId: string, lastSeq = 0) {
 // silence while the match runs on. Poll the REST detail as a safety net while a table is
 // open, so the HUD self-heals instead of showing "LIVE" forever after the match settled.
 const MATCH_POLL_MS = 10_000
+/** While your own seat is still unresolved after the lock, look every couple of seconds. */
+const SEAT_POLL_MS = 2_000
 let matchPoll: ReturnType<typeof setInterval> | null = null
 function startMatchPoll() {
   stopMatchPoll()
@@ -683,8 +687,23 @@ function startMatchPoll() {
     }
     void refreshMatchSeats(useGameStore.setState as SetState, useGameStore.getState)
   }, MATCH_POLL_MS)
+  // The seat number is what lets you seal and act. If the lock's own frames were missed
+  // (slow device, dropped socket), do not wait ten seconds for it.
+  seatPoll = setInterval(() => {
+    const s = useGameStore.getState()
+    if (s.view !== 'table' || s.settlement || s.voided) return
+    const locked = s.match?.phase === 'SEALING' || s.match?.phase === 'LIVE'
+    if (s.seated && locked && s.match?.yourSeat == null) {
+      void refreshMatchSeats(useGameStore.setState as SetState, useGameStore.getState)
+    }
+  }, SEAT_POLL_MS)
 }
+let seatPoll: ReturnType<typeof setInterval> | null = null
 function stopMatchPoll() {
+  if (seatPoll) {
+    clearInterval(seatPoll)
+    seatPoll = null
+  }
   if (matchPoll) {
     clearInterval(matchPoll)
     matchPoll = null
@@ -936,6 +955,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   reviewing: false,
   seated: false,
 
+  findingTable: false,
   playResolving: false,
   playMode: null,
   playError: null,
@@ -1051,6 +1071,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         lobbySeated: detail.seats.length > 0 ? detail.seats.length : null,
         fillDeadline: detail.timing.fill_deadline != null ? toEpochMs(detail.timing.fill_deadline) : null,
         roundStartedAt: detail.timing.live_start != null ? toEpochMs(detail.timing.live_start) : null,
+        sealDeadline: detail.timing.seal_deadline != null ? toEpochMs(detail.timing.seal_deadline) : null,
       })
     } catch (err) {
       log.warn('[resume] match detail failed — staying on dashboard:', err)
@@ -1356,8 +1377,18 @@ export const useGameStore = create<GameState>((set, get) => ({
       const existing = await adapters.chain.getMySeat(onchainMatchId)
       if (existing && existing.deposit > 0) {
         log.info('[joinTable] wallet already deposited (engineSeat', existing.engineSeat, 'confirmed', existing.confirmed, ') — entering table')
-        set({ seated: true })
+        set({ seated: true, view: 'table', roomModal: null })
         void refreshBalance(set)
+        // The chips are in, but the server may never have heard (a reload between the
+        // transaction and the report). An unreported deposit is a seat the table deals
+        // without — so report it again; the server treats a repeat as a no-op.
+        if (!existing.confirmed) {
+          const sig = recallDeposit(matchId) ?? (await adapters.chain.findDepositSig(onchainMatchId).catch(() => null))
+          if (sig) void reportDeposit(matchId, sig, set)
+        }
+        resetActionChain()
+        await get().connect()
+        subscribeMatch(matchId)
         return
       }
     } catch (err) {
@@ -1388,12 +1419,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       }))
       // Report the deposit txhash so the backend RPC-verifies it into a candidate (§5).
       // Capital safety never depends on this — an unheard-of deposit is still refundable.
-      api.submitDeposit(matchId, txSig)
-        .then((r) => {
-          log.info('[joinTable] deposit reported — status:', r.status)
-          void pollCandidate(matchId, adapters!.wallet.address() ?? '', set)
-        })
-        .catch((e) => log.warn('[joinTable] submitDeposit failed:', e))
+      rememberDeposit(matchId, txSig)
+      void reportDeposit(matchId, txSig, set)
       // Open the WS + subscribe so the waiting room / live play get seat/phase/turn pushes.
       resetActionChain()
       await get().connect()
@@ -1762,7 +1789,7 @@ export const useGameStore = create<GameState>((set, get) => ({
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
   sendEmote: async (emote) => {
     const matchId = get().match?.matchId
-    if (!matchId || get().match?.yourSeat == null) return
+    if (!matchId || (get().match?.yourSeat == null && !get().seated)) return
     if (!(await ensureActionSocket(get, matchId))) return
     gateway?.send({ t: 'emote', match_id: matchId, emote })
   },
@@ -1789,15 +1816,23 @@ export const useGameStore = create<GameState>((set, get) => ({
     // The house opens its next table as the last one locks, so one is nearly always up;
     // give it a few seconds if we arrive in the gap.
     let table: UpcomingGame | undefined
-    for (let i = 0; i < 8 && !table; i++) {
-      await get().loadDiscovery({ silent: i > 0 })
-      table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet) && !isScheduledTable(g))
-      if (!table) await new Promise((r) => setTimeout(r, 2000))
+    set({ findingTable: true, playError: null })
+    try {
+      for (let i = 0; i < 20 && !table; i++) {
+        await get().loadDiscovery({ silent: i > 0 })
+        table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet) && !isScheduledTable(g))
+        if (!table) await new Promise((r) => setTimeout(r, 2000))
+      }
+      if (!table) {
+        set({ playError: 'No table is open this second — a new one opens every few minutes. Try again shortly.' })
+        return
+      }
+      await get().joinGame(table.matchId)
+      // Staying at the table: take the seat straight away instead of stopping at the sheet.
+      if (opts?.sit && get().playMode === 'join' && get().terms) await get().joinTable()
+    } finally {
+      set({ findingTable: false })
     }
-    if (!table) return
-    await get().joinGame(table.matchId)
-    // Staying at the table: take the seat straight away instead of stopping at the sheet.
-    if (opts?.sit && get().playMode === 'join' && get().terms) await get().joinTable()
   },
 
   playAgain: async () => {
@@ -1913,6 +1948,35 @@ function normalizeSchedule(
  * terminal `not_confirmed`/`rejected` means the table filled first — the buy-in is fully
  * refundable — so surface it. `confirmed` is the happy path (engine seat assigned at lock).
  */
+/** Consecutive seat reads of a dealt hand that did not include us (one could be a race). */
+let dealtOutStrikes = 0
+
+const depositKey = (matchId: string) => `st-deposit:${matchId}`
+function rememberDeposit(matchId: string, sig: string): void {
+  try { localStorage.setItem(depositKey(matchId), sig) } catch { /* private mode */ }
+}
+function recallDeposit(matchId: string): string | null {
+  try { return localStorage.getItem(depositKey(matchId)) } catch { return null }
+}
+
+/**
+ * Tell the server about a deposit until it has heard. One lost request here used to cost
+ * the player the hand: the chips were in, the table dealt without them.
+ */
+async function reportDeposit(matchId: string, txSig: string, set: SetState): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    try {
+      const r = await api.submitDeposit(matchId, txSig)
+      log.info('[deposit] reported — status:', r.status)
+      void pollCandidate(matchId, adapters?.wallet.address() ?? '', set)
+      return
+    } catch (e) {
+      log.warn('[deposit] report failed, retrying:', e)
+      await new Promise((r) => setTimeout(r, 1500 + i * 1500))
+    }
+  }
+}
+
 async function pollCandidate(matchId: string, wallet: string, set: SetState, tries = 20): Promise<void> {
   if (!wallet) return
   for (let i = 0; i < tries; i++) {
@@ -2526,7 +2590,10 @@ async function landSettlement(
   stopMatchPoll()
   if (first.complete) return
 
-  for (let i = 0; i < 20; i++) {
+  // Keep at it for a few minutes, and show every improvement as it arrives: the settle
+  // price and the revealed calls usually land before the exact payouts do, and a result
+  // screen must never sit on an empty first read.
+  for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 3000))
     if (get().settlement?.matchId !== matchId) return // left the table / new match
     let fresh: MatchDetail
@@ -2536,13 +2603,12 @@ async function landSettlement(
       continue
     }
     const next = await computeSettlementAwards(fresh, onchainId, winnerSeats)
-    if (!next.complete) continue
     set((s) =>
       s.settlement?.matchId === matchId
         ? { settlement: settlementFromDetail(fresh, decimals, next.awards) }
         : {},
     )
-    return
+    if (next.complete) return
   }
   log.warn('[settle] payout amounts never resolved for', matchId)
 }
@@ -2604,10 +2670,21 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
       (wallet ? detail.seats.find((x) => x.wallet === wallet) : undefined) ??
       (myEngineSeat != null ? detail.seats.find((x) => x.seat_index === myEngineSeat) : undefined)
     if (mine) myEngineSeat = mine.seat_index
+    // The hand was dealt and we are not in it (our deposit landed too late, or was never
+    // heard). Say so plainly instead of showing a seat that does not exist.
+    if (mine || phase === 'FILLING') dealtOutStrikes = 0
+    else if (wallet && get().seated && (phase === 'SEALING' || phase === 'LIVE') && get().match?.yourSeat == null && ++dealtOutStrikes >= 2) {
+      set({
+        seated: false,
+        playError: 'This hand was dealt before your seat was confirmed, so you are watching it. Your buy-in is safe and comes back to you — take a seat at the next table.',
+      })
+    }
     set((s) =>
       s.match
         ? {
             streetSchedule: normalizeSchedule(detail.timing.street_schedule) ?? s.streetSchedule,
+            // The seal clock normally rides on a WS frame; after a reload that frame is gone.
+            sealDeadline: detail.timing.seal_deadline != null ? toEpochMs(detail.timing.seal_deadline) : s.sealDeadline,
             match: {
               ...s.match,
               seats,

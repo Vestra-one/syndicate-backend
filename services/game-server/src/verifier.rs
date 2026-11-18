@@ -100,7 +100,7 @@ impl ChainVerify for RpcVerifier {
             .rpc
             .get_account_with_commitment(
                 &seat,
-                solana_sdk::commitment_config::CommitmentConfig::finalized(),
+                chain_verify::verify_commitment(),
             )
             .await
             .map_err(|e| e.to_string())?;

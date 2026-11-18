@@ -17,7 +17,8 @@ export function TableTalk() {
   const wallet = useGameStore((s) => s.walletAddress)
   const level = levelOf(readStats(wallet).fibs ?? 0).level
   const recent = talk.filter((t) => now - t.at < 6000).slice(-3)
-  const canTalk = yourSeat != null && (phase === 'SEALING' || phase === 'LIVE')
+  const seated = useGameStore((s) => s.seated)
+  const canTalk = (yourSeat != null || seated) && (phase === 'SEALING' || phase === 'LIVE')
   if (!canTalk && recent.length === 0) return null
   return (
     <div className="table-talk">

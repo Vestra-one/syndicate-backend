@@ -1,36 +1,97 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
-import { guestAddress, takeResumeJoin } from '@/lib/guestWallet'
+import { guestAddress, peekResumeJoin, takeResumeJoin } from '@/lib/guestWallet'
+
+const BUY_IN_FLOOR = 20_000_000n // two house buy-ins: below this a guest gets a top-up
+const FUNDED_KEY = 'st-guest-funded-at'
 
 /**
- * Finishes the "play instantly" hand-off after the page reloads into the table wallet:
- * tops the guest up with test chips when it is short, and re-opens the table they chose.
- * Renders nothing.
+ * Finishes "Play instantly" after the page reloads into the table wallet. In order: make
+ * sure the guest has chips (once — never again on a mere reload), then take them where
+ * they were going: the table they clicked, or the open house table, seated, with nothing
+ * further to press. While that runs the screen says so instead of showing a bare lobby.
  */
 export function GuestBoot() {
   const wallet = useGameStore((s) => s.walletAddress)
   const faucet = useGameStore((s) => s.faucet)
   const balance = useGameStore((s) => s.chipBalance)
-  const getTestChips = useGameStore((s) => s.getTestChips)
-  const joinGame = useGameStore((s) => s.joinGame)
-  const funded = useRef(false)
-  const resumed = useRef(false)
+  const view = useGameStore((s) => s.view)
+  const txError = useGameStore((s) => s.txProgress?.stage === 'error')
+  const finding = useGameStore((s) => s.findingTable && s.view === 'discovery')
+  const [pending, setPending] = useState<string | null>(() => peekResumeJoin())
+  const [step, setStep] = useState('Setting up your table wallet…')
+  const funding = useRef(false)
+  const routed = useRef(false)
   const isGuest = wallet != null && wallet === guestAddress()
 
+  // 1. Chips. A brand-new guest has no chip account, so the balance reads as empty/unknown;
+  //    give the read a moment, then top up if it is short and we have not just done so.
   useEffect(() => {
-    if (!isGuest || !faucet || funded.current) return
-    // A fresh guest has no chip account yet (null) or too little for a buy-in.
-    if (balance != null && balance >= 20_000_000n) return
-    funded.current = true
-    void getTestChips()
-  }, [isGuest, faucet, balance, getTestChips])
+    if (!isGuest || !faucet || funding.current) return
+    const known = balance != null
+    if (known && balance >= BUY_IN_FLOOR) return
+    const t = setTimeout(() => {
+      const s = useGameStore.getState()
+      if ((s.chipBalance ?? 0n) >= BUY_IN_FLOOR || funding.current) return
+      let last = 0
+      try { last = Number(localStorage.getItem(`${FUNDED_KEY}:${wallet}`) ?? 0) } catch { /* ignore */ }
+      // A top-up is on its way or was refused by the cooldown: do not ask again on reload.
+      if (Date.now() - last < 90_000) return
+      funding.current = true
+      try { localStorage.setItem(`${FUNDED_KEY}:${wallet}`, String(Date.now())) } catch { /* ignore */ }
+      setStep('Filling it with test chips…')
+      void s.getTestChips().finally(() => { funding.current = false })
+    }, known ? 0 : 2500)
+    return () => clearTimeout(t)
+  }, [isGuest, faucet, balance, wallet])
 
+  // 2. Take them to the table, once the chips are in.
   useEffect(() => {
-    if (!isGuest || resumed.current) return
-    resumed.current = true
-    const id = takeResumeJoin()
-    if (id) void joinGame(id)
-  }, [isGuest, joinGame])
+    if (!isGuest || !pending || routed.current) return
+    if (balance == null || balance < 10_000_000n) return
+    routed.current = true
+    takeResumeJoin()
+    setStep('Taking your seat…')
+    const s = useGameStore.getState()
+    void (async () => {
+      try {
+        if (pending === 'house') await s.playHouse({ sit: true })
+        else {
+          await s.joinGame(pending)
+          const now = useGameStore.getState()
+          if (now.playMode === 'join' && now.terms) await now.joinTable()
+        }
+      } finally {
+        setPending(null)
+      }
+    })()
+  }, [isGuest, pending, balance])
 
-  return null
+  // Never leave the curtain up: if something went wrong, or it is simply taking too long,
+  // show the lobby (which has the error or the table list).
+  useEffect(() => {
+    if (!pending) return
+    const t = setTimeout(() => { takeResumeJoin(); setPending(null) }, 75_000)
+    return () => clearTimeout(t)
+  }, [pending])
+  useEffect(() => {
+    if (pending && (view === 'table' || txError)) { takeResumeJoin(); setPending(null) }
+  }, [pending, view, txError])
+
+  if (!pending) return finding ? <Curtain title="Finding you the next table…" note="Dealing you in as soon as a seat is free." /> : null
+  return (
+    <Curtain title={step} note="No wallet, no sign-ups. This takes about ten seconds." />
+  )
+}
+
+function Curtain({ title, note }: { title: string; note: string }) {
+  return (
+    <div className="guest-curtain" role="status">
+      <div className="guest-curtain-card">
+        <span className="guest-curtain-spin" aria-hidden="true" />
+        <b>{title}</b>
+        <small>{note}</small>
+      </div>
+    </div>
+  )
 }

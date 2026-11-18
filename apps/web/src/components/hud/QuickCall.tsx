@@ -105,6 +105,9 @@ export function QuickCall() {
           <div className="quick-call-foot eyebrow">
             {streak >= 1 ? `${streak} in a row · next pays ${BASE_FIBS * Math.min(streak + 1, 5)} Fibs` : `pays ${BASE_FIBS} Fibs · streaks pay more`}
           </div>
+          <div className="quick-call-what">
+            {'Fibs are points, not chips: they raise your level and unlock table reactions.'}
+          </div>
         </>
       )}
     </div>

@@ -4,6 +4,7 @@ import { useGameStore } from '@/store/gameStore'
 import type { TxErrorCode, TxStageName } from '@/store/gameStore'
 import { networkInfo } from '@/lib/network'
 import { formatChips } from '@/lib/format'
+import { isGuestWallet } from '@/lib/guestWallet'
 
 /**
  * The commit ceremony — the full-screen moment between "take your seat" and a
@@ -107,6 +108,7 @@ export function TxCeremony() {
   }
 
   const isSigning = tx.stage === 'signing'
+  const silent = isGuestWallet(useGameStore.getState().walletAddress)
   // Cancelling is only safe before the signature exists — i.e. while we're still
   // preparing the tx or waiting on the wallet prompt. Once broadcast, there's
   // nothing to abort.
@@ -322,7 +324,7 @@ export function TxCeremony() {
           <div className="txc-foot">
             <span className="txc-hint eyebrow">
               {isSigning
-                ? 'Confirm the transaction in your wallet'
+                ? (silent ? 'Signing with your table wallet…' : 'Confirm the transaction in your wallet')
                 : slowFinality
                   ? 'Still working — nothing is lost'
                   : 'Finality on Solana takes a few seconds — keep this open'}
@@ -332,7 +334,7 @@ export function TxCeremony() {
                 network drags, then the signature so power users can verify on Solscan. */}
             {isConfirming && !slowFinality && (
               <span className="txc-elapsed mono">
-                ~{elapsedSec}s <span className="txc-elapsed-hint">· usually under 10s</span>
+                ~{elapsedSec}s <span className="txc-elapsed-hint">· usually a few seconds</span>
               </span>
             )}
             {slowFinality && (
@@ -382,7 +384,7 @@ function copyFor(stage: TxStageName, isCreate: boolean): { title: string; sub: s
       }
     case 'signing':
       return {
-        title: 'Approve in your wallet',
+        title: isGuestWallet(useGameStore.getState().walletAddress) ? 'Signing with your table wallet' : 'Approve in your wallet',
         sub: isCreate
           ? 'Confirm the transaction to open your table and commit your buy-in.'
           : 'Confirm the transaction to commit your buy-in and claim your seat.',
