@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
-import { addFibs, levelOf, readStats } from '@/lib/sessionStats'
+import { addFibs, adoptServerFibs, levelOf, readStats } from '@/lib/sessionStats'
+import { getFibsBoard, reportFibs } from '@/lib/api'
 import { playCue } from '@/lib/sound'
 import { useNow } from '@/lib/useNow'
 
@@ -30,7 +31,14 @@ export function QuickCall() {
   const priceRef = useRef(price)
   priceRef.current = price
 
-  useEffect(() => { setFibs(readStats(wallet).fibs ?? 0) }, [wallet])
+  useEffect(() => {
+    setFibs(readStats(wallet).fibs ?? 0)
+    if (!wallet) return
+    // Your level follows you: pick up the server's total when it is ahead of this device.
+    void getFibsBoard(wallet)
+      .then((b) => { if (b.you) setFibs(adoptServerFibs(wallet, b.you.fibs).fibs ?? 0) })
+      .catch(() => {})
+  }, [wallet])
 
   // Resolve the open call when its window runs out.
   useEffect(() => {
@@ -41,7 +49,10 @@ export function QuickCall() {
     const won = move === 0 ? null : (move > 0) === (pick.dir === 'up')
     const nextStreak = won ? streak + 1 : won === false ? 0 : streak
     const earned = won ? BASE_FIBS * Math.min(nextStreak, 5) : 0
-    if (earned > 0) setFibs(addFibs(wallet, earned).fibs ?? 0)
+    if (earned > 0) {
+      setFibs(addFibs(wallet, earned).fibs ?? 0)
+      void reportFibs(earned).catch(() => {})
+    }
     setStreak(nextStreak)
     setOutcome({ won, fibs: earned, move, until: Date.now() + 2600 })
     setPick(null)

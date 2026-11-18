@@ -4,6 +4,7 @@ import { HAND_FIBS, WIN_FIBS, levelOf, readStats, recordHand, type SessionStats 
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
+import { getFibsBoard, reportFibs } from '@/lib/api'
 import type { VoidReason } from '@/lib/protocol'
 
 /**
@@ -162,6 +163,7 @@ function SettledCeremony() {
   const walletOf = (seat: number) => seats?.find((x) => x.seat === seat)?.wallet ?? null
   const wallet = useGameStore((s) => s.walletAddress)
   const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
+  const [boardRank, setBoardRank] = useState<number | null>(null)
   useEffect(() => {
     if (yourSeat == null || !amountsKnown) return
     // Head-to-head: against each rival still in the hand, who finished closer?
@@ -172,7 +174,16 @@ function SettledCeremony() {
         wallet: walletOf(r.seat)!,
         beat: !!mine && !mine.folded && (r.folded || mine.dist < r.dist),
       }))
-    setRun(recordHand(wallet, settlement.matchId, yourNet, isWinner, faced))
+    const before = readStats(wallet).hands
+    const after = recordHand(wallet, settlement.matchId, yourNet, isWinner, faced)
+    setRun(after)
+    if (after.hands > before) {
+      // Counted for the first time: put it on the daily board and learn our place.
+      void reportFibs(HAND_FIBS + (isWinner ? WIN_FIBS : 0))
+        .then(() => getFibsBoard(wallet))
+        .then((b) => setBoardRank(b.you?.rank ?? null))
+        .catch(() => {})
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settlement.matchId, amountsKnown, yourSeat, wallet])
 
@@ -264,6 +275,7 @@ function SettledCeremony() {
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
             {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
             {` · +${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} Fibs · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
+            {boardRank != null ? ` · #${boardRank} on today's board` : ''}
           </div>
         )}
 

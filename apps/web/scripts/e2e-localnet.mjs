@@ -436,6 +436,15 @@ async function houseHand(browser) {
     if (!next) await sleep(1000)
   }
   expect(!!next, `the house opened the next table on its own (${next?.match_id})`)
+  // The hand is on today's Fibs board, alongside the bots.
+  let board = null
+  for (let i = 0; i < 20; i++) {
+    board = await (await fetch(`${gameUrl}/v1/fibs/board?wallet=${me.wallet}`)).json()
+    if (board.you && board.leaders.some((l) => l.bot)) break
+    await sleep(1000)
+  }
+  expect(!!board?.you && board.you.today >= 20, `visitor is on today's Fibs board (${JSON.stringify(board?.you)})`)
+  expect(board.leaders.some((l) => l.bot), 'the bots are on the board too, labelled')
   void before
 }
 

@@ -291,6 +291,18 @@ fn spawn_play(
                 for bot in &bots {
                     collect_room(&ctx, bot, &seat, &phase).await;
                 }
+                // The bots are on the daily board like anyone else (20 Fibs a hand).
+                if phase == "settled" {
+                    for bot in &bots {
+                        let _ = ctx
+                            .http
+                            .post(format!("{}/v1/fibs", ctx.api))
+                            .bearer_auth(&bot.session)
+                            .json(&json!({ "amount": 20 }))
+                            .send()
+                            .await;
+                    }
+                }
             });
             match inner.await {
                 Ok(()) => break,

@@ -14,6 +14,7 @@ import { JoinSheet } from './JoinSheet'
 import { CreateSheet } from './CreateSheet'
 import { useNow } from '@/lib/useNow'
 import './room.css'
+import { FibsBoard } from '@/components/room/FibsBoard'
 
 const NAV = [
   { id: 'live', label: 'Live now' },
@@ -214,6 +215,7 @@ export function Room() {
 
         <aside className="rail">
           <ProfilePanel />
+          <FibsBoard />
           <LeaderboardPanel />
           <HowPanel />
         </aside>

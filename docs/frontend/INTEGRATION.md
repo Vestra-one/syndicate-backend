@@ -382,3 +382,11 @@ A seated, authenticated socket may send `{ "t": "emote", "match_id", "emote" }` 
 `{ "t": "emote", "match_id", "seat_index", "emote" }`. One per seat every two seconds;
 anything else is dropped silently. There is no free text.
 
+## Fibs
+
+Points for playing (20 a hand), winning (50) and quick calls. `POST /v1/fibs`
+`{ "amount": 1..100 }` (session-authed) adds to the signed-in wallet and returns
+`{ fibs, today }`; a wallet earns at most 20,000 a UTC day. `GET /v1/fibs/board[?wallet=]`
+returns today's top twenty `{ rank, wallet, handle, fibs, bot }` and, for `wallet`,
+`you: { today, rank, fibs }`. Reported by the client for now — free play only.
+

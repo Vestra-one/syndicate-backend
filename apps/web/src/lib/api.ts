@@ -635,3 +635,19 @@ export function requestFaucet(): Promise<{ ok: boolean; chips: number; lamports:
   // The server waits for the transfer to confirm, so allow well past the default timeout.
   return request('/faucet', { method: 'POST', auth: true, signal: AbortSignal.timeout(45_000) })
 }
+
+export interface FibsBoard {
+  leaders: { rank: number; wallet: string; handle: string | null; fibs: number; bot: boolean }[]
+  you: { today: number; rank: number; fibs: number } | null
+}
+
+/** `POST /v1/fibs` — add Fibs to the signed-in wallet (capped per report and per day). */
+export function reportFibs(amount: number): Promise<{ fibs: number; today: number }> {
+  return request('/fibs', { method: 'POST', auth: true, body: { amount } })
+}
+
+/** `GET /v1/fibs/board` — today's top twenty, plus `wallet`'s own place. */
+export function getFibsBoard(wallet?: string | null): Promise<FibsBoard> {
+  return request(`/fibs/board${wallet ? `?wallet=${encodeURIComponent(wallet)}` : ''}`)
+}
+
