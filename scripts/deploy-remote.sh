@@ -20,11 +20,14 @@ SSH=(ssh -o ControlMaster=auto -o ControlPath="$CTL" -o ControlPersist=30m -o St
 [ -f "$ROOT/services/programs/keys/syndicate_program_v2-keypair.json" ] ||
   { echo "missing services/programs/keys/syndicate_program_v2-keypair.json"; exit 1; }
 
-echo "== connecting to $HOST (one password prompt)"
-"${SSH[@]}" "$HOST" "mkdir -p $DEST && command -v rsync >/dev/null || (apt-get update -qq && apt-get install -y -qq rsync >/dev/null)"
+echo "== connecting to $HOST"
+# Root login disabled? Log in as a user with passwordless sudo and everything runs via sudo.
+SUDO=""
+[ "$("${SSH[@]}" "$HOST" id -u)" = 0 ] || SUDO="sudo -n -H"
+"${SSH[@]}" "$HOST" "$SUDO mkdir -p $DEST && { command -v rsync >/dev/null || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq rsync >/dev/null); }"
 
 echo "== copying the code"
-rsync -az --delete -e "${SSH[*]}" \
+rsync -az --delete -e "${SSH[*]}" ${SUDO:+--rsync-path="sudo -n rsync"} \
   --exclude '.git' --exclude 'target' --exclude 'node_modules' --exclude '.localnet' \
   --exclude 'apps/web/dist' --exclude 'apps/web/e2e-shots' \
   --exclude 'deploy/secrets/*' --exclude 'deploy/.env' \
@@ -32,6 +35,6 @@ rsync -az --delete -e "${SSH[*]}" \
   "$ROOT/" "$HOST:$DEST/"
 
 echo "== bootstrapping (first run builds everything: 20–40 minutes)"
-"${SSH[@]}" -t "$HOST" "cd $DEST && DOMAIN='${DOMAIN:-}' SOLANA_RPC_URL='${SOLANA_RPC_URL:-}' TLS_EMAIL='${TLS_EMAIL:-}' bash -c '
-  [ -n \"\$DOMAIN\" ] || unset DOMAIN; [ -n \"\$SOLANA_RPC_URL\" ] || unset SOLANA_RPC_URL; [ -n \"\$TLS_EMAIL\" ] || unset TLS_EMAIL
+"${SSH[@]}" -t "$HOST" "cd $DEST && $SUDO env DOMAIN='${DOMAIN:-}' SOLANA_RPC_URL='${SOLANA_RPC_URL:-}' TLS_EMAIL='${TLS_EMAIL:-}' EDGE_NETWORK='${EDGE_NETWORK:-}' bash -c '
+  [ -n \"\$DOMAIN\" ] || unset DOMAIN; [ -n \"\$SOLANA_RPC_URL\" ] || unset SOLANA_RPC_URL; [ -n \"\$TLS_EMAIL\" ] || unset TLS_EMAIL; [ -n \"\$EDGE_NETWORK\" ] || unset EDGE_NETWORK
   bash scripts/server-bootstrap.sh'"

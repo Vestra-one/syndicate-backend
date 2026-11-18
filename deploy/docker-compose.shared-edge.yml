@@ -1,0 +1,40 @@
+# Shared-edge overlay: for a server where ANOTHER project's Dockerized nginx owns 80/443.
+#
+# Joins game-server and signed-price-server to that project's Docker network under
+# unique aliases, so its nginx can proxy to them by name:
+#
+#   api.<domain>   -> satoshi-game-server:8080
+#   price.<domain> -> satoshi-price-server:8080
+#
+# Enabled by EDGE_NETWORK=<network name> (in the environment or deploy/.env);
+# scripts/deploy-devnet.sh adds this file automatically when it is set. The vhost
+# template is deploy/nginx/syndicate-v2-docker-edge.conf.
+#
+# A container on two networks resolves names on BOTH, so the other project's service
+# names shadow ours (e.g. its `postgres`). Every hostname game-server dials is therefore
+# re-pointed at an alias unique to this stack.
+services:
+  postgres:
+    networks:
+      default:
+        aliases: [syndicate-postgres]
+
+  game-server:
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-syndicate}@syndicate-postgres:5432/${POSTGRES_DB:-syndicate}
+      SIGNED_PRICE_SERVER_URL: http://satoshi-price-server:8080
+    networks:
+      default: {}
+      edge:
+        aliases: [satoshi-game-server]
+
+  signed-price-server:
+    networks:
+      default: {}
+      edge:
+        aliases: [satoshi-price-server]
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:?set EDGE_NETWORK to the other project's docker network}

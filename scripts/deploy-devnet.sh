@@ -15,6 +15,15 @@ done
 
 COMPOSE=(docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml --env-file deploy/.env)
 
+# Shared edge: another project's Dockerized nginx owns 80/443 (see the overlay's header).
+EDGE_NETWORK="${EDGE_NETWORK:-$(sed -n 's/^EDGE_NETWORK=//p' deploy/.env | tail -1)}"
+if [ -n "$EDGE_NETWORK" ]; then
+  export EDGE_NETWORK
+  COMPOSE=(docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.devnet.yml
+    -f deploy/docker-compose.shared-edge.yml --env-file deploy/.env)
+  echo "shared edge: joining docker network $EDGE_NETWORK"
+fi
+
 # House bots start with the stack once scripts/house-bots-setup.sh has provisioned them.
 BUILD=(game-server chain-worker signed-price-server)
 if [ -f deploy/secrets/house-bot-1.json ] && [ -f deploy/secrets/house-bot-2.json ]; then

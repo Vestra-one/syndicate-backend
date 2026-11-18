@@ -36,8 +36,10 @@ if [ "${SKIP_SYSTEM:-0}" != 1 ]; then
 say "packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+EDGE_PKGS="nginx certbot python3-certbot-nginx"
+[ -z "${EDGE_NETWORK:-}" ] || EDGE_PKGS="" # shared edge: the other project's nginx serves us
 apt-get install -y -qq curl git jq rsync python3 build-essential pkg-config libssl-dev \
-  libudev-dev protobuf-compiler nginx certbot python3-certbot-nginx ufw >/dev/null
+  libudev-dev protobuf-compiler $EDGE_PKGS ufw >/dev/null
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh >/dev/null
 ufw allow 22/tcp >/dev/null && ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
@@ -141,6 +143,7 @@ setenv TREASURY_TOKEN_ACCOUNT "$TREASURY"
 setenv GEOFENCE_BLOCKLIST ""   # devnet chips have no value; nobody is blocked
 setenv CORS_ALLOWED_ORIGINS "https://satoshitable.fun,https://www.satoshitable.fun,http://localhost:5173"
 setenv TLS_EMAIL "$TLS_EMAIL"
+[ -z "${EDGE_NETWORK:-}" ] || setenv EDGE_NETWORK "$EDGE_NETWORK"
 grep -qE '^ADMIN_TOKENS=.+' deploy/.env && ! grep -qE '^ADMIN_TOKENS=\s*#' deploy/.env ||
   setenv ADMIN_TOKENS "$(openssl rand -hex 24)"
 chmod 600 deploy/.env
@@ -160,6 +163,10 @@ curl -sf http://127.0.0.1:18080/healthz >/dev/null && ok "game-server healthy" |
 
 # ---- 9. edge + TLS ----------------------------------------------------------------------
 say "edge"
+if [ -n "${EDGE_NETWORK:-}" ]; then
+  ok "shared edge: on docker network $EDGE_NETWORK as satoshi-game-server / satoshi-price-server"
+  echo "   Install deploy/nginx/syndicate-v2-docker-edge.conf into that network's nginx (see its header)."
+else
 sed -E "s/api\.devnet\.satoshitable\.fun/api.$DOMAIN/; s/price\.devnet\.satoshitable\.fun/price.$DOMAIN/" \
   deploy/nginx/syndicate-v2-host.conf >/etc/nginx/sites-available/satoshi-table
 ln -sf /etc/nginx/sites-available/satoshi-table /etc/nginx/sites-enabled/satoshi-table
@@ -175,6 +182,7 @@ elif [ "$DNS_IP" = "$MY_IP" ]; then
 else
   echo "   DNS: api.$DOMAIN → ${DNS_IP:-nothing}, this server is $MY_IP."
   echo "   Point api.$DOMAIN and price.$DOMAIN (A records) at $MY_IP, then re-run this script for TLS."
+fi
 fi
 
 say "done"
