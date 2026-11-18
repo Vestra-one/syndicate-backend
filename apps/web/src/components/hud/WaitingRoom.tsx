@@ -600,7 +600,7 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   return (
     <section className="wr-card wr-card--invite">
       <div className="wr-card-title">Invite friends</div>
-      <div className="wr-invite-copy">Invite more traders and start the match sooner.</div>
+      <div className="wr-invite-copy">Invite more traders and start the match sooner. If seats are still empty when the door closes, house bots take up to two of them — the hand always runs.</div>
       <div className="wr-invite-glyph" aria-hidden="true">
         <svg viewBox="0 0 48 24" width="72" height="36">
           <circle cx="12" cy="9" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />

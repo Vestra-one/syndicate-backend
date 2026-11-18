@@ -5,6 +5,7 @@ import { formatChips } from '@/lib/format'
 import type { DashboardSortKey, LiveGame } from '@/lib/protocol'
 import { Coin, AvatarStack, RoundPips, Sparkline, agoLabel } from './bits'
 import { useNow } from '@/lib/useNow'
+import { displayName } from '@/lib/seats'
 
 const SORTS: { key: DashboardSortKey; label: string }[] = [
   { key: 'gameTime', label: 'Hot' },
@@ -62,7 +63,7 @@ function LiveCard({ game, onWatch }: { game: LiveGame; onWatch: () => void }) {
         <Coin base={base} />
         <span className="card-mkt">
           <b>{base}<i>/{quote}</i></b>
-          {game.creatorHandle && <span className="eyebrow">dealt by {game.creatorHandle}</span>}
+          {(game.creatorHandle || game.creatorWallet) && <span className="eyebrow">dealt by {game.creatorWallet ? displayName(game.creatorWallet, game.creatorHandle) : game.creatorHandle}</span>}
         </span>
         <span className="card-flag">
           <span className="flag flag--live"><span className="livedot" />Live</span>

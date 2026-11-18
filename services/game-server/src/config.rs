@@ -215,7 +215,7 @@ impl Default for Bounds {
             fill_window_max_sec: 5000,
             streets_min: 1,
             streets_max: 5,
-            street_duration_min_sec: 30,
+            street_duration_min_sec: 20,
             street_duration_max_sec: 600,
             observation_min_sec: 0,
             observation_max_sec: 600,

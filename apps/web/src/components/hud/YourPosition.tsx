@@ -3,6 +3,7 @@ import { formatMoney, formatPrice } from '@/lib/format'
 import type { DefaultAction } from '@/lib/protocol'
 import { edgeRead, typicalMove } from '@/lib/edge'
 import { useNow } from '@/lib/useNow'
+import { useEffect, useRef, useState } from 'react'
 
 /**
  * "Your position" — the self-centric panel (replaces the old per-bet list).
@@ -23,7 +24,26 @@ export function YourPosition() {
 
   const decimals = terms?.decimals ?? 2
   const token = terms?.chipsToken ?? 'USDC'
-  const predFloat = prediction != null ? prediction / 10 ** decimals : null
+  // Not sealed: the call is the market price at seal close. Catch it as the window shuts
+  // (and keep it across a reload) so the player can see the number they are playing.
+  const matchId = match?.matchId ?? null
+  const unsealedAtClose = sealClosed && sealStatus !== 'sealed'
+  const [fallback, setFallback] = useState<number | null>(null)
+  const sawOpen = useRef(false) // only a close we watched happen gives the true price
+  useEffect(() => {
+    if (!matchId) return
+    const key = `st-default:${matchId}`
+    let saved: number | null = null
+    try { const v = Number(localStorage.getItem(key)); saved = Number.isFinite(v) && v > 0 ? v : null } catch { /* private mode */ }
+    if (saved != null) { setFallback(saved); return }
+    if (!unsealedAtClose) sawOpen.current = true
+    if (unsealedAtClose && lastPrice != null && sawOpen.current) {
+      setFallback(lastPrice)
+      try { localStorage.setItem(key, String(lastPrice)) } catch { /* private mode */ }
+    } else if (!unsealedAtClose) setFallback(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchId, unsealedAtClose])
+  const predFloat = prediction != null ? prediction / 10 ** decimals : unsealedAtClose ? fallback : null
   const distance = predFloat != null && lastPrice != null ? lastPrice - predFloat : null
   const live = match?.phase === 'LIVE'
   // Edge: the gap to your call against how far the market typically travels before
@@ -63,7 +83,7 @@ export function YourPosition() {
         ) : (
           <span className="position-pred-empty eyebrow">
             {defaulted
-              ? 'not sealed — you are playing the market price at close'
+              ? (fallback != null ? `not sealed — playing the market price at close, about ${formatPrice(fallback)}` : 'not sealed — you are playing the market price at close')
               : sealStatus === 'sealed'
                 ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
                 : sealStatus === 'sealing'

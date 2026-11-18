@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { getFibsBoard, type FibsBoard as Board } from '@/lib/api'
 import { levelOf } from '@/lib/sessionStats'
+import { displayName } from '@/lib/seats'
 
 /** Today's Fibs board: who has played and called best today, bots included and labelled. */
 export function FibsBoard() {
@@ -15,7 +16,7 @@ export function FibsBoard() {
     return () => { alive = false; clearInterval(t) }
   }, [wallet])
   if (!board) return null
-  const name = (l: Board['leaders'][number]) => l.handle?.replace(/_/g, ' ') ?? `${l.wallet.slice(0, 4)}…${l.wallet.slice(-4)}`
+  const name = (l: Board['leaders'][number]) => displayName(l.wallet, l.handle)
   return (
     <div className="rail-panel">
       <div className="panel-eyebrow">

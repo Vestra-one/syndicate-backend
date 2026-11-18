@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips } from '@/lib/format'
-import { hostAlias } from '@/lib/seats'
+import { displayName, hostAlias } from '@/lib/seats'
 import { isHouseBot, isScheduledTable } from '@/lib/houseBots'
 import { guestAllowed, startGuest } from '@/lib/guestWallet'
 import type { UpcomingGame } from '@/lib/protocol'
@@ -15,7 +15,7 @@ function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: bool
   const [base, quote = 'USD'] = game.feed.split('/')
   const total = Math.max(game.maxPlayers, 1)
   const oneLeft = total - game.seated === 1
-  const dealtBy = game.creatorHandle ?? hostAlias(game.matchId)
+  const dealtBy = game.creatorWallet ? displayName(game.creatorWallet, game.creatorHandle) : (game.creatorHandle ?? hostAlias(game.matchId))
   return (
     <button className={`card card--open ${invited ? 'card--invited' : ''}`} type="button" onClick={onJoin}>
       <span className="card-top">

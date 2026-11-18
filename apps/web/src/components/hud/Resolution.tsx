@@ -1,11 +1,13 @@
 import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { useEffect, useRef, useState } from 'react'
-import { HAND_FIBS, WIN_FIBS, levelOf, readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
+import { HAND_FIBS, WIN_FIBS, adoptServerFibs, levelOf, readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
 import { getFibsBoard, reportFibs } from '@/lib/api'
 import type { VoidReason } from '@/lib/protocol'
+
+const STEP_MS = 850 // between one call turning over and the next
 
 /**
  * The resolution ceremony — a premium moment, not an instant pop (§10.6).
@@ -192,10 +194,16 @@ function SettledCeremony() {
       // Counted for the first time: put it on the daily board and learn our place.
       void reportFibs(HAND_FIBS + (isWinner ? WIN_FIBS : 0))
         .then(() => getFibsBoard(wallet))
+        // The server's count is the one the lobby shows — show the same number here.
+        .then((b) => { if (b.you) setRun(adoptServerFibs(wallet, b.you.fibs)) })
         .catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settlement.matchId, amountsKnown, yourSeat, wallet])
+
+  // The reveal is a show: folded calls first, then the live calls from furthest to
+  // closest — the winner turns over last — and only then the verdict.
+  const verdictAt = active.length * STEP_MS + 900
 
   // The one line worth retelling: what the betting did that the numbers alone would not.
   const story = (() => {
@@ -254,7 +262,7 @@ function SettledCeremony() {
 
   return (
     <div className="ceremony">
-      <div className="ceremony-card panel">
+      <div className={`ceremony-card panel ${isWinner ? 'ceremony-card--win' : ''}`}>
         <div className="ceremony-eyebrow eyebrow">settlement · {terms?.priceFeedId ?? 'BTC/USD'}</div>
         {settlePrice > 0 && ranked.length > 0 ? (
           <>
@@ -278,7 +286,7 @@ function SettledCeremony() {
 
         <ul className="reveal-list">
           {active.map((r, i) => (
-            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={i * 280 + 400} record={recordFor(r.seat)} />
+            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={(active.length - 1 - i) * STEP_MS + 700} record={recordFor(r.seat)} />
           ))}
         </ul>
 
@@ -287,7 +295,7 @@ function SettledCeremony() {
             <div className="reveal-folded-head eyebrow">Folded — forfeited pot share</div>
             <ul className="reveal-list">
               {folded.map((r) => (
-                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={0} record={recordFor(r.seat)} />
+                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={250} record={recordFor(r.seat)} />
               ))}
             </ul>
           </div>
@@ -299,8 +307,8 @@ function SettledCeremony() {
           rake <span className="mono">{formatChips(rake, token)} {token}</span>
         </div>
 
-        {story && <div className="ceremony-story">{story}</div>}
-        <div className={`ceremony-result ${won ? 'ceremony-result--win' : ''}`}>
+        {story && <div className="ceremony-story ceremony-late" style={{ animationDelay: `${verdictAt}ms` }}>{story}</div>}
+        <div className={`ceremony-result ceremony-late ${isWinner ? 'ceremony-result--win' : ''}`} style={{ animationDelay: `${verdictAt + 300}ms` }}>
           {!won
             ? amountsKnown ? 'No award this match' : 'Working out the payouts…'
             : isWinner

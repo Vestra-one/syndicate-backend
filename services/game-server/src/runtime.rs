@@ -239,7 +239,7 @@ impl Actor {
                 match (&self.runtime, self.row.live_start_ts) {
                     (Some(rt), Some(live_start)) => {
                         let live_ms = ts_ms(live_start);
-                        let street_close = rt.current_street_close_ms(live_ms);
+                        let street_close = self.fair_close_ms(rt, live_ms);
                         let turn = self.turn_deadline_ms(rt, live_ms).unwrap_or(u64::MAX);
                         street_close.min(turn).min(end)
                     }
@@ -265,6 +265,23 @@ impl Actor {
         ))
     }
 
+    /// When the current round stops taking bets. Normally the round's scheduled close —
+    /// but a player whose turn opened late in the round still gets `FAIR_TURN_MS` to act,
+    /// borrowed from the quiet gap before the next round (never from the last gap: bets
+    /// must stay shut while the price runs to settlement).
+    fn fair_close_ms(&self, rt: &FencedMatchRuntime, live_ms: u64) -> u64 {
+        const FAIR_TURN_MS: u64 = 12_000;
+        let close = rt.current_street_close_ms(live_ms);
+        let round = rt.engine().round;
+        if rt.engine().to_act.is_none() || round == 0 || round >= rt.config().round_count {
+            return close;
+        }
+        let street_start = live_ms + rt.street_start_offset_sec(round).saturating_mul(1_000);
+        let gap_end = live_ms + rt.street_end_offset_sec(round).saturating_mul(1_000);
+        let fair = self.turn_started_ms.max(street_start) + FAIR_TURN_MS;
+        close.max(fair.min(gap_end.saturating_sub(500)))
+    }
+
     fn turn_view(&self) -> Option<Value> {
         if self.row.status != "live" {
             return None;
@@ -274,7 +291,7 @@ impl Actor {
         let engine = rt.engine();
         let idx = engine.to_act?;
         let turn_deadline = self.turn_deadline_ms(rt, live_ms)?;
-        let street_close = rt.current_street_close_ms(live_ms);
+        let street_close = self.fair_close_ms(rt, live_ms);
         let scheduled_end = self.row.scheduled_end_ts.map(ts_ms).unwrap_or(u64::MAX);
         let deadline = turn_deadline.min(street_close).min(scheduled_end);
         Some(json!({
@@ -814,7 +831,7 @@ impl Actor {
             return;
         };
         // Street close: force-resolve outstanding turns.
-        let street_close = rt.current_street_close_ms(live_start);
+        let street_close = self.fair_close_ms(rt, live_start);
         if now >= street_close {
             let Some(rt) = self.runtime.as_mut() else {
                 return;
@@ -954,11 +971,20 @@ impl Actor {
         self.authorize_seat(intent.seat_index, &intent.wallet)
             .await?;
         let live_start = self.row.live_start_ts.map(ts_ms).unwrap_or(0);
+        let fair_close = self
+            .runtime
+            .as_ref()
+            .map(|rt| self.fair_close_ms(rt, live_start))
+            .unwrap_or(0);
         let rt = self
             .runtime
             .as_mut()
             .ok_or_else(|| ApiError::internal("engine not started"))?;
-        if !rt.betting_open(live_start, now_ms()) {
+        let now = now_ms();
+        let street_open = live_start
+            + rt.street_start_offset_sec(rt.engine().round.max(1))
+                .saturating_mul(1_000);
+        if !(rt.betting_open(live_start, now) || (now >= street_open && now < fair_close)) {
             return Err(ApiError::conflict(
                 "betting_closed",
                 "street is in observation",

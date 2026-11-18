@@ -48,6 +48,16 @@ export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
  * exists yet. Deterministic from the match id — the same table always presents
  * the same inviter name + emblem — and leaks no identity.
  */
+/**
+ * The one name a player goes by, everywhere: the table, the lobby, the boards, past hands.
+ * House bots always wear their table alias (never an internal handle); a person is the
+ * handle they chose, or their alias until they choose one.
+ */
+export function displayName(wallet: string, handle?: string | null): string {
+  if (handle && !isHouseBot(wallet)) return handle
+  return ALIASES[nameIndex(wallet)]
+}
+
 export function hostAlias(matchId: string): string {
   let h = 0
   for (let i = 0; i < matchId.length; i++) h = (Math.imul(h, 31) + matchId.charCodeAt(i)) >>> 0

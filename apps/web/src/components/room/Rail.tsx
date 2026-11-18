@@ -6,6 +6,7 @@ import { formatChips, formatSigned } from '@/lib/format'
 import { hostAlias } from '@/lib/seats'
 import { personaEmblem } from '@/components/hud/Seats'
 import type { LeaderboardPeriod } from '@/store/gameStore'
+import { displayName } from '@/lib/seats'
 
 function PersonaAvatar({ alias, large }: { alias: string; large?: boolean }) {
   const emblem = personaEmblem(alias)
@@ -142,7 +143,7 @@ export function LeaderboardPanel() {
         <div className="lb-empty">No settled hands yet {period === 'day' ? 'tonight' : ''} — the board fills in as tables settle.</div>
       ) : (
         entries.slice(0, 8).map((e) => {
-          const alias = e.handle ?? hostAlias(e.wallet)
+          const alias = displayName(e.wallet, e.handle)
           const up = e.net_chips >= 0
           return (
             <div className="lb-row" key={e.wallet}>

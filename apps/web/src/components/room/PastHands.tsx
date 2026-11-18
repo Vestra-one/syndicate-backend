@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips } from '@/lib/format'
-import { hostAlias } from '@/lib/seats'
+import { displayName } from '@/lib/seats'
 import { api, type MatchDetail } from '@/lib/api'
 import type { PastHand } from '@/lib/protocol'
 import { Coin, Sparkline, agoLabel } from './bits'
@@ -49,7 +49,7 @@ function PastCard({ hand }: { hand: PastHand }) {
   const [base, quote = 'USD'] = hand.feed.split('/')
   const isYours = !!walletAddress && hand.winner?.wallet === walletAddress
   const isVoided = hand.voidKind != null
-  const winnerName = hand.winner?.handle ?? (hand.winner ? hostAlias(hand.winner.wallet) : null)
+  const winnerName = hand.winner ? displayName(hand.winner.wallet, hand.winner.handle) : null
 
   const winnerPredictionWad = detail?.reveal?.predictions?.find((p) => p.wallet === hand.winner?.wallet)?.prediction_wad
   const margin = hand.settlementPriceWad && winnerPredictionWad
@@ -111,7 +111,7 @@ function PastCard({ hand }: { hand: PastHand }) {
             <>
               {detail.seats.map((s) => (
                 <div key={s.seat_index} className={`card-expand-row ${s.pot_won_chips ? 'winner' : ''}`}>
-                  <span className="who">{s.handle ?? `${s.wallet.slice(0, 4)}…${s.wallet.slice(-4)}`}</span>
+                  <span className="who">{displayName(s.wallet, s.handle)}</span>
                   <span className="pred">called {formatWad(s.prediction_wad)}</span>
                   <span className="payout mono">{s.payout_chips != null ? formatChips(s.payout_chips) : '—'} USDC</span>
                 </div>

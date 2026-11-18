@@ -5610,3 +5610,8 @@
 .leave-ask span { flex: 1; }
 .hud-mid { padding-top: 34px; } /* room for the ← Lobby button above the feed */
 .ceremony-story { margin: 10px 4px 2px; font-size: 14px; line-height: 1.45; color: var(--text, #f3ead2); text-align: center; font-style: italic; }
+/* The verdict waits for the last call to turn over. */
+.ceremony-late { opacity: 0; animation: reveal-pop 0.6s var(--ease) forwards; }
+.ceremony-card--win { border-color: var(--gold, #e7c873); box-shadow: 0 0 0 1px rgba(231, 200, 115, 0.35), 0 0 70px rgba(231, 200, 115, 0.22); }
+.ceremony-card--win .ceremony-result--win { font-size: 24px; }
+.reveal-row--win { animation-duration: 0.9s; }

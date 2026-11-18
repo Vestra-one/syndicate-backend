@@ -406,6 +406,33 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
   // All but one player folded and nobody is to act: betting is over for good —
   // "waiting for the next turn…" would be a lie. Say what actually happens next.
   const alive = seats?.filter((x) => !x.folded).length ?? 0
+  // Nobody has a decision left (everyone still in is all-in, or we are): nothing to arm.
+  // This is the sweat — say so, instead of offering buttons that cannot do anything.
+  const me = seats?.find((x) => x.seat === yourSeat)
+  const canAct = seats?.filter((x) => !x.folded && !x.allIn).length ?? 0
+  if (alive > 1 && (me?.allIn || canAct <= 1) && toActSeat == null) {
+    return (
+      <div className="betpanel panel">
+        <div className="betpanel-head">
+          <span className="panel-title">Showdown</span>
+          <span className="betpanel-locked eyebrow">{me?.allIn ? 'you are all in' : 'all the chips are in'}</span>
+        </div>
+        <p className="seal-note eyebrow">
+          No more betting. {alive} calls are still in — the closest to the price when the clock runs out takes the pot.
+        </p>
+      </div>
+    )
+  }
+  if (me?.folded && alive > 1) {
+    return (
+      <div className="betpanel panel">
+        <div className="betpanel-head">
+          <span className="panel-title">Live</span>
+          <span className="betpanel-locked eyebrow">you folded — {alive} still in</span>
+        </div>
+      </div>
+    )
+  }
   if (toActSeat == null && (seats?.length ?? 0) > 0 && alive <= 1) {
     return (
       <div className="betpanel panel">

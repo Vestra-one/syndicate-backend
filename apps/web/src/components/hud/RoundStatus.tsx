@@ -63,7 +63,10 @@ export function RoundStatus() {
   if (cur) {
     const bettingDone = match.round > round || now >= cur.close
     const next = schedule?.[cur.street + 1]
-    if (!bettingDone) clock = `betting closes in ${formatCountdown(cur.close - now)}`
+    // A turn that opened late in the round is allowed to finish past the scheduled close.
+    const lastTurn = match.round === round && now >= cur.close && match.toActSeat != null && now < cur.end
+    if (lastTurn) clock = 'last action of the round'
+    else if (!bettingDone) clock = `betting closes in ${formatCountdown(cur.close - now)}`
     else if (next) clock = `betting done · round ${round + 1} opens in ${formatCountdown(next.open - now)}`
     else clock = `betting done · price settles in ${formatCountdown(cur.end - now)}`
   } else if (match.phase === 'SEALING' && sealDeadline != null && sealDeadline > now) {

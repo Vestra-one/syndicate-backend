@@ -18,7 +18,7 @@ import type {
   UpcomingGame,
   VoidReason,
 } from '@/lib/protocol'
-import { DRAND, GATEWAY_PRICE_PHASES } from '@/lib/protocol'
+import { DRAND } from '@/lib/protocol'
 import type { ServerFrame, WsMatchState, WsAction, WsTurn } from '@/lib/realtime/wsTypes'
 import {
   actionIntentMessage,
@@ -1017,8 +1017,12 @@ export const useGameStore = create<GameState>((set, get) => ({
    * (which seeds the seal input) — alive; otherwise the Seal button stays disabled.
    */
   ingestLivePrice: (price, ts) => {
+    // The spot feed drives the chart in every phase of a hand. It used to step aside once
+    // the hand was LIVE in favour of the price riding on action frames — which only arrive
+    // when someone acts, so the "live" price sat still through every think, every gap and
+    // the whole run to settlement, then jumped. Only a finished hand stops the tape.
     const m = get().match
-    if (m && GATEWAY_PRICE_PHASES.includes(m.phase)) return
+    if (m && (m.phase === 'SETTLED' || m.phase === 'VOID')) return
     set((s) => ({ priceHistory: [...s.priceHistory, { price, ts }].slice(-MAX_HISTORY) }))
   },
 

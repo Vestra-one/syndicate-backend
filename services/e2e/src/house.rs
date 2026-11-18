@@ -193,6 +193,26 @@ pub async fn run(ctx: Ctx) {
         });
     }
 
+    // Tables people deal themselves never sit empty: a bot or two takes the open seats.
+    {
+        let (ctx, keys, house, running) =
+            (ctx.clone(), keys.clone(), house.clone(), running.clone());
+        tokio::spawn(async move {
+            loop {
+                let task = tokio::spawn(guest_tables(
+                    ctx.clone(),
+                    keys.clone(),
+                    house.clone(),
+                    running.clone(),
+                ));
+                if let Err(e) = task.await {
+                    println!("house: filling a player's table failed ({e}); retrying in 20s");
+                }
+                tokio::time::sleep(Duration::from_secs(20)).await;
+            }
+        });
+    }
+
     let mut failures: u32 = 0;
     loop {
         // One table per task: every helper below panics on an unexpected response, and a
@@ -395,6 +415,62 @@ async fn event_table(
 }
 
 /// Play a table to its end in the background, then collect.
+/// Watch the lobby for tables dealt by people. One that is about to close short of
+/// players — or whose host has sat alone for a minute — gets up to two bots, so "deal a
+/// table" always turns into a hand. Bots never crowd out people: they take only seats
+/// still empty at that point, and only at stakes the house is funded for.
+async fn guest_tables(
+    ctx: Arc<Ctx>,
+    keys: Arc<Vec<Keypair>>,
+    house: Arc<House>,
+    running: Arc<AtomicUsize>,
+) {
+    let bots = login(&ctx, &keys).await;
+    let ours: Vec<String> = bots.iter().map(|b| b.pubkey().to_string()).collect();
+    let mut joined: HashSet<String> = HashSet::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let lobby = get(&ctx, "/v1/lobby").await;
+        let now = lobby["server_time_ms"].as_u64().unwrap_or(0);
+        let Some(rooms) = lobby["rooms"].as_array() else {
+            continue;
+        };
+        for row in rooms {
+            let Some(match_id) = row["match_id"].as_str() else {
+                continue;
+            };
+            let creator = row["creator_wallet"].as_str().unwrap_or("");
+            if joined.contains(match_id) || ours.iter().any(|w| w == creator) {
+                continue;
+            }
+            let present = (row["confirmed"].as_u64().unwrap_or(0)
+                + row["candidates"].as_u64().unwrap_or(0)) as usize;
+            let max = row["max_players"].as_u64().unwrap_or(0) as usize;
+            let left_ms = row["fill_deadline"].as_u64().unwrap_or(0).saturating_sub(now);
+            let age_ms = now.saturating_sub(row["created_at"].as_u64().unwrap_or(now));
+            let closing = left_ms < 15_000;
+            let lonely = present <= 1 && age_ms > 60_000;
+            let affordable = row["buy_in"].as_u64().unwrap_or(u64::MAX) <= ctx.buy_in * 10;
+            if present == 0 || present >= max || left_ms < 5_000 || !(closing || lonely) || !affordable {
+                continue;
+            }
+            joined.insert(match_id.to_string());
+            let Some(onchain) = row["onchain_match_id"].as_u64() else {
+                continue;
+            };
+            let seats = (max - present).min(2).min(bots.len().saturating_sub(1));
+            println!("house: a player's table {match_id} is short — seating {seats} bot(s)");
+            let room = discover_public(&ctx, onchain).await;
+            futures_util::future::join_all(bots[1..=seats].iter().map(|bot| {
+                let (ctx, room) = (ctx.clone(), room.clone());
+                async move { deposit_and_confirm(&ctx, bot, &room).await }
+            }))
+            .await;
+            spawn_play(ctx.clone(), keys.clone(), house.clone(), running.clone(), room);
+        }
+    }
+}
+
 fn spawn_play(
     ctx: Arc<Ctx>,
     keys: Arc<Vec<Keypair>>,
@@ -710,8 +786,12 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     // Each bot has its own spread: the lead calls tight, the rest wider — all
                     // within what the market can plausibly cover in one hand, so they hold
                     // live calls worth defending instead of long shots they fold.
-                    let spread_bps = 3.0 + 3.5 * i as f64;
-                    let drift = (rng.unit() * 2.0 - 1.0) * spread_bps / 10_000.0;
+                    // …and each seals its own way, so they do not huddle on the market price
+                    // where one outside call beats all three: the first stays tight, the
+                    // second takes a side by a real margin, the third goes wide.
+                    let (lo, hi) = [(0.0, 3.0), (4.0, 9.0), (8.0, 15.0)][i % 3];
+                    let side = if rng.unit() < 0.5 { -1.0 } else { 1.0 };
+                    let drift = side * (lo + rng.unit() * (hi - lo)) / 10_000.0;
                     let call = (spot as f64 * (1.0 + drift)) as i128;
                     let target = timelock_target(room, &detail);
                     seal(ctx, bot, room, seat_index as u16, target, call).await;
@@ -841,11 +921,19 @@ async fn act_if_ours(
     // Each bot has a temperament — (how often it bets, how often it calls) relative to the
     // baseline — so the table is not three copies of one player: steady, wild, careful.
     const STYLES: [(f64, f64); 3] = [(1.0, 1.0), (1.4, 1.15), (0.6, 0.8)];
-    let style = STYLES[bots
+    let who = bots
         .iter()
         .position(|b| b.pubkey() == bot.pubkey())
-        .unwrap_or(0)
-        % STYLES.len()];
+        .unwrap_or(0);
+    let style = STYLES[who % STYLES.len()];
+    // A mood for this hand only (fixed by table + seat), so the same bot is not the same
+    // player every deal: some hands it sits back, some hands it comes out firing.
+    let mood = [0.55, 1.0, 1.6][(room
+        .match_id
+        .bytes()
+        .fold(who as u32 * 7, |a, b| a.wrapping_mul(31).wrapping_add(b as u32))
+        % 3) as usize];
+    let style = (style.0 * mood, style.1);
 
     // Read the bot's own hand: where is the market relative to what it sealed?
     let read = match (
