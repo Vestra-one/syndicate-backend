@@ -142,13 +142,30 @@ function SettledCeremony() {
   const isWinner = yourSeat != null && yourSeat === winnerSeat
 
   // Your run on this device: counted once per hand, shown under the result.
+  const seats = useGameStore((s) => s.match?.seats)
+  const walletOf = (seat: number) => seats?.find((x) => x.seat === seat)?.wallet ?? null
   const wallet = useGameStore((s) => s.walletAddress)
   const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
   useEffect(() => {
     if (yourSeat == null || !amountsKnown) return
-    setRun(recordHand(wallet, settlement.matchId, yourNet, isWinner))
+    // Head-to-head: against each rival still in the hand, who finished closer?
+    const mine = ranked.find((r) => r.seat === yourSeat)
+    const faced = ranked
+      .filter((r) => r.seat !== yourSeat && walletOf(r.seat))
+      .map((r) => ({
+        wallet: walletOf(r.seat)!,
+        beat: !!mine && !mine.folded && (r.folded || mine.dist < r.dist),
+      }))
+    setRun(recordHand(wallet, settlement.matchId, yourNet, isWinner, faced))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settlement.matchId, amountsKnown, yourSeat, wallet])
+
+  const recordFor = (seat: number): string | undefined => {
+    const w = walletOf(seat)
+    const r = w ? run.rivals?.[w] : undefined
+    if (seat === yourSeat || !r || r.w + r.l < 2) return undefined
+    return r.w > r.l ? `you lead ${r.w}–${r.l}` : r.w < r.l ? `leads you ${r.l}–${r.w}` : `level ${r.w}–${r.l}`
+  }
 
   const onClaim = async () => {
     setClaiming(true)
@@ -195,7 +212,7 @@ function SettledCeremony() {
 
         <ul className="reveal-list">
           {active.map((r, i) => (
-            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={i * 280 + 400} />
+            <RevealRow key={r.seat} r={r} rank={i + 1} winner={r.seat === winnerSeat} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={i * 280 + 400} record={recordFor(r.seat)} />
           ))}
         </ul>
 
@@ -204,7 +221,7 @@ function SettledCeremony() {
             <div className="reveal-folded-head eyebrow">Folded — forfeited pot share</div>
             <ul className="reveal-list">
               {folded.map((r) => (
-                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={0} />
+                <RevealRow key={r.seat} r={r} rank={null} winner={false} yourSeat={yourSeat} decimals={decimals} token={token} amountsKnown={amountsKnown} delay={0} record={recordFor(r.seat)} />
               ))}
             </ul>
           </div>
@@ -252,7 +269,7 @@ function signedChips(net: bigint, token: string): string {
 }
 
 function RevealRow({
-  r, rank, winner, yourSeat, decimals, token, amountsKnown, delay,
+  r, rank, winner, yourSeat, decimals, token, amountsKnown, delay, record,
 }: {
   r: RankedRow
   rank: number | null
@@ -262,6 +279,7 @@ function RevealRow({
   token: string
   amountsKnown: boolean
   delay: number
+  record?: string
 }) {
   const predFloat = r.prediction / 10 ** decimals
   return (
@@ -272,7 +290,7 @@ function RevealRow({
       <span className="reveal-rank mono reveal-col-rank">{winner ? '♛' : rank ?? '—'}</span>
       <span className="reveal-name reveal-col-name">
         {seatAlias(r.seat, yourSeat)}
-        
+        {record && <small className="reveal-record">{record}</small>}
       </span>
       <span className="reveal-pred mono reveal-col-pred">{formatPrice(predFloat)}</span>
       <span className={`reveal-dist mono reveal-col-dist reveal-dist--${r.dir}`}>

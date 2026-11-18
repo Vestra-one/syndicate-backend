@@ -124,6 +124,7 @@ export type ServerFrame =
       scheduled_end?: number | null
       button?: number | null
     })
+  | (Base & { t: 'emote'; match_id: string; seat_index: number; emote: string })
   | (Base & {
       t: 'seal_status'
       match_id: string
@@ -174,6 +175,8 @@ export type ClientFrame =
   /** `last_seq: -1` (or omitted) backfills the whole journal incl. genesis; N → events after N. */
   | { t: 'subscribe'; channel: Channel; last_seq?: number }
   | { t: 'unsubscribe'; channel: Channel }
+  /** Table talk: one of the fixed reactions (see `EMOTES`). */
+  | { t: 'emote'; match_id: string; emote: string }
   | { t: 'ping' }
   | {
       t: 'act'

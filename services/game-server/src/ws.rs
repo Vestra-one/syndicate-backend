@@ -57,6 +57,11 @@ enum ClientMsg {
         action: Value,
         signature: String,
     },
+    /// Table talk: one of a fixed set of reactions, from a seated player to the table.
+    Emote {
+        match_id: Uuid,
+        emote: String,
+    },
     SetDefault {
         match_id: Uuid,
         seat_index: u16,
@@ -199,6 +204,22 @@ impl Conn {
             } => {
                 self.set_default(match_id, seat_index, policy, signature)
                     .await
+            }
+            ClientMsg::Emote { match_id, emote } => {
+                let Some(wallet) = self.current_wallet() else {
+                    return self.error("unauthorized", "auth required").await;
+                };
+                if !crate::runtime::EMOTES.contains(&emote.as_str()) {
+                    return self.error("bad_frame", "unknown emote").await;
+                }
+                if self.st.limits.check_actions(&wallet).is_err() {
+                    return self.error("rate_limited", "slow down").await;
+                }
+                // Not seated / not started yet: dropped silently, there is nobody to tell.
+                self.st
+                    .registry
+                    .send(&match_id, Cmd::Emote { wallet, emote })
+                    .await;
             }
             ClientMsg::Seal {
                 match_id,

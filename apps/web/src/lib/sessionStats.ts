@@ -10,6 +10,8 @@ export interface SessionStats {
   bestStreak: number
   /** Matches already counted, newest last (bounded). */
   seen: string[]
+  /** Head-to-head by rival wallet: hands where you finished closer (w) or they did (l). */
+  rivals?: Record<string, { w: number; l: number }>
 }
 
 const KEY = 'st-run-v1'
@@ -26,16 +28,28 @@ export function readStats(wallet: string | null): SessionStats {
 }
 
 /** Count a finished hand once. Returns the updated run. */
-export function recordHand(wallet: string | null, matchId: string, net: bigint, won: boolean): SessionStats {
+export function recordHand(
+  wallet: string | null,
+  matchId: string,
+  net: bigint,
+  won: boolean,
+  faced: { wallet: string; beat: boolean }[] = [],
+): SessionStats {
   const cur = readStats(wallet)
   if (!wallet || cur.seen.includes(matchId)) return cur
   const streak = won ? cur.streak + 1 : 0
+  const rivals = { ...(cur.rivals ?? {}) }
+  for (const f of faced) {
+    const r = rivals[f.wallet] ?? { w: 0, l: 0 }
+    rivals[f.wallet] = f.beat ? { w: r.w + 1, l: r.l } : { w: r.w, l: r.l + 1 }
+  }
   const next: SessionStats = {
     hands: cur.hands + 1,
     net: (BigInt(cur.net) + net).toString(),
     streak,
     bestStreak: Math.max(cur.bestStreak, streak),
     seen: [...cur.seen, matchId].slice(-50),
+    rivals,
   }
   try {
     localStorage.setItem(`${KEY}:${wallet}`, JSON.stringify(next))

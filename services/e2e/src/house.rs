@@ -815,6 +815,25 @@ async fn act_if_ours(
             bot.name,
             err["code"].as_str().unwrap_or("?")
         );
+    } else {
+        // A little table talk, so a hand against the house does not play out in silence.
+        let say = if tag == ACTION_TAG_FOLD && rng.unit() < 0.5 {
+            Some("nice")
+        } else if (tag == ACTION_TAG_BET_TO || tag == ACTION_TAG_RAISE_TO) && rng.unit() < 0.3 {
+            Some(if read == Read::InRange {
+                "sweat"
+            } else {
+                "bluff"
+            })
+        } else if tag == ACTION_TAG_CALL && rng.unit() < 0.12 {
+            Some("wow")
+        } else {
+            None
+        };
+        if let Some(emote) = say {
+            let talk = json!({ "t": "emote", "match_id": room.match_id, "emote": emote });
+            let _ = ws_send_and_recv(ctx, &bot.kp, &talk).await;
+        }
     }
     tokio::time::sleep(Duration::from_millis(400)).await;
 }

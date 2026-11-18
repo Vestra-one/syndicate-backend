@@ -375,3 +375,10 @@ otherwise `null`. `POST /v1/faucet` (session-authed, no body) sends the signed-i
 that many chips plus a little SOL for fees if it is low, and answers once the transfer is
 confirmed: `{ ok, chips, lamports, signature }`. One grant per wallet per cooldown (429).
 
+## Table talk
+
+A seated, authenticated socket may send `{ "t": "emote", "match_id", "emote" }` where
+`emote` is one of `gg | nice | bluff | sweat | lol | wow`. The table receives
+`{ "t": "emote", "match_id", "seat_index", "emote" }`. One per seat every two seconds;
+anything else is dropped silently. There is no free text.
+

@@ -1,3 +1,4 @@
+import { TableTalk } from '@/components/hud/TableTalk'
 import { SoundCues } from '@/components/hud/SoundCues'
 import { useState, useEffect } from 'react'
 import { Brand } from './Brand'
@@ -106,6 +107,7 @@ export function Hud() {
   return (
     <div className="hud">
       <SoundCues />
+      {inMatch && <TableTalk />}
       {inMatch && <Seats />}
       {inMatch && <TurnBanner />}
 

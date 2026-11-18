@@ -5498,3 +5498,15 @@
 .test-chips--compact { margin: 0 0 8px; }
 .ceremony-run { margin: 8px 0 12px; text-align: center; color: var(--text-dim); }
 .position-row { flex-wrap: wrap; row-gap: 2px; }
+
+/* Table talk */
+.table-talk { position: absolute; right: 16px; top: 96px; width: 248px; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; z-index: 5; }
+.table-talk-lines { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+.table-talk-line { padding: 6px 10px; border-radius: 10px; background: rgba(20, 16, 10, 0.82); border: 1px solid rgba(231, 200, 115, 0.22); font-size: 13px; color: var(--text, #f3ead2); animation: talk-in 220ms ease-out; }
+.table-talk-line b { color: var(--gold, #e7c873); font-weight: 600; margin-right: 4px; }
+.table-talk-line--you { border-color: rgba(255, 255, 255, 0.18); }
+.table-talk-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+.table-talk-btn { padding: 5px 9px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(12, 10, 8, 0.7); color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; }
+.table-talk-btn:hover { color: var(--text, #f3ead2); border-color: rgba(231, 200, 115, 0.5); }
+@keyframes talk-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.reveal-record { display: block; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }

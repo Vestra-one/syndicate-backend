@@ -10,6 +10,8 @@ export function SoundCues() {
   const settlement = useGameStore((s) => s.settlement)
   const yourSeat = useGameStore((s) => s.match?.yourSeat)
   const prevFeed = useRef(feedLen)
+  const talkAt = useGameStore((s) => s.talk.at(-1)?.at ?? 0)
+  useEffect(() => { if (talkAt) playCue('chip') }, [talkAt])
 
   useEffect(() => { if (myTurn) playCue('turn') }, [myTurn])
   useEffect(() => { if (sealed) playCue('seal') }, [sealed])

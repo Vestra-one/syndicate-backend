@@ -110,6 +110,7 @@ impl Registry {
             turn_started_ms: now_ms(),
             last_fill_broadcast_confirmed: None,
             seat_wallets: HashMap::new(),
+            last_emote: HashMap::new(),
         };
         tokio::spawn(actor.run());
         handle
@@ -126,6 +127,10 @@ impl Registry {
 // ---------------------------------------------------------------------------------
 // Commands + chain events
 // ---------------------------------------------------------------------------------
+
+/// The reactions a seated player can send to the table. A fixed set: no free text, so
+/// there is nothing to moderate.
+pub const EMOTES: &[&str] = &["gg", "nice", "bluff", "sweat", "lol", "wow"];
 
 pub enum Cmd {
     /// A seat candidacy changed (verifier); re-evaluate fill/lock.
@@ -145,6 +150,8 @@ pub enum Cmd {
     Sealed { seat_index: u8 },
     /// The wallet (re)granted a session key for this match — swap it into the runtime.
     SessionKey { wallet: String, key: [u8; 32] },
+    /// Table talk from a seated wallet (one of [`EMOTES`]).
+    Emote { wallet: String, emote: String },
     /// Full state view (WS snapshot).
     Snapshot(oneshot::Sender<Value>),
     /// Cheap in-memory pot/round read for list rows — no DB queries, unlike `Snapshot`
@@ -187,6 +194,7 @@ struct Actor {
     /// frame is checked against it: a valid signature only proves WHO signed, not that
     /// the signer owns the seat it names.
     seat_wallets: HashMap<usize, String>,
+    last_emote: HashMap<usize, std::time::Instant>,
 }
 
 impl Actor {
@@ -331,6 +339,37 @@ impl Actor {
             Cmd::Chain(event, row) => self.on_chain_event(event, *row).await,
             Cmd::Sealed { seat_index } => {
                 self.broadcast(self.seal_status_frame(Some(seat_index)).await);
+            }
+            Cmd::Emote { wallet, emote } => {
+                if self.seat_wallets.is_empty() {
+                    if let Ok(seats) = self.seats().await {
+                        self.seat_wallets = seats
+                            .into_iter()
+                            .map(|s| (s.engine_seat as usize, s.wallet))
+                            .collect();
+                    }
+                }
+                let seat = self
+                    .seat_wallets
+                    .iter()
+                    .find(|(_, w)| **w == wallet)
+                    .map(|(seat, _)| *seat);
+                // One reaction per seat every two seconds keeps the table readable.
+                let now = std::time::Instant::now();
+                let fresh = seat.is_some_and(|s| {
+                    self.last_emote
+                        .get(&s)
+                        .is_none_or(|at| now.duration_since(*at).as_millis() >= 2_000)
+                });
+                if let (Some(seat), true) = (seat, fresh) {
+                    self.last_emote.insert(seat, now);
+                    self.broadcast(json!({
+                        "t": "emote",
+                        "match_id": self.row.id.to_string(),
+                        "seat_index": seat,
+                        "emote": emote,
+                    }));
+                }
             }
             Cmd::SessionKey { wallet, key } => {
                 let seat = self

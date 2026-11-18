@@ -3,19 +3,44 @@ import { formatChips } from '@/lib/format'
 import { isHouseBot } from '@/lib/houseBots'
 
 /**
- * Pseudonymous, seat-indexed aliases. The protocol never exposes opponent
- * wallets (§8) — only the seat index — so we derive a stable, characterful
- * table name from the seat. Deterministic: no identity is leaked.
+ * Pseudonymous table names. A name follows the player's wallet, so the same rival reads as
+ * the same name hand after hand — that is what lets a rivalry build — while the wallet
+ * itself is never shown. Two players who would share a name at one table get the next one.
  *
- * 'You' is intentionally NOT in this list — your own seat resolves via the
- * `yourSeat` check, and every other seat must always read as an opponent
- * (seat indices are engine-assigned, so any seat can be an opponent).
+ * 'You' is intentionally NOT in this list — your own seat resolves via `yourSeat`.
  */
-const ALIASES = ['The Banker', 'The Duchess', 'The Cardinal', 'The Stranger', 'The Marquis', 'The Chancellor']
+const ALIASES = [
+  'The Banker', 'The Duchess', 'The Cardinal', 'The Stranger', 'The Marquis', 'The Chancellor',
+  'The Admiral', 'The Countess', 'The Magistrate', 'The Envoy', 'The Baron', 'The Abbess',
+  'The Captain', 'The Viscount', 'The Oracle', 'The Consul', 'The Regent', 'The Courier',
+  'The Jeweller', 'The Advocate', 'The Navigator', 'The Governess', 'The Alchemist', 'The Warden',
+]
+
+/** seat → alias for the table on screen (rebuilt whenever the seats change). */
+let tableNames = new Map<number, string>()
+
+function nameIndex(wallet: string): number {
+  let h = 0
+  for (let i = 0; i < wallet.length; i++) h = (h * 31 + wallet.charCodeAt(i)) >>> 0
+  return h % ALIASES.length
+}
+
+export function setSeatWallets(seats: { seat: number; wallet?: string | null }[]): void {
+  const next = new Map<number, string>()
+  const taken = new Set<string>()
+  for (const s of [...seats].sort((x, y) => x.seat - y.seat)) {
+    if (!s.wallet) continue
+    let i = nameIndex(s.wallet)
+    while (taken.has(ALIASES[i])) i = (i + 1) % ALIASES.length
+    taken.add(ALIASES[i])
+    next.set(s.seat, ALIASES[i])
+  }
+  tableNames = next
+}
 
 export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
   if (seat === yourSeat) return 'You'
-  return ALIASES[seat] ?? `Seat ${seat + 1}`
+  return tableNames.get(seat) ?? ALIASES[seat % ALIASES.length] ?? `Seat ${seat + 1}`
 }
 
 /**

@@ -410,6 +410,11 @@ async function houseHand(browser) {
       log(`     visitor (seat ${s.yourSeat}) → ${action.type}  [round ${s.round}, to_call ${s.yourTurn.toCall}]`)
       await act(me, action)
       actions++
+      if (actions === 1) {
+        await me.page.evaluate(() => window.__gameStore.getState().sendEmote('nice'))
+        await waitFor(me, 'table talk: my reaction came back from the table', () => window.__gameStore.getState().talk.some((t) => t.emote === 'nice'), 15_000)
+        await sleep(300); await shot(me, 'h4b-table-talk')
+      }
     }
     await sleep(700)
   }

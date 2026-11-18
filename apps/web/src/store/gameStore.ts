@@ -33,6 +33,7 @@ import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
 import { isHouseBot, setHouseBots } from '@/lib/houseBots'
+import { setSeatWallets } from '@/lib/seats'
 import { log } from '@/lib/log'
 import {
   loadSessionKey,
@@ -189,6 +190,10 @@ interface GameState {
   /** Full-screen BTC/USD analysis chart, launched from the cabinet's brass chart button. */
   priceChartOpen: boolean
   feed: PublicEvent[]
+  /** Table talk, newest last (bounded). */
+  talk: { seat: number; emote: string; at: number }[]
+  /** Send a reaction to the table (seated players only). */
+  sendEmote: (emote: string) => Promise<void>
 
   settlement: SettlementView | null
   voided: { reason: VoidReason } | null
@@ -413,6 +418,7 @@ let activeMatchId: string | null = null
  *  one, so nothing from the last hand (result screen, seal state, feed) leaks into it. */
 const FRESH_TABLE = {
   match: null,
+  talk: [] as { seat: number; emote: string; at: number }[],
   yourTurn: null,
   actPending: null,
   sealStatus: 'unsealed',
@@ -898,6 +904,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   status: 'offline',
   walletAddress: null,
   chipBalance: null,
+  talk: [],
   faucet: null,
   faucetBusy: false,
   faucetNote: null,
@@ -1753,6 +1760,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   /** Leave the finished match and matchmake into a fresh one — no page refresh.
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
+  sendEmote: async (emote) => {
+    const matchId = get().match?.matchId
+    if (!matchId || get().match?.yourSeat == null) return
+    if (!(await ensureActionSocket(get, matchId))) return
+    gateway?.send({ t: 'emote', match_id: matchId, emote })
+  },
+
   getTestChips: async () => {
     if (!adapters) adapters = createAdapters()
     const wallet = get().walletAddress ?? adapters.wallet.address()
@@ -2142,6 +2156,11 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       break
     }
 
+    case 'emote': {
+      if (frame.match_id !== activeMatchId) return
+      set((s) => ({ talk: [...s.talk, { seat: frame.seat_index, emote: frame.emote, at: Date.now() }].slice(-6) }))
+      return
+    }
     case 'seal_status': {
       // `sealed`/`just_sealed` list engine seats — recognising our own covers the reload
       // case where the latch was lost (the plaintext is gone, but re-sealing would 409).
@@ -2720,3 +2739,8 @@ async function refreshBalance(set: SetState, force = false) {
   })()
   return balanceInFlight
 }
+
+// Seat aliases follow the wallet, so the same player reads as the same name hand after hand.
+useGameStore.subscribe((s, prev) => {
+  if (s.match?.seats !== prev.match?.seats) setSeatWallets(s.match?.seats ?? [])
+})
