@@ -123,7 +123,7 @@ function flatSeat(angleDeg: number): ScreenPoint {
   // Opponents sit at 42°…78° a side: the outer pair at the table's shoulders, the inner
   // pair (and a lone opponent) either side of the chart's top edge.
   if (a >= 72) return flatAt(0.5 + side * 0.4, 0.38)
-  return flatAt(0.5 + side * 0.24, 0.19)
+  return flatAt(0.5 + side * 0.23, 0.19)
 }
 
 const _v = new THREE.Vector3()
