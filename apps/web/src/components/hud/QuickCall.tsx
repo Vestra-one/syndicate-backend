@@ -21,6 +21,7 @@ export function QuickCall() {
   const price = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
   const phase = useGameStore((s) => s.match?.phase)
   const seated = useGameStore((s) => s.match?.yourSeat != null || s.seated)
+  const sealed = useGameStore((s) => s.sealStatus === 'sealed' || s.sealClosed)
   const myTurn = useGameStore((s) => s.yourTurn != null)
   const settled = useGameStore((s) => s.settlement != null || s.voided != null)
   const now = useNow(250)
@@ -63,7 +64,9 @@ export function QuickCall() {
     if (outcome && now >= outcome.until) setOutcome(null)
   }, [now, outcome])
 
-  const waiting = seated && !settled && (phase === 'FILLING' || phase === 'SEALING' || phase === 'LIVE')
+  // A filler for dead time only. Never while the table is filling or before your own call
+  // is sealed: that window is short, and a side game there costs people their prediction.
+  const waiting = seated && !settled && (phase === 'LIVE' || (phase === 'SEALING' && sealed))
   if (!waiting || price == null) return null
   // Your turn comes first: an open call keeps running, but nothing new is offered.
   if (myTurn && !pick && !outcome) return null

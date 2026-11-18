@@ -15,6 +15,12 @@ import { PRICE_RANGES, RANGE_WINDOW_MS, type PriceRange } from '@/lib/priceRange
  *
  * Local space: origin centred on the cabinet front face, +y up, front toward +z.
  */
+/** The market printed on the board's header — the table's own, not always BTC. */
+let boardFeed = 'BTC / USD'
+export function setBoardFeed(feedId: string): void {
+  boardFeed = feedId.replace('/', ' / ')
+}
+
 export interface PriceBoardHandle {
   group: THREE.Group
   update: (t: number) => void
@@ -535,11 +541,11 @@ export function createPriceBoard(): PriceBoardHandle {
     cx.textAlign = 'left'
     cx.fillStyle = dim
     cx.font = `600 13px ${SERIF}`
-    tracked('BTC / USD', gx0 + 2, HEAD_Y, '4px')
+    tracked(boardFeed, gx0 + 2, HEAD_Y, '4px')
     // measureText() doesn't account for tracked()'s letterSpacing, so pad the
     // measured width by the ~4px/glyph gap it actually renders with (8 gaps
     // across 9 characters) — otherwise the price creeps in and overlaps the "D".
-    const priceX = gx0 + 2 + cx.measureText('BTC / USD').width + 4 * 8 + 20
+    const priceX = gx0 + 2 + cx.measureText(boardFeed).width + 4 * 8 + 20
 
     // hero price (tabular) + change chip, relative to `first` — the trailing
     // window's opening sample (or the round/wait anchor's opening sample).

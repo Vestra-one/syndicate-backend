@@ -15,6 +15,11 @@ export function hasHouseBots(): boolean {
   return bots.size > 0
 }
 
+/** Every house bot wallet (for names that must never collide with a person's). */
+export function houseBotWallets(): string[] {
+  return [...bots]
+}
+
 export function isHouseBot(wallet?: string | null): boolean {
   return wallet != null && bots.has(wallet)
 }

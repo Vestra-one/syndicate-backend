@@ -5615,3 +5615,11 @@
 .ceremony-card--win { border-color: var(--gold, #e7c873); box-shadow: 0 0 0 1px rgba(231, 200, 115, 0.35), 0 0 70px rgba(231, 200, 115, 0.22); }
 .ceremony-card--win .ceremony-result--win { font-size: 24px; }
 .reveal-row--win { animation-duration: 0.9s; }
+/* Calls on the chart at settlement */
+.flat-reveal { stroke: rgba(243, 234, 210, 0.55); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.flat-reveal--you { stroke: var(--gold, #e7c873); stroke-dasharray: 6 4; }
+.flat-settle { stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.flat-reveal-labels { position: absolute; left: 16px; right: 16px; top: 52px; bottom: 28px; pointer-events: none; }
+.flat-reveal-label { position: absolute; left: 6px; transform: translateY(-110%); font-size: 10.5px; letter-spacing: 0.04em; color: rgba(243, 234, 210, 0.8); white-space: nowrap; }
+.flat-reveal-label--you { color: var(--gold, #e7c873); }
+.flat-reveal-label--settle { left: auto; right: 6px; color: #fff; font-weight: 600; }

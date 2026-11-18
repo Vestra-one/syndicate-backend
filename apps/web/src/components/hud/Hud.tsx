@@ -17,7 +17,6 @@ import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
 import { explorerTxUrl } from '@/lib/network'
 import './hud.css'
-import { formatChips } from '@/lib/format'
 import { hasHouseBots } from '@/lib/houseBots'
 import { isGuestWallet } from '@/lib/guestWallet'
 
@@ -83,8 +82,6 @@ function EarlyExit() {
     if (live.length === 1 && live[0].seat === m.yourSeat && m.seats.length > 1) return 'won'
     return null
   })
-  const pot = useGameStore((s) => s.match?.pot ?? 0n)
-  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
   const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
   const moveOn = useGameStore((s) => s.moveOn)
   const [stay, setStay] = useState<string | null>(null)
@@ -93,7 +90,7 @@ function EarlyExit() {
   return (
     <div className={`early-exit panel early-exit--${state}`} role="status">
       <div className="early-exit-title">
-        {state === 'won' ? `Everyone folded — the ${formatChips(pot)} ${token} pot is yours` : 'You folded this one'}
+        {state === 'won' ? 'Everyone folded — the pot is yours' : 'You folded this one'}
       </div>
       <div className="early-exit-sub">
         {state === 'won'
@@ -139,6 +136,7 @@ function LeaveButton() {
 function TxBanner() {
   const lastTx = useGameStore((s) => s.lastTx)
   const resultUp = useGameStore((s) => (s.settlement != null || s.voided != null) && !s.reviewing)
+  const atTable = useGameStore((s) => s.view === 'table')
   const [dismissed, setDismissed] = useState(false)
 
   // Reset dismissed when a new tx comes in, then auto-dismiss after 10s so the
@@ -151,7 +149,8 @@ function TxBanner() {
   }, [lastTx])
 
   // The result card says "Claimed ✓" itself; a banner on top of it only covers the buttons.
-  if (!lastTx || dismissed || resultUp) return null
+  // …and at the table the seat ceremony has already said the deposit landed.
+  if (!lastTx || dismissed || resultUp || (atTable && lastTx.label.startsWith('Deposit'))) return null
 
   const explorerUrl = explorerTxUrl(lastTx.sig)
 

@@ -7,6 +7,7 @@ import { useAnchor } from '@/lib/useAnchor'
 import { projectPot, projectSeatAngle, seatFanAngles } from '@/three/table/tableView'
 import type { MatchStateView, PublicEvent, SeatView } from '@/lib/protocol'
 import { SeatPod, type StatusTone } from './SeatPod'
+import { useRoundGate } from '@/components/hud/useRoundGate'
 
 /**
  * Players seated around the table's OUTER RING, plus the pot at the centre of
@@ -164,8 +165,11 @@ function OpponentPod({
   const ref = useAnchor(useCallback(() => projectSeatAngle(angle), [angle]), { clampMargin: 12 })
   const now = useNow(500)
   const alias = seatAlias(seat.seat, match.yourSeat)
-  const status = podStatus(seat, match, feed, token)
-  const active = match.toActSeat === seat.seat && !seat.folded
+  // First to act next round, before that round has opened, is waiting like everyone else.
+  const gate = useRoundGate()
+  const upNext = match.toActSeat === seat.seat && !gate.open
+  const status = upNext ? { text: 'First to act next round', tone: 'idle' as StatusTone } : podStatus(seat, match, feed, token)
+  const active = match.toActSeat === seat.seat && !seat.folded && !upNext
   const sigil = SIGILS[alias]
 
   // A check moves no money, so it needs its own visible beat: flash CHECK on

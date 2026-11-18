@@ -789,7 +789,10 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     // …and each seals its own way, so they do not huddle on the market price
                     // where one outside call beats all three: the first stays tight, the
                     // second takes a side by a real margin, the third goes wide.
-                    let (lo, hi) = [(0.0, 3.0), (4.0, 9.0), (8.0, 15.0)][i % 3];
+                    // Which bot plays which style rotates by table, so no one bot is always
+                    // the one sitting on the market (and winning every showdown).
+                    let turn = room.match_id.bytes().fold(0usize, |a, b| a + b as usize);
+                    let (lo, hi) = [(0.0, 3.0), (4.0, 9.0), (8.0, 15.0)][(i + turn) % 3];
                     let side = if rng.unit() < 0.5 { -1.0 } else { 1.0 };
                     let drift = side * (lo + rng.unit() * (hi - lo)) / 10_000.0;
                     let call = (spot as f64 * (1.0 + drift)) as i128;
@@ -965,7 +968,11 @@ async fn act_if_ours(
     let call = (ACTION_TAG_CALL, 0, json!("call"));
     let check = (ACTION_TAG_CHECK, 0, json!("check"));
     // Bets are about half the pot, never below the minimum and never beyond the stack.
-    let raise_to = min_raise_to.max(current_bet + pot / 2).min(max_total);
+    // …sized like a person would: a probe, half the pot, most of it, or all of it.
+    let frac = [0.33, 0.5, 0.5, 0.75, 1.0][(rng.unit() * 5.0) as usize % 5];
+    let raise_to = min_raise_to
+        .max(current_bet + (pot as f64 * frac) as u64)
+        .min(max_total);
     let raise = if current_bet > 0 {
         (
             ACTION_TAG_RAISE_TO,
@@ -999,9 +1006,9 @@ async fn act_if_ours(
         let (raise_freq, call_freq) = match read {
             Read::InRange => (0.25, 1.0),
             Read::NeedsMove if fair => (0.05, 0.75),
-            Read::NeedsMove => (0.0, 0.30),
+            Read::NeedsMove => (0.04, 0.45),
             Read::LongShot if cheap => (0.03, 0.45),
-            Read::LongShot => (0.03, 0.10),
+            Read::LongShot => (0.05, 0.20),
             Read::Blind if fair => (0.05, 0.80),
             Read::Blind => (0.0, 0.40),
         };

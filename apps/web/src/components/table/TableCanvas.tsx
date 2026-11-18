@@ -8,6 +8,7 @@ import type { MatchStateView } from '@/lib/protocol'
 import { fallbackLite, useLite } from '@/lib/liteMode'
 import { setFlatTableView } from '@/three/table/tableView'
 import { FlatTable } from './FlatTable'
+import { setBoardFeed } from '@/three/table/priceBoard'
 
 /**
  * Snapshot the live seat state into the shape the 3D chip system consumes:
@@ -47,6 +48,8 @@ export function TableCanvas({ pot, spin = false }: { pot?: number; spin?: boolea
   // Lite mode: no 3D scene at all on machines that cannot carry it (the showpiece landing
   // page keeps its table — nothing there depends on the page staying responsive).
   const lite = useLite() && pot === undefined
+  const feedId = useGameStore((st) => st.terms?.priceFeedId ?? 'BTC/USD')
+  useEffect(() => { setBoardFeed(feedId) }, [feedId])
 
   useEffect(() => {
     setFlatTableView(lite)

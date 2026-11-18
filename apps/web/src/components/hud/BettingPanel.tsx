@@ -28,6 +28,7 @@ export function BettingPanel() {
   const sealClosed = useGameStore((s) => s.sealClosed)
   const queued = useGameStore((s) => s.queuedPrediction)
   const yourTurn = useGameStore((s) => s.yourTurn)
+  const over = useGameStore((s) => s.settlement != null || s.voided != null)
   const act = useGameStore((s) => s.act)
   const { active: waiting } = useWaiting()
   const gate = useRoundGate()
@@ -41,7 +42,8 @@ export function BettingPanel() {
     if (!yourTurn || !armed || !gate.open) return
     if (firedFor.current === yourTurn.deadline) return
     firedFor.current = yourTurn.deadline
-    if (armed === 'fold') act({ type: 'fold' })
+    // An armed fold never throws away a free look: with nothing to call it checks.
+    if (armed === 'fold') act(yourTurn.toCall === 0 ? { type: 'check' } : { type: 'fold' })
     else act(yourTurn.toCall === 0 ? { type: 'check' } : { type: 'call' })
     setArmed(null)
   }, [yourTurn, armed, act, gate.open])
@@ -49,6 +51,8 @@ export function BettingPanel() {
   const phase = match?.phase
 
   // Pre-game you may lock in your prediction early; once sealed, a calm "you're set" state.
+  // The hand is over: the "match over" bar owns this spot.
+  if (over) return null
   if (phase === 'SEALING' || waiting) {
     if (sealStatus === 'sealed') return <SealedWaitingPanel />
     if (phase === 'SEALING' && sealClosed) return <SealClosedPanel />
@@ -466,7 +470,7 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
               className={`prearm-btn prearm-fold ${armed === 'fold' ? 'prearm-btn--on' : ''}`}
               onClick={() => toggle('fold')}
             >
-              Fold
+              Check / Fold
             </button>
             <button
               className={`prearm-btn prearm-call ${armed === 'check_call' ? 'prearm-btn--on' : ''}`}

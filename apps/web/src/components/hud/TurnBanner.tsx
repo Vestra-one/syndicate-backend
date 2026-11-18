@@ -57,6 +57,19 @@ export function TurnBanner() {
   }
 
   if (toAct == null) return null // between streets and not your turn — nobody to name
+  // Someone is first to act in the NEXT round, but its window has not opened: nobody is
+  // stalling — the round is over and the price is running. Say that.
+  if (!gate.open && gate.opensAt != null) {
+    return (
+      <div className="turn-banner" role="status" aria-live="polite">
+        <span className="turn-banner-label">Round {Math.max(1, gate.round - 1)} is done</span>
+        <span className="turn-banner-sub">
+          watch the price · round {gate.round} opens
+          <span aria-hidden="true">{` in ${Math.ceil(Math.max(0, gate.opensAt - now) / 1000)}s`}</span>
+        </span>
+      </div>
+    )
+  }
 
   const folded = match.seats.find((s) => s.seat === yourSeat)?.folded
   const alias = seatAlias(toAct, yourSeat)

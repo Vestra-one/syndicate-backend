@@ -71,11 +71,15 @@ function Game() {
     if (inv) useGameStore.setState({ pendingInvite: inv.matchId, inviteFrom: inv.inviter })
   }, [])
 
-  // Stream live BTC/USD ticks into the cabinet chart (keeps it alive pre-match).
+  // Stream live ticks for the market of the table in view (BTC/USD in the lobby). A table
+  // on another market must show ITS price everywhere — and none of the last market's
+  // history may leak into the chart, the seal box or the "typical move".
+  const feedId = useGameStore((s) => s.terms?.priceFeedId ?? 'BTC/USD')
   useEffect(() => {
-    const feed = startPriceFeed('BTCUSD', useGameStore.getState().ingestLivePrice)
+    useGameStore.setState({ priceHistory: [] })
+    const feed = startPriceFeed(feedId.replace('/', '').toUpperCase(), useGameStore.getState().ingestLivePrice)
     return () => feed.stop()
-  }, [])
+  }, [feedId])
 
   // DEV-only: expose the store for headless/console iteration, e.g.
   //   window.__gameStore.setState({ priceHistory: [...] })

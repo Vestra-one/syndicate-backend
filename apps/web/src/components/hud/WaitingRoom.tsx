@@ -10,6 +10,7 @@ import { seatAlias, seatTag, describeEvent, hostAlias } from '@/lib/seats'
 import { SeatPod } from './SeatPod'
 import { personaEmblem } from './Seats'
 import { ReclaimCard } from './ReclaimCard'
+import { isHouseBot, isScheduledTable } from '@/lib/houseBots'
 
 /**
  * The pre-game "table filling" experience (§4→§5 handoff). Once you're seated
@@ -278,12 +279,13 @@ function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; ma
 
   // The one status line: FILLING waits for players; COUNTDOWN counts down but
   // notes more can still join; the last 10s escalate to a hard "dealing" beat.
+  const houseTable = useGameStore((st) => { const id = st.match?.matchId; const oc = st.terms?.onchainMatchId; const g = st.upcomingGames.find((x) => (id != null && x.matchId === id) || (oc != null && String(x.onchainMatchId) === String(oc))); return !!g && isHouseBot(g.creatorWallet) && !isScheduledTable(g) })
   let clock: string
   if (full) clock = 'All seated — dealing you in'
   else if (locking) clock = `Seats locked — dealing in ${formatCountdown(remaining ?? 0)}`
   // Two ways this table deals: the moment the last seat is taken, or when this clock runs
   // out with enough players. Say both — a countdown alone reads as a promise of a wait.
-  else if (counting) clock = `Deals when full · or in ${formatCountdown(remaining)}`
+  else if (counting) clock = houseTable ? 'Bots are sitting down — you seal your call in a few seconds' : `Deals when full · or in ${formatCountdown(remaining)}`
   else if (expired) clock = 'Fill window closed'
   // Still short of the minimum: the table closes (and refunds) at the deadline — a player
   // waiting alone needs to know how long that is.
@@ -462,7 +464,7 @@ function RecentActivityCard({ joins }: { joins: { seat: number; ts: number; name
   // Seat-taken lines (local, since FILLING carries no per-seat join event) merged
   // chronologically with the public action feed, newest first.
   const items = [
-    ...joins.map((j) => ({ ts: j.ts, text: `${j.name} took seat ${j.seat + 1}` })),
+    ...joins.map((j) => ({ ts: j.ts, text: /^Player \d+$/.test(j.name) ? `Seat ${j.seat + 1} was taken` : `${j.name} took seat ${j.seat + 1}` })),
     ...feed.map((e) => ({ ts: e.ts, text: describeEvent(e, yourSeat, token) })),
   ]
     .sort((a, b) => b.ts - a.ts)
@@ -564,7 +566,7 @@ function TableFullCard({ plan, match, buyIn }: { plan: SeatCell[]; match: Return
         })}
       </ul>
       <div className="wr-full-pot">
-        <span className="eyebrow">pot to play for</span>
+        <span className="eyebrow">chips at the table</span>
         <span className="mono">{formatChips(potPreview)} {token} <span className="wr-full-pot-fees">+ fees</span></span>
       </div>
     </section>

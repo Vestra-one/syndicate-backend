@@ -1,6 +1,6 @@
 import type { PublicEvent, SeatIndex } from '@/lib/protocol'
 import { formatChips } from '@/lib/format'
-import { isHouseBot } from '@/lib/houseBots'
+import { houseBotWallets, isHouseBot } from '@/lib/houseBots'
 
 /**
  * Pseudonymous table names. A name follows the player's wallet, so the same rival reads as
@@ -30,7 +30,7 @@ export function setSeatWallets(seats: { seat: number; wallet?: string | null }[]
   const taken = new Set<string>()
   for (const s of [...seats].sort((x, y) => x.seat - y.seat)) {
     if (!s.wallet) continue
-    let i = nameIndex(s.wallet)
+    let i = canonicalIndex(s.wallet)
     while (taken.has(ALIASES[i])) i = (i + 1) % ALIASES.length
     taken.add(ALIASES[i])
     next.set(s.seat, ALIASES[i])
@@ -40,7 +40,9 @@ export function setSeatWallets(seats: { seat: number; wallet?: string | null }[]
 
 export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
   if (seat === yourSeat) return 'You'
-  return tableNames.get(seat) ?? ALIASES[seat % ALIASES.length] ?? `Seat ${seat + 1}`
+  // No wallet known for the seat yet (a table still filling): a neutral label, never a
+  // persona that would turn into someone else once the hand is dealt.
+  return tableNames.get(seat) ?? `Player ${seat + 1}`
 }
 
 /**
@@ -55,7 +57,26 @@ export function seatAlias(seat: SeatIndex, yourSeat?: SeatIndex): string {
  */
 export function displayName(wallet: string, handle?: string | null): string {
   if (handle && !isHouseBot(wallet)) return handle
-  return ALIASES[nameIndex(wallet)]
+  return ALIASES[canonicalIndex(wallet)]
+}
+
+/**
+ * A wallet's alias, the same on every screen. Bots claim theirs first (in a fixed order,
+ * stepping past each other), and a person whose alias would duplicate a bot's steps to the
+ * next free one — so there is never a second "The Banker" at the table or on a board.
+ */
+function canonicalIndex(wallet: string): number {
+  const bots = houseBotWallets().sort()
+  const taken = new Set<number>()
+  for (const b of bots) {
+    let i = nameIndex(b)
+    while (taken.has(i)) i = (i + 1) % ALIASES.length
+    taken.add(i)
+    if (b === wallet) return i
+  }
+  let i = nameIndex(wallet)
+  while (taken.has(i)) i = (i + 1) % ALIASES.length
+  return i
 }
 
 export function hostAlias(matchId: string): string {

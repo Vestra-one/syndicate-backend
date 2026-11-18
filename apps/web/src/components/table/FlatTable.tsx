@@ -1,4 +1,5 @@
 import { useGameStore } from '@/store/gameStore'
+import { seatAlias } from '@/lib/seats'
 
 /**
  * The flat table (lite mode): a felt, and the live price with your sealed call drawn on
@@ -8,12 +9,20 @@ import { useGameStore } from '@/store/gameStore'
 export function FlatTable() {
   const view = useGameStore((s) => s.view)
   const history = useGameStore((s) => s.priceHistory)
-  const feed = 'BTC/USD'
+  const feed = useGameStore((st) => st.terms?.priceFeedId ?? 'BTC/USD')
   const call = useGameStore((s) => s.yourPrediction)
   const scale = 10 ** (useGameStore((s) => s.terms?.decimals) ?? 2)
   const pts = history.slice(-180)
   const last = pts.at(-1)?.price
   const callPx = call != null ? Number(call) / scale : null
+  // Once the hand settles, every call goes on the chart against the print: this is the
+  // picture of the hand — who was where when the clock ran out.
+  const settlement = useGameStore((s) => s.settlement)
+  const yourSeat = useGameStore((s) => s.match?.yourSeat)
+  const reveals = settlement
+    ? settlement.revealedPredictions.map((r) => ({ seat: r.seat, px: Number(r.prediction) / scale }))
+    : []
+  const settlePx = settlement ? Number(settlement.settlementPrice) / scale : null
 
   let chart = null
   if (view === 'table' && pts.length >= 2 && last != null) {
@@ -27,6 +36,8 @@ export function FlatTable() {
       lo = Math.min(lo, callPx)
       hi = Math.max(hi, callPx)
     }
+    for (const r of reveals) { lo = Math.min(lo, r.px); hi = Math.max(hi, r.px) }
+    if (settlePx != null && settlePx > 0) { lo = Math.min(lo, settlePx); hi = Math.max(hi, settlePx) }
     const pad = (hi - lo || last * 0.0005) * 0.15
     lo -= pad
     hi += pad
@@ -47,8 +58,24 @@ export function FlatTable() {
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="flat-chart-svg" aria-hidden="true">
           <path d={`${line} L${W} ${H} L0 ${H} Z`} className={up ? 'flat-area-up' : 'flat-area-down'} />
           <path d={line} className={up ? 'flat-line-up' : 'flat-line-down'} />
-          {callY != null && <line x1="0" x2={W} y1={callY} y2={callY} className="flat-call" />}
+          {callY != null && reveals.length === 0 && <line x1="0" x2={W} y1={callY} y2={callY} className="flat-call" />}
+          {reveals.map((r) => (
+            <line key={r.seat} x1="0" x2={W} y1={y(r.px)} y2={y(r.px)} className={`flat-reveal ${r.seat === yourSeat ? 'flat-reveal--you' : ''}`} />
+          ))}
+          {settlePx != null && settlePx > 0 && <line x1="0" x2={W} y1={y(settlePx)} y2={y(settlePx)} className="flat-settle" />}
         </svg>
+        {reveals.length > 0 && (
+          <div className="flat-reveal-labels">
+            {reveals.map((r) => (
+              <span key={r.seat} className={`flat-reveal-label ${r.seat === yourSeat ? 'flat-reveal-label--you' : ''}`} style={{ top: `${(y(r.px) / H) * 100}%` }}>
+                {seatAlias(r.seat, yourSeat ?? undefined)} · ${money(r.px)}
+              </span>
+            ))}
+            {settlePx != null && settlePx > 0 && (
+              <span className="flat-reveal-label flat-reveal-label--settle" style={{ top: `${(y(settlePx) / H) * 100}%` }}>settled ${money(settlePx)}</span>
+            )}
+          </div>
+        )}
         {callPx != null && (
           <div className="flat-chart-foot eyebrow">
             <span className="flat-call-key" /> your call ${money(callPx)}
