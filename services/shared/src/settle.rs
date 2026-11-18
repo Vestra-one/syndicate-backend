@@ -101,7 +101,13 @@ pub fn settle(input: &SettleInput) -> Result<SettleResult, CoreError> {
             continue;
         }
 
-        let rake = pot_rake(pot.amount, input.rake_bps, input.rake_cap);
+        // The cap is for the whole hand, not per pot: with side pots, capping each layer
+        // separately lets the total run past it (and the chain then rejects the settlement).
+        let rake = pot_rake(
+            pot.amount,
+            input.rake_bps,
+            input.rake_cap.saturating_sub(rake_collected),
+        );
         rake_collected = rake_collected.saturating_add(rake);
         let payable = pot.amount - rake;
 

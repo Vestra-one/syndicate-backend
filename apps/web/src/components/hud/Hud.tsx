@@ -17,6 +17,9 @@ import { PriceChartOverlay } from './PriceChartOverlay'
 import { useGameStore } from '@/store/gameStore'
 import { explorerTxUrl } from '@/lib/network'
 import './hud.css'
+import { formatChips } from '@/lib/format'
+import { hasHouseBots } from '@/lib/houseBots'
+import { isGuestWallet } from '@/lib/guestWallet'
 
 /**
  * Read-only stand-in for YourPosition + BettingPanel when the viewer holds no seat
@@ -62,6 +65,74 @@ function TableNotice() {
       </button>
       <button className="ghost-btn" onClick={() => useGameStore.setState({ playError: null })}>Keep watching</button>
     </div>
+  )
+}
+
+/**
+ * Out of the hand before it ends — folded, or everyone folded to us. Nothing is left to
+ * decide, so offer the next hand now instead of a minute of watching the clock; the chips
+ * from this one are collected automatically when it settles.
+ */
+function EarlyExit() {
+  const state = useGameStore((s) => {
+    const m = s.match
+    if (!m || m.phase !== 'LIVE' || m.yourSeat == null || s.settlement || s.voided || !s.seated) return null
+    const live = m.seats.filter((x) => !x.folded)
+    const me = m.seats.find((x) => x.seat === m.yourSeat)
+    if (me?.folded) return 'folded'
+    if (live.length === 1 && live[0].seat === m.yourSeat && m.seats.length > 1) return 'won'
+    return null
+  })
+  const pot = useGameStore((s) => s.match?.pot ?? 0n)
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
+  const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
+  const moveOn = useGameStore((s) => s.moveOn)
+  const [stay, setStay] = useState<string | null>(null)
+  const matchId = useGameStore((s) => s.match?.matchId ?? null)
+  if (!state || !hasHouseBots() || stay === matchId) return null
+  return (
+    <div className={`early-exit panel early-exit--${state}`} role="status">
+      <div className="early-exit-title">
+        {state === 'won' ? `Everyone folded — the ${formatChips(pot)} ${token} pot is yours` : 'You folded this one'}
+      </div>
+      <div className="early-exit-sub">
+        {state === 'won'
+          ? 'It pays out when the hand closes on-chain.'
+          : 'The rest of your stack comes back when the hand closes on-chain.'}
+        {guest ? ' It lands in your balance by itself — no need to wait here.' : ' You will find it under Collect in the lobby.'}
+      </div>
+      <div className="early-exit-actions">
+        <button className="ghost-btn" onClick={() => setStay(matchId)}>Watch it finish</button>
+        <button className="ghost-btn ghost-btn--primary" onClick={() => void moveOn()}>Next hand now</button>
+      </div>
+    </div>
+  )
+}
+
+/** A way out that is always there. Mid-hand it asks once, because walking away costs turns. */
+function LeaveButton() {
+  const inHand = useGameStore((s) => {
+    const m = s.match
+    if (!s.seated || !m || s.settlement || s.voided) return false
+    if (m.phase !== 'SEALING' && m.phase !== 'LIVE') return false
+    const me = m.seats.find((x) => x.seat === m.yourSeat)
+    return !me?.folded
+  })
+  const show = useGameStore((s) => s.view === 'table' && (s.match?.phase === 'SEALING' || s.match?.phase === 'LIVE'))
+  const leaveHand = useGameStore((s) => s.leaveHand)
+  const [asking, setAsking] = useState(false)
+  if (!show) return null
+  if (asking) {
+    return (
+      <div className="leave-ask panel" role="alertdialog">
+        <span>Leave mid-hand? Your chips stay in play and your turns are checked or folded for you.</span>
+        <button className="ghost-btn" onClick={() => setAsking(false)}>Stay</button>
+        <button className="ghost-btn ghost-btn--primary" onClick={leaveHand}>Leave</button>
+      </div>
+    )
+  }
+  return (
+    <button className="leave-btn" onClick={() => (inHand ? setAsking(true) : leaveHand())}>← Lobby</button>
   )
 }
 
@@ -166,6 +237,8 @@ export function Hud() {
       <WaitingRoom />
       <TxBanner />
       <TableNotice />
+      <EarlyExit />
+      <LeaveButton />
       <Resolution />
       <PriceChartOverlay />
     </div>

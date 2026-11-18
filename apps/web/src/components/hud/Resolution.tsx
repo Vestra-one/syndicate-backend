@@ -33,7 +33,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const playHouse = useGameStore((s) => s.playHouse)
   const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
-  const [left, setLeft] = useState(10)
+  const [left, setLeft] = useState(20)
   const [sitOut, setSitOut] = useState(false)
   const rolling = house && autoNext && !sitOut
   useEffect(() => {
@@ -50,9 +50,12 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
       <button className="ghost-btn" onClick={() => { setSitOut(true); setReviewing(true) }}>
         Review table
       </button>
-      <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>
-        {rolling ? 'Sit out' : 'Live tables'}
-      </button>
+      {rolling ? (
+        // Stops the countdown and nothing else: read the result for as long as you like.
+        <button className="ghost-btn" onClick={() => setSitOut(true)}>Stay here</button>
+      ) : (
+        <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>Lobby</button>
+      )}
       {house ? (
         <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse({ sit: true })}>
           {rolling ? `Next hand in ${left}` : 'Next hand'}
@@ -172,7 +175,6 @@ function SettledCeremony() {
   const walletOf = (seat: number) => seats?.find((x) => x.seat === seat)?.wallet ?? null
   const wallet = useGameStore((s) => s.walletAddress)
   const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
-  const [boardRank, setBoardRank] = useState<number | null>(null)
   useEffect(() => {
     if (yourSeat == null || !amountsKnown) return
     // Head-to-head: against each rival still in the hand, who finished closer?
@@ -190,11 +192,30 @@ function SettledCeremony() {
       // Counted for the first time: put it on the daily board and learn our place.
       void reportFibs(HAND_FIBS + (isWinner ? WIN_FIBS : 0))
         .then(() => getFibsBoard(wallet))
-        .then((b) => setBoardRank(b.you?.rank ?? null))
         .catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settlement.matchId, amountsKnown, yourSeat, wallet])
+
+  // The one line worth retelling: what the betting did that the numbers alone would not.
+  const story = (() => {
+    if (!amountsKnown || yourSeat == null) return null
+    const me = ranked.find((r) => r.seat === yourSeat)
+    const win = ranked.find((r) => r.seat === winnerSeat)
+    if (!me || !win) return null
+    const usd = (n: number) => `$${n.toFixed(2)}`
+    const name = (seat: number) => seatAlias(seat, yourSeat)
+    if (isWinner) {
+      const pushed = folded.filter((r) => r.dist < me.dist).sort((a, b) => a.dist - b.dist)[0]
+      if (pushed) return `You bet ${name(pushed.seat)} off a call that was only ${usd(pushed.dist)} from the price — yours was ${usd(me.dist)} away.`
+      const second = active.find((r) => r.seat !== yourSeat)
+      if (second) return `Closest at the showdown: you beat ${name(second.seat)} by ${usd(second.dist - me.dist)}.`
+      return 'Nobody stayed to see it — the pot was yours without a showdown.'
+    }
+    if (me.folded && me.dist < win.dist) return `You folded the best number at the table: ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
+    if (me.folded) return `Good fold — ${name(win.seat)} was ${usd(me.dist - win.dist)} closer than you.`
+    return `${name(win.seat)} beat you by ${usd(me.dist - win.dist)}.`
+  })()
 
   const recordFor = (seat: number): string | undefined => {
     const w = walletOf(seat)
@@ -278,6 +299,7 @@ function SettledCeremony() {
           rake <span className="mono">{formatChips(rake, token)} {token}</span>
         </div>
 
+        {story && <div className="ceremony-story">{story}</div>}
         <div className={`ceremony-result ${won ? 'ceremony-result--win' : ''}`}>
           {!won
             ? amountsKnown ? 'No award this match' : 'Working out the payouts…'
@@ -293,7 +315,6 @@ function SettledCeremony() {
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
             {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
             {` · ${run.fibs ?? 0} Fibs (+${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} this hand) · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
-            {boardRank != null ? ` · #${boardRank} on today's board` : ''}
           </div>
         )}
 

@@ -33,7 +33,13 @@ export function YourPosition() {
   const now = useNow(1000)
   const secLeft = settlesAt != null ? Math.max(0, (settlesAt - now) / 1000) : null
   const move = live && secLeft != null && secLeft > 0 ? typicalMove(history, secLeft) : null
-  const edge = distance != null && move != null ? edgeRead(distance, move) : null
+  // Advice is for players who still have a decision: not after a fold, not all-in, and
+  // not once everyone else has folded.
+  const mySeat = match?.seats.find((x) => x.seat === match.yourSeat)
+  const rivals = match?.seats.filter((x) => !x.folded && x.seat !== match.yourSeat).length ?? 0
+  const deciding = !!mySeat && !mySeat.folded && !mySeat.allIn && rivals > 0
+  const rawEdge = distance != null && move != null ? edgeRead(distance, move) : null
+  const edge = rawEdge && !deciding ? { ...rawEdge, tip: mySeat?.folded ? 'You are out of this hand.' : rivals === 0 ? 'Everyone folded — the pot is yours.' : 'You are all-in — it is up to the market now.' } : rawEdge
   // The window closed and we never sealed — the prediction defaulted, and that
   // fact must persist through settlement so the final ranking stays explicable (§16).
   const defaulted = sealClosed && sealStatus !== 'sealed'
@@ -103,7 +109,7 @@ export function YourPosition() {
         </div>
       )}
 
-      {live && <DefaultToggle />}
+      {live && deciding && <DefaultToggle />}
     </div>
   )
 }

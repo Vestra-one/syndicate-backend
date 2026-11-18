@@ -9,9 +9,11 @@ use syndicate_chain::{drand_round_publish_ts, DRAND_GENESIS_TIME, DRAND_PERIOD_S
 pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
 /// Sealing is one wallet transaction now (the seal intent is signed by the session key,
 /// and a call locked in while the table fills seals automatically), so the window no
-/// longer has to fit two wallet prompts. 60s keeps headroom for a slow RPC.
-pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 60;
-pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = 45;
+/// longer has to fit two wallet prompts — and a seal now lands in a few seconds (it is
+/// acted on at `confirmed`). 30s is time to think of a number; more is dead air before
+/// the first bet.
+pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 30;
+pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = 20;
 
 /// League of Entropy quicknet.
 pub const DRAND_CHAIN_HASH_DEFAULT: &str =

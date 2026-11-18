@@ -15,7 +15,12 @@ type Why = 'user' | 'no-gpu' | 'slow' | null
 let lite = false
 let why: Why = null
 const listeners = new Set<() => void>()
-const emit = () => listeners.forEach((l) => l())
+const emit = () => {
+  // The stylesheet follows too: blur and endlessly looping glows are what starve a
+  // software-rendered page (price ticks and clocks stop landing while they repaint).
+  try { document.documentElement.classList.toggle('lite', lite) } catch { /* no DOM */ }
+  listeners.forEach((l) => l())
+}
 
 function softwareRenderer(): boolean {
   try {
@@ -44,6 +49,7 @@ function init() {
   else if (softwareRenderer()) { lite = true; why = 'no-gpu' }
 }
 init()
+emit()
 
 export function isLite(): boolean {
   return lite

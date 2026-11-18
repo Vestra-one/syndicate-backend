@@ -707,8 +707,10 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     let Some(spot) = spot_wad(ctx, house, &detail).await else {
                         continue; // no price source: this bot rides spot
                     };
-                    // Each bot has its own spread: the lead calls tight, the rest wider.
-                    let spread_bps = 8.0 + 14.0 * i as f64;
+                    // Each bot has its own spread: the lead calls tight, the rest wider — all
+                    // within what the market can plausibly cover in one hand, so they hold
+                    // live calls worth defending instead of long shots they fold.
+                    let spread_bps = 3.0 + 3.5 * i as f64;
                     let drift = (rng.unit() * 2.0 - 1.0) * spread_bps / 10_000.0;
                     let call = (spot as f64 * (1.0 + drift)) as i128;
                     let target = timelock_target(room, &detail);
@@ -788,7 +790,7 @@ async fn act_if_ours(
     nonces: &mut HashMap<u16, u64>,
     rng: &mut Rng,
 ) {
-    let idle = Duration::from_millis(1_500);
+    let idle = Duration::from_millis(600);
     let turn = detail
         .get("turn")
         .filter(|v| !v.is_null())
@@ -819,8 +821,9 @@ async fn act_if_ours(
         return tokio::time::sleep(idle).await; // a person is thinking
     };
 
-    // A beat before acting, so the table reads as play rather than a script.
-    tokio::time::sleep(Duration::from_millis(rng.range(1_500, 4_000))).await;
+    // A beat before acting, so the table reads as play rather than a script — but a short
+    // one: every second a bot thinks comes out of the round the person is waiting in.
+    tokio::time::sleep(Duration::from_millis(rng.range(500, 1_600))).await;
 
     let head_hex = turn["head_hex"]
         .as_str()

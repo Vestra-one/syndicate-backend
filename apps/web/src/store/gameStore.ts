@@ -1,4 +1,6 @@
 import { formatChips } from '@/lib/format'
+import { recordHand } from '@/lib/sessionStats'
+import { isGuestWallet } from '@/lib/guestWallet'
 import { create } from 'zustand'
 import type {
   BettingAction,
@@ -269,6 +271,11 @@ interface GameState {
   playAgain: () => Promise<void>
   /** One click from a finished hand to a seat at the open house table (the join sheet). */
   playHouse: (opts?: { sit?: boolean }) => Promise<void>
+  /** Out of this hand (folded, or everyone folded to us): go to the next table now and
+   *  let this one settle behind us — the chips are collected automatically. */
+  moveOn: () => Promise<void>
+  /** Walk away from the table to the lobby; a hand in progress settles behind us. */
+  leaveHand: () => void
 
   /** Load a page of settled hands. `more: true` appends the next page via cursor. */
   loadHistory: (opts?: { more?: boolean }) => Promise<void>
@@ -1031,6 +1038,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   resumeActiveTable: async (wallet) => {
     if (resumedForWallet === wallet) return
     resumedForWallet = wallet
+    if (pendingCollects(wallet).length > 0) {
+      if (!adapters) adapters = createAdapters()
+      startCollector(set, get)
+    }
     // Don't hijack an explicit flow: a ?table=… invite, or a join/create in progress.
     const s = get()
     if (s.view !== 'discovery' || s.seated || s.playResolving || s.pendingInvite) return
@@ -1040,7 +1051,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       const { active } = await api.getActive(wallet)
       seat = active
-        .filter((a) => a.phase in RESUME_PHASE_RANK)
+        // A hand we already walked away from settles on its own — never drag the player back.
+        .filter((a) => a.phase in RESUME_PHASE_RANK && !pendingCollects(wallet).some((c) => c.matchId === a.match_id))
         .sort((a, b) => RESUME_PHASE_RANK[a.phase] - RESUME_PHASE_RANK[b.phase])[0]
     } catch (err) {
       log.warn('[resume] active-seats lookup failed:', err)
@@ -1673,6 +1685,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       await api.submitSeal(match.matchId, body)
       // The plaintext stays on the client for the distance-to-conviction chart.
       sealContextTries = 0
+      rememberCall(joinMatchId ?? match?.matchId, price)
       set({ sealStatus: 'sealed', yourPrediction: price, queuedPrediction: null, playError: null })
     } catch (err) {
       log.error('seal failed:', err)
@@ -1835,6 +1848,30 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
+  leaveHand: () => {
+    const s = get()
+    const matchId = s.match?.matchId ?? joinMatchId
+    const onchainMatchId = s.terms?.onchainMatchId
+    const wallet = adapters?.wallet.address() ?? s.walletAddress
+    if (s.seated && matchId && onchainMatchId && wallet && s.terms && !s.settlement && !s.voided) {
+      rememberCollect(wallet, { matchId, onchainMatchId, staked: String(s.terms.buyIn + s.terms.entryFee) })
+      startCollector(set, get)
+    }
+    get().leaveToDiscovery()
+  },
+
+  moveOn: async () => {
+    const s = get()
+    const matchId = s.match?.matchId ?? joinMatchId
+    const onchainMatchId = s.terms?.onchainMatchId
+    const wallet = adapters?.wallet.address() ?? s.walletAddress
+    if (matchId && onchainMatchId && wallet && s.terms) {
+      rememberCollect(wallet, { matchId, onchainMatchId, staked: String(s.terms.buyIn + s.terms.entryFee) })
+      startCollector(set, get)
+    }
+    await get().playHouse({ sit: true })
+  },
+
   playAgain: async () => {
     set({
       // Back to the Room page first — createGame() now opens the create sheet as an
@@ -1948,6 +1985,81 @@ function normalizeSchedule(
  * terminal `not_confirmed`/`rejected` means the table filled first — the buy-in is fully
  * refundable — so surface it. `confirmed` is the happy path (engine seat assigned at lock).
  */
+// — our own sealed number, kept in this browser so a reload does not lose it ———————————
+const callKey = (matchId: string) => `st-call:${matchId}`
+function rememberCall(matchId: string | null | undefined, price: FixedPrice): void {
+  if (!matchId) return
+  try { localStorage.setItem(callKey(matchId), String(price)) } catch { /* private mode */ }
+}
+function recallCall(matchId: string | null | undefined): FixedPrice | null {
+  if (!matchId) return null
+  try {
+    const v = Number(localStorage.getItem(callKey(matchId)))
+    return Number.isFinite(v) && v > 0 ? v : null
+  } catch { return null }
+}
+
+// — hands left early: collect behind the player's back ————————————————————————————
+type Collect = { matchId: string; onchainMatchId: string; staked: string; tries?: number }
+const collectKey = (wallet: string) => `st-collect-v1:${wallet}`
+function pendingCollects(wallet: string): Collect[] {
+  try { return JSON.parse(localStorage.getItem(collectKey(wallet)) ?? '[]') as Collect[] } catch { return [] }
+}
+function saveCollects(wallet: string, list: Collect[]): void {
+  try { localStorage.setItem(collectKey(wallet), JSON.stringify(list.slice(-12))) } catch { /* private mode */ }
+}
+function rememberCollect(wallet: string, c: Collect): void {
+  const list = pendingCollects(wallet).filter((x) => x.matchId !== c.matchId)
+  saveCollects(wallet, [...list, c])
+}
+
+let collector: ReturnType<typeof setInterval> | null = null
+let collecting = false
+/**
+ * Watches the hands the player left before they settled and pulls each payout the moment
+ * it exists. Only a table wallet signs silently, so only it collects by itself; any other
+ * wallet finds the usual Collect card in the lobby.
+ */
+function startCollector(set: SetState, get: () => GameState): void {
+  if (collector) return
+  collector = setInterval(async () => {
+    const wallet = adapters?.wallet.address() ?? get().walletAddress
+    if (!wallet || !adapters || collecting) return
+    const list = pendingCollects(wallet)
+    if (list.length === 0) { clearInterval(collector!); collector = null; return }
+    collecting = true
+    try {
+      for (const c of list) {
+        const drop = () => saveCollects(wallet, pendingCollects(wallet).filter((x) => x.matchId !== c.matchId))
+        let detail: MatchDetail
+        try { detail = await api.getMatch(c.matchId) } catch { continue }
+        const phase = detail.phase.toLowerCase()
+        if (phase === 'voided') { drop(); continue } // refund shows as a card in the lobby
+        if (phase !== 'settled') continue
+        const mine = detail.seats.find((x) => x.wallet === wallet)
+        const payout = BigInt(mine?.payout_chips ?? 0)
+        const won = BigInt(mine?.pot_won_chips ?? 0) > 0n
+        recordHand(wallet, c.matchId, payout - BigInt(c.staked), won)
+        if (payout === 0n || !isGuestWallet(wallet)) { drop(); continue }
+        try {
+          const sig = await adapters.chain.claimSettled(c.onchainMatchId)
+          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${won ? ' — you won it' : ''}` } })
+          drop()
+          void refreshBalance(set, true)
+        } catch (err) {
+          if ((err as Error).message === 'AlreadyClaimed') { drop(); continue }
+          // The payout account can trail the settle by a few seconds — try again, not forever.
+          const tries = (c.tries ?? 0) + 1
+          if (tries >= 8) drop()
+          else saveCollects(wallet, pendingCollects(wallet).map((x) => (x.matchId === c.matchId ? { ...x, tries } : x)))
+        }
+      }
+    } finally {
+      collecting = false
+    }
+  }, 6_000)
+}
+
 /** Consecutive seat reads of a dealt hand that did not include us (one could be a race). */
 let dealtOutStrikes = 0
 
@@ -2247,6 +2359,7 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
         return {
           sealClosed: s.sealClosed || frame.closed === true,
           sealStatus: mineSealed ? 'sealed' : s.sealStatus,
+          yourPrediction: s.yourPrediction ?? (mineSealed ? recallCall(s.match?.matchId ?? joinMatchId) : null),
           sealedSeats: [...merged].sort((a, b) => a - b),
           sealDeadline: frame.deadline_ms != null ? toEpochMs(frame.deadline_ms) : s.sealDeadline,
         }
@@ -2683,6 +2796,13 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
       s.match
         ? {
             streetSchedule: normalizeSchedule(detail.timing.street_schedule) ?? s.streetSchedule,
+            // After a reload the sealed set and our own number are gone from memory: the
+            // record says who sealed, and this browser kept what we sealed.
+            sealedSeats: detail.seats.filter((x) => x.sealed).length > s.sealedSeats.length
+              ? detail.seats.filter((x) => x.sealed).map((x) => x.seat_index)
+              : s.sealedSeats,
+            sealStatus: mine?.sealed && s.sealStatus === 'unsealed' ? 'sealed' : s.sealStatus,
+            yourPrediction: s.yourPrediction ?? (mine?.sealed ? recallCall(matchId) : null),
             // The seal clock normally rides on a WS frame; after a reload that frame is gone.
             sealDeadline: detail.timing.seal_deadline != null ? toEpochMs(detail.timing.seal_deadline) : s.sealDeadline,
             match: {
