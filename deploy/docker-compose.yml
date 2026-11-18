@@ -209,7 +209,7 @@ services:
       SYNDICATE_PROGRAM_ID: ${SYNDICATE_PROGRAM_ID}
       CHIPS_TOKEN_MINT: ${CHIPS_TOKEN_MINT}
       E2E_SEAL_MODE: ${HOUSE_SEAL_MODE:-live}
-      HOUSE_BOT_KEYPAIRS: /run/secrets/house-bot-1.json,/run/secrets/house-bot-2.json
+      HOUSE_BOT_KEYPAIRS: ${HOUSE_BOT_KEYPAIRS:-/run/house-bots/house-bot-1.json,/run/house-bots/house-bot-2.json}
       HOUSE_BOT_HANDLES: ${HOUSE_BOT_HANDLES:-}
       BUY_IN: ${HOUSE_BUY_IN:-10000000}
       STREET_SEC: ${HOUSE_STREET_SEC:-30}
@@ -219,8 +219,7 @@ services:
       HOUSE_HUMAN_SEATS: ${HOUSE_HUMAN_SEATS:-1}
       HOUSE_PLAY_WITHOUT_HUMANS: ${HOUSE_PLAY_WITHOUT_HUMANS:-true}
     volumes:
-      - ./secrets/house-bot-1.json:/run/secrets/house-bot-1.json:ro
-      - ./secrets/house-bot-2.json:/run/secrets/house-bot-2.json:ro
+      - ./secrets/house-bots:/run/house-bots:ro
     deploy:
       resources:
         limits:

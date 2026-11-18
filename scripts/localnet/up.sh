@@ -129,7 +129,7 @@ fund "$(solana-keygen pubkey "$FAUCET_KEY")" "faucet"
 
 # House bots (BOTS=1): two funded wallets that keep a public table open.
 BOTS="${BOTS:-0}"
-BOT_KEYS=("$STATE/keys/bot1.json" "$STATE/keys/bot2.json")
+BOT_KEYS=("$STATE/keys/bot1.json" "$STATE/keys/bot2.json" "$STATE/keys/bot3.json")
 HOUSE_BOT_WALLETS=""
 if [ "$BOTS" = "1" ]; then
   for k in "${BOT_KEYS[@]}"; do
@@ -220,7 +220,7 @@ ATTACKER_KEYPAIR=$ROOT/deploy/e2e-keys/attacker.json
 HOUSE_BOT_WALLETS=$HOUSE_BOT_WALLETS
 FAUCET_KEYPAIR_PATH=$FAUCET_KEY
 FAUCET_COOLDOWN_SEC=5
-HOUSE_BOT_KEYPAIRS=${BOT_KEYS[0]},${BOT_KEYS[1]}
+HOUSE_BOT_KEYPAIRS=${BOT_KEYS[0]},${BOT_KEYS[1]},${BOT_KEYS[2]}
 PRICE_URL=http://127.0.0.1:$PRICE_PORT
 ENV
 set -a; . "$STATE/env"; set +a

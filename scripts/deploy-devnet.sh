@@ -26,7 +26,7 @@ fi
 
 # House bots start with the stack once scripts/house-bots-setup.sh has provisioned them.
 BUILD=(game-server chain-worker signed-price-server)
-if [ -f deploy/secrets/house-bot-1.json ] && [ -f deploy/secrets/house-bot-2.json ]; then
+if [ -f deploy/secrets/house-bots/house-bot-1.json ]; then
   COMPOSE+=(--profile bots)
   BUILD+=(house-bots)
   echo "house bots: enabled"

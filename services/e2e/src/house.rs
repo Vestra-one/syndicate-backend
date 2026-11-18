@@ -492,10 +492,12 @@ async fn fill(ctx: &Ctx, room: &Room, bots: &[Player], house: &House, running: &
                 "showcase hand"
             };
             println!("house: {why} — seating the rest of the bots");
-            for bot in &bots[1..] {
+            // All at once: the person who just sat down should not wait on a queue of bots.
+            futures_util::future::join_all(bots[1..].iter().map(|bot| async move {
                 let handle = discover_public(ctx, room.onchain_match_id).await;
                 deposit_and_confirm(ctx, bot, &handle).await;
-            }
+            }))
+            .await;
             seated = bots.len();
         }
         if opened.elapsed() > Duration::from_secs(house.fill_sec + 180) {
@@ -698,6 +700,14 @@ async fn act_if_ours(
     let can_raise = min_raise_to > 0 && min_raise_to <= max_total;
     let roll = rng.unit();
     let pot = detail["pot"].as_u64().unwrap_or(0);
+    // Each bot has a temperament — (how often it bets, how often it calls) relative to the
+    // baseline — so the table is not three copies of one player: steady, wild, careful.
+    const STYLES: [(f64, f64); 3] = [(1.0, 1.0), (1.4, 1.15), (0.6, 0.8)];
+    let style = STYLES[bots
+        .iter()
+        .position(|b| b.pubkey() == bot.pubkey())
+        .unwrap_or(0)
+        % STYLES.len()];
 
     // Read the bot's own hand: where is the market relative to what it sealed?
     let read = match (
@@ -747,12 +757,13 @@ async fn act_if_ours(
     let cheap = to_call.saturating_mul(4) <= pot; // getting 4:1 or better
     let fair = to_call.saturating_mul(2) <= pot; // getting 2:1 or better
     let (tag, amount, action) = if to_call == 0 {
-        let bet_freq = match read {
-            Read::InRange => 0.80,
-            Read::NeedsMove => 0.40,
-            Read::LongShot => 0.15,
-            Read::Blind => 0.35,
-        };
+        let bet_freq = style.0
+            * match read {
+                Read::InRange => 0.80,
+                Read::NeedsMove => 0.40,
+                Read::LongShot => 0.15,
+                Read::Blind => 0.35,
+            };
         if can_raise && roll < bet_freq {
             raise
         } else {
@@ -768,6 +779,7 @@ async fn act_if_ours(
             Read::Blind if fair => (0.05, 0.80),
             Read::Blind => (0.0, 0.40),
         };
+        let (raise_freq, call_freq) = (raise_freq * style.0, (call_freq * style.1).min(1.0));
         if can_raise && roll < raise_freq {
             raise
         } else if roll < call_freq {

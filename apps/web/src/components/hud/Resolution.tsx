@@ -1,6 +1,6 @@
 import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { useEffect, useRef, useState } from 'react'
-import { readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
+import { HAND_FIBS, WIN_FIBS, levelOf, readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
@@ -263,6 +263,7 @@ function SettledCeremony() {
             your run · {run.hands} hand{run.hands === 1 ? '' : 's'} · {signedChips(BigInt(run.net), token)} {token}
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
             {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
+            {` · +${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} Fibs · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
           </div>
         )}
 

@@ -234,7 +234,7 @@ Two bot wallets keep one public table open so a visitor never lands on an empty 
 (`services/e2e/src/house.rs`, compose profile `bots`).
 
 ```bash
-FUND=1 scripts/house-bots-setup.sh   # keys → deploy/secrets/house-bot-{1,2}.json, wallets → deploy/.env, funded from the operator
+FUND=1 scripts/house-bots-setup.sh   # keys → deploy/secrets/house-bots/, wallets → deploy/.env, funded from the operator
 scripts/deploy-devnet.sh             # brings the bots up with the stack
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs -f house-bots
 ```
