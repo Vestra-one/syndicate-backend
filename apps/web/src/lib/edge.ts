@@ -42,6 +42,8 @@ export interface EdgeRead {
   label: string
   /** Gap in typical moves (0 = the market is sitting on your call). */
   moves: number
+  /** Plain advice for this read — how a player would use it. */
+  tip: string
   /** 0–1 bar fill: full when the market is on your call, empty at 3+ typical moves. */
   fill: number
 }
@@ -50,5 +52,11 @@ export function edgeRead(gap: number, move: number): EdgeRead {
   const moves = move > 0 ? Math.abs(gap) / move : Infinity
   const level: EdgeLevel = moves <= 0.75 ? 'in-range' : moves <= 2 ? 'needs-move' : 'long-shot'
   const label = level === 'in-range' ? 'In range' : level === 'needs-move' ? 'Needs a move' : 'Long shot'
-  return { level, label, moves, fill: Math.max(0, Math.min(1, 1 - moves / 3)) }
+  const tip =
+    level === 'in-range'
+      ? 'The market is sitting on your call. This is the time to bet.'
+      : level === 'needs-move'
+        ? 'You need the market to come back. Call small bets, fold to big ones.'
+        : 'The market has run away from your call. Fold to a bet — or bluff.'
+  return { level, label, moves, tip, fill: Math.max(0, Math.min(1, 1 - moves / 3)) }
 }

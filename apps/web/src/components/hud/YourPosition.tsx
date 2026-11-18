@@ -86,6 +86,7 @@ export function YourPosition() {
           <span className="position-edge-note eyebrow">
             typical move left ±${money(move)}
           </span>
+          <span className="position-edge-tip">{edge.tip}</span>
         </div>
       )}
 

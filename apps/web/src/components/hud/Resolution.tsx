@@ -262,6 +262,7 @@ function SettledCeremony() {
           <div className="ceremony-run eyebrow">
             your run · {run.hands} hand{run.hands === 1 ? '' : 's'} · {signedChips(BigInt(run.net), token)} {token}
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
+            {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
           </div>
         )}
 

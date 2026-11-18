@@ -5516,3 +5516,6 @@
 .guest-btn:hover { background: rgba(231, 200, 115, 0.1); }
 .guest-btn small { font-size: 11px; color: var(--text-dim); letter-spacing: 0; }
 .wc-btn--guest { margin-left: 8px; background: transparent; border: 1px solid rgba(231, 200, 115, 0.45); color: var(--gold, #e7c873); }
+.wc-entry { display: flex; align-items: center; gap: 8px; }
+.wc-entry .wc-btn--guest { margin-left: 0; }
+.position-edge-tip { font-size: 12px; line-height: 1.4; color: var(--text, #f3ead2); opacity: 0.85; }

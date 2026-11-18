@@ -10,6 +10,9 @@ export interface SessionStats {
   bestStreak: number
   /** Matches already counted, newest last (bounded). */
   seen: string[]
+  /** Days in a row with at least one hand, and the last day played (YYYY-MM-DD, local). */
+  days?: number
+  lastDay?: string
   /** Head-to-head by rival wallet: hands where you finished closer (w) or they did (l). */
   rivals?: Record<string, { w: number; l: number }>
 }
@@ -43,6 +46,10 @@ export function recordHand(
     const r = rivals[f.wallet] ?? { w: 0, l: 0 }
     rivals[f.wallet] = f.beat ? { w: r.w + 1, l: r.l } : { w: r.w, l: r.l + 1 }
   }
+  const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const today = day(new Date())
+  const yesterday = day(new Date(Date.now() - 86_400_000))
+  const days = cur.lastDay === today ? (cur.days ?? 1) : cur.lastDay === yesterday ? (cur.days ?? 1) + 1 : 1
   const next: SessionStats = {
     hands: cur.hands + 1,
     net: (BigInt(cur.net) + net).toString(),
@@ -50,6 +57,8 @@ export function recordHand(
     bestStreak: Math.max(cur.bestStreak, streak),
     seen: [...cur.seen, matchId].slice(-50),
     rivals,
+    days,
+    lastDay: today,
   }
   try {
     localStorage.setItem(`${KEY}:${wallet}`, JSON.stringify(next))

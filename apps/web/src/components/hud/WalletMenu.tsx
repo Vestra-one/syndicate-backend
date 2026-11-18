@@ -90,7 +90,7 @@ export function WalletMenu() {
 
   if (!connected) {
     return (
-      <>
+      <div className="wc-entry">
       <button className="wc-btn" onClick={() => setVisible(true)} disabled={connecting}>
         {connecting ? <><span className="wc-spinner" /> Connecting…</> : <>◎ Connect Wallet</>}
       </button>
@@ -99,7 +99,7 @@ export function WalletMenu() {
           Play instantly
         </button>
       )}
-      </>
+      </div>
     )
   }
 
