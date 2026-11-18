@@ -18,3 +18,16 @@ export function hasHouseBots(): boolean {
 export function isHouseBot(wallet?: string | null): boolean {
   return wallet != null && bots.has(wallet)
 }
+
+/** Handle of the bot that hosts the scheduled tables (see `HOUSE_EVENT_HANDLE`). */
+const EVENT_HANDLE = 'Main_Event'
+
+/**
+ * A scheduled table: dealt on the next round wall-clock mark so people can gather for a
+ * hand with other people, as opposed to the always-open house table that deals as soon as
+ * one person sits.
+ */
+export function isScheduledTable(game: { creatorWallet?: string; creatorHandle?: string }): boolean {
+  return isHouseBot(game.creatorWallet) && game.creatorHandle === EVENT_HANDLE
+}
+

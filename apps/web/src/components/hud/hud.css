@@ -5549,3 +5549,12 @@
 .fibs-foot { color: var(--text-dim); }
 .table-talk-btn--locked { opacity: 0.5; cursor: default; }
 .table-talk-btn--locked:hover { color: var(--text-dim); border-color: rgba(255, 255, 255, 0.16); }
+
+/* Next scheduled table (lobby banner) */
+.next-table { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; padding: 14px 18px; margin-bottom: 14px; border-radius: 14px; border: 1px solid rgba(231, 200, 115, 0.4); background: linear-gradient(90deg, rgba(231, 200, 115, 0.12), rgba(231, 200, 115, 0.03)); }
+.next-table-clock { display: flex; flex-direction: column; gap: 2px; }
+.next-table-clock b { font-size: 28px; color: var(--gold, #e7c873); line-height: 1; }
+.next-table-who { font-size: 13px; line-height: 1.4; color: var(--text, #f3ead2); }
+.next-table .btn-gold { white-space: nowrap; padding-inline: 18px; }
+@media (max-width: 720px) { .next-table { grid-template-columns: 1fr; } }
+.next-table { grid-column: 1 / -1; }

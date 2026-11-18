@@ -25,6 +25,9 @@
 //!                               live action to watch; false: an empty table just voids
 //!                               and refunds, so the house pays no rake to stay open
 //!   HOUSE_PAUSE_SEC             gap between tables (default 5)
+//!   HOUSE_EVENT_EVERY_SEC       a scheduled table deals on every such wall-clock mark
+//!                               (default 600 = :00, :10, :20…; 0 = none)
+//!   HOUSE_EVENT_HANDLE          handle of the bot hosting them (default Main_Event)
 //!   PRICE_URL                   signed-price-server base URL; without it bots ride spot
 
 use std::collections::{HashMap, HashSet};
@@ -36,6 +39,8 @@ use super::*;
 const NAMES: [&str; 5] = ["BOT1", "BOT2", "BOT3", "BOT4", "BOT5"];
 
 struct House {
+    /// Seconds between scheduled tables (0 = none).
+    event_every_sec: u64,
     fill_sec: u64,
     max_players: u8,
     play_without_humans: bool,
@@ -101,7 +106,19 @@ pub async fn run(ctx: Ctx) {
             })
             .collect()
     };
+    let event_every_sec: u64 = env("HOUSE_EVENT_EVERY_SEC", "600")
+        .parse()
+        .expect("HOUSE_EVENT_EVERY_SEC");
+    let event_handle = env("HOUSE_EVENT_HANDLE", "Main_Event");
+    // The last bot hosts the scheduled tables; its handle is how the lobby tells them apart.
+    let mut handles = handles;
+    if event_every_sec > 0 {
+        if let Some(last) = handles.last_mut() {
+            *last = event_handle.clone();
+        }
+    }
     let house = House {
+        event_every_sec,
         fill_sec: env("HOUSE_FILL_SEC", "600")
             .parse()
             .expect("HOUSE_FILL_SEC"),
@@ -154,6 +171,26 @@ pub async fn run(ctx: Ctx) {
                 tokio::time::sleep(Duration::from_secs(15)).await;
             }
         }
+    }
+
+    // Scheduled tables run beside the always-open one: same bots, their own loop.
+    if house.event_every_sec > 0 {
+        let (ctx, keys, house, running) =
+            (ctx.clone(), keys.clone(), house.clone(), running.clone());
+        tokio::spawn(async move {
+            loop {
+                let task = tokio::spawn(event_table(
+                    ctx.clone(),
+                    keys.clone(),
+                    house.clone(),
+                    running.clone(),
+                ));
+                if let Err(e) = task.await {
+                    println!("house: scheduled table failed ({e}); retrying in 30s");
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
+            }
+        });
     }
 
     let mut failures: u32 = 0;
@@ -262,6 +299,92 @@ async fn table(
     }
     let room = open(&ctx, &bots, &house).await;
     fill(&ctx, &room, &bots, &house, &running).await;
+    spawn_play(
+        ctx.clone(),
+        keys.clone(),
+        house.clone(),
+        running.clone(),
+        room,
+    );
+}
+
+/// A scheduled table: opens now, deals on the next round wall-clock mark (:00, :10, :20…
+/// for the default ten minutes), so everyone who wants a game with other people knows when
+/// to be there. The host bot holds a seat from the start; near the deal the other bots
+/// fill in around whoever came, so the table is never short-handed. If nobody came, the
+/// bots play it as a showcase only when no other house hand is running.
+async fn event_table(
+    ctx: Arc<Ctx>,
+    keys: Arc<Vec<Keypair>>,
+    house: Arc<House>,
+    running: Arc<AtomicUsize>,
+) {
+    let bots = login(&ctx, &keys).await;
+    let host = bots.last().expect("at least two bots");
+    if !funded(&ctx, &bots).await {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        return;
+    }
+    let every = house.event_every_sec;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut deal_at = (now / every + 1) * every;
+    if deal_at - now < 150 {
+        deal_at += every; // too close to gather anyone: aim for the mark after
+    }
+    let cap = get(&ctx, "/v1/config").await["bounds"]["players"]["max"]
+        .as_u64()
+        .unwrap_or(5) as u8;
+    let room = create_room(&ctx, host, "public", 2, cap, Some(deal_at - now)).await;
+    println!(
+        "house: scheduled table {} (#{}) deals in {}s",
+        room.match_id,
+        room.onchain_match_id,
+        deal_at - now
+    );
+
+    let mut filled = false;
+    loop {
+        let lobby = get(&ctx, "/v1/lobby").await;
+        let Some(row) = lobby["rooms"].as_array().and_then(|rooms| {
+            rooms
+                .iter()
+                .find(|r| r["match_id"].as_str() == Some(&room.match_id))
+                .cloned()
+        }) else {
+            break; // left the lobby: dealt or voided
+        };
+        let present = (row["confirmed"].as_u64().unwrap_or(0)
+            + row["candidates"].as_u64().unwrap_or(0)) as usize;
+        let left_ms = row["fill_deadline"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(lobby["server_time_ms"].as_u64().unwrap_or(0));
+        if !filled && left_ms < 45_000 && left_ms > 20_000 {
+            filled = true;
+            let people = present.saturating_sub(1);
+            let free = (cap as usize).saturating_sub(present);
+            let others = &bots[..bots.len() - 1];
+            let seat = if people >= 1 {
+                others.len().min(free)
+            } else if house.play_without_humans && running.load(Ordering::SeqCst) == 0 {
+                1
+            } else {
+                0
+            };
+            println!("house: scheduled table — {people} player(s) came, seating {seat} bot(s)");
+            let ctx = &*ctx;
+            let room = &room;
+            futures_util::future::join_all(others[..seat].iter().map(|bot| async move {
+                let handle = discover_public(ctx, room.onchain_match_id).await;
+                deposit_and_confirm(ctx, bot, &handle).await;
+            }))
+            .await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
     spawn_play(
         ctx.clone(),
         keys.clone(),

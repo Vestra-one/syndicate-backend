@@ -32,7 +32,7 @@ import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters
 import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
-import { isHouseBot, setHouseBots } from '@/lib/houseBots'
+import { isHouseBot, isScheduledTable, setHouseBots } from '@/lib/houseBots'
 import { setSeatWallets } from '@/lib/seats'
 import { log } from '@/lib/log'
 import {
@@ -1791,7 +1791,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     let table: UpcomingGame | undefined
     for (let i = 0; i < 8 && !table; i++) {
       await get().loadDiscovery({ silent: i > 0 })
-      table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet))
+      table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet) && !isScheduledTable(g))
       if (!table) await new Promise((r) => setTimeout(r, 2000))
     }
     if (!table) return

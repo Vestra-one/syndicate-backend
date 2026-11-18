@@ -4,7 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips } from '@/lib/format'
 import { hostAlias } from '@/lib/seats'
-import { isHouseBot } from '@/lib/houseBots'
+import { isHouseBot, isScheduledTable } from '@/lib/houseBots'
 import { guestAllowed, startGuest } from '@/lib/guestWallet'
 import type { UpcomingGame } from '@/lib/protocol'
 import { Coin, SeatPips, AvatarStack, FillRing } from './bits'
@@ -26,7 +26,9 @@ function OpenCard({ game, invited, onJoin }: { game: UpcomingGame; invited: bool
         </span>
         <span className="card-flag">
           {invited && <span className="flag flag--seat">◆ your invite</span>}
-          {isHouseBot(game.creatorWallet) && <span className="flag flag--seat" title="Two house bots are seated. Sit down and the hand starts when the timer runs out.">House table · always open</span>}
+          {isScheduledTable(game)
+            ? <span className="flag flag--seat" title="Dealt on the clock so players can gather. Bots fill any empty seats.">Scheduled · open to all</span>
+            : isHouseBot(game.creatorWallet) && <span className="flag flag--seat" title="House bots sit down with you and the hand starts straight away.">House table · instant</span>}
           {oneLeft && <span className="flag flag--seat">One seat left</span>}
         </span>
       </span>
@@ -95,6 +97,7 @@ export function PlayNow() {
       <p className="zone-sub">Tables waiting on traders, closing soonest first. Take a seat before the fill window shuts — or deal your own and let the room come to you.</p>
 
       <div className="grid">
+        <NextTable games={sorted} onJoin={handleJoin} />
         {sorted.length === 0 && status === 'loading'
           ? [0, 1].map((i) => <div key={i} className="card card--skeleton"><span className="skel-bar" style={{ height: 120, margin: 16 }} /></div>)
           : sorted.map((g) => (
@@ -115,3 +118,31 @@ export function PlayNow() {
     </section>
   )
 }
+
+/** The next scheduled table: when it deals, who is in, and a seat. */
+function NextTable({ games, onJoin }: { games: UpcomingGame[]; onJoin: (matchId: string) => void }) {
+  const now = useNow(1000)
+  const next = games
+    .filter((g) => isScheduledTable(g) && (g.fillDeadline ?? 0) > now)
+    .sort((a, b) => (a.fillDeadline ?? 0) - (b.fillDeadline ?? 0))[0]
+  if (!next) return null
+  const left = Math.max(0, Math.floor(((next.fillDeadline ?? 0) - now) / 1000))
+  const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
+  const others = Math.max(0, next.seated - 1)
+  const full = next.seated >= next.maxPlayers
+  return (
+    <div className="next-table">
+      <div className="next-table-clock">
+        <span className="eyebrow">next table for everyone</span>
+        <b className="mono">{mmss}</b>
+      </div>
+      <div className="next-table-who">
+        {others === 0 ? 'Be the first to sit. Bots fill any empty seats, so the hand always runs.' : `${others} ${others === 1 ? 'player is' : 'players are'} in. Sit down and play them when the clock runs out.`}
+      </div>
+      <button className="btn-gold" type="button" disabled={full || left < 25} onClick={() => onJoin(next.matchId)}>
+        {full ? 'Table full' : left < 25 ? 'Dealing…' : 'Take a seat'}
+      </button>
+    </div>
+  )
+}
+

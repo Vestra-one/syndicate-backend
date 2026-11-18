@@ -350,7 +350,8 @@ const act = (p, action) =>
 // House table (E2E_HOUSE=1, stack started with BOTS=1): a visitor finds the bots' table
 // in the lobby, sits down, seals, plays the hand against them and gets paid.
 // ---------------------------------------------------------------------------------------
-async function houseHand(browser) {
+async function houseHand(browser, scheduled = false) {
+  const mine = (r) => (r.creator_handle === 'Main_Event') === scheduled
   const me = await openPlayer(browser, 'visitor', env.PLAYER3_KEYPAIR)
   const cfg = await (await fetch(`${gameUrl}/v1/config`)).json()
   const bots = cfg.house_bot_wallets ?? []
@@ -360,7 +361,7 @@ async function houseHand(browser) {
   let table = null
   for (let i = 0; i < 400 && !table; i++) {
     const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
-    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet))
+    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet) && mine(r))
     const left = row ? new Date(row.fill_deadline ?? row.fill_deadline_ts ?? 0).getTime() - Date.now() : 0
     if (row && (Number.isNaN(left) || left > 25_000)) table = row
     else await sleep(1000)
@@ -389,7 +390,7 @@ async function houseHand(browser) {
   await waitFor(me, 'table locked → SEALING', () => {
     const s = window.__gameStore.getState()
     return s.match?.phase === 'SEALING' && (s.terms?.timelockTargetRound ?? 0) > 0 && s.match?.yourSeat != null
-  }, 180_000)
+  }, scheduled ? 420_000 : 180_000)
   T('sealing opens'); await sleep(1500); await shot(me, 'h2b-seal-panel')
   const spot = (await state(me)).lastPrice ?? 64000
   await me.page.evaluate((price) => void window.__gameStore.getState().sealPrediction(price), Math.round((spot + 10) * 100))
@@ -421,7 +422,8 @@ async function houseHand(browser) {
   const end = await state(me)
   expect(!end.voided, 'house hand settled (not voided)')
   expect(actions >= 1, `the visitor's moves were accepted (${actions})`)
-  expect(end.seats.length === bots.length + 1, `table had the bots plus the visitor (${end.seats.length} seats)`)
+  if (scheduled) expect(end.seats.length >= 3, `the scheduled table dealt with bots filled in around the visitor (${end.seats.length} seats)`)
+  else expect(end.seats.length === bots.length + 1, `table had the bots plus the visitor (${end.seats.length} seats)`)
   expect(end.feed > actions, `the bots acted too (${end.feed} feed events, ${actions} mine)`)
   T('settled'); await sleep(1500)
   await shot(me, 'h5-result-vs-bots')
@@ -432,7 +434,7 @@ async function houseHand(browser) {
   let next = null
   for (let i = 0; i < 90 && !next; i++) {
     const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
-    next = lobby.rooms.find((r) => bots.includes(r.creator_wallet) && r.match_id !== table.match_id) ?? null
+    next = lobby.rooms.find((r) => bots.includes(r.creator_wallet) && mine(r) && r.match_id !== table.match_id) ?? null
     if (!next) await sleep(1000)
   }
   expect(!!next, `the house opened the next table on its own (${next?.match_id})`)
@@ -465,7 +467,7 @@ async function guestSitting(browser) {
   let table = null
   for (let i = 0; i < 400 && !table; i++) {
     const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
-    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet))
+    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet) && r.creator_handle !== 'Main_Event')
     if (row && row.fill_deadline - Date.now() > 40_000) table = row
     else await sleep(1000)
   }
@@ -562,9 +564,9 @@ async function main() {
     console.log('\nGUEST SITTING E2E PASSED — no wallet → play instantly → hand → next hand deals itself')
     process.exit(0)
   }
-  if (process.env.E2E_HOUSE) {
+  if (process.env.E2E_HOUSE || process.env.E2E_EVENT) {
     try {
-      await houseHand(browser)
+      await houseHand(browser, !!process.env.E2E_EVENT)
     } finally {
       await browser.close()
       vite.kill()

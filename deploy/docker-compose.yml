@@ -218,6 +218,7 @@ services:
       HOUSE_FILL_SEC: ${HOUSE_FILL_SEC:-600}
       HOUSE_HUMAN_SEATS: ${HOUSE_HUMAN_SEATS:-1}
       HOUSE_PLAY_WITHOUT_HUMANS: ${HOUSE_PLAY_WITHOUT_HUMANS:-true}
+      HOUSE_EVENT_EVERY_SEC: ${HOUSE_EVENT_EVERY_SEC:-600}
     volumes:
       - ./secrets/house-bots:/run/house-bots:ro
     deploy:
