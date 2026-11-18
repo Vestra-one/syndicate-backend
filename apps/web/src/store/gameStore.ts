@@ -31,7 +31,7 @@ import { createAdapters, type Adapters, type TxProgressFn } from '@/lib/adapters
 import { setServerChipsMint } from '@/lib/adapters/live'
 import { createGateway, type Gateway } from '@/lib/realtime/gateway'
 import { fetchActiveGames, fetchUpcomingGames, fetchHistory } from '@/lib/discovery'
-import { setHouseBots } from '@/lib/houseBots'
+import { isHouseBot, setHouseBots } from '@/lib/houseBots'
 import { log } from '@/lib/log'
 import {
   loadSessionKey,
@@ -251,6 +251,8 @@ interface GameState {
   refund: () => Promise<string | null>
   setReviewing: (v: boolean) => void
   playAgain: () => Promise<void>
+  /** One click from a finished hand to a seat at the open house table (the join sheet). */
+  playHouse: () => Promise<void>
 
   /** Load a page of settled hands. `more: true` appends the next page via cursor. */
   loadHistory: (opts?: { more?: boolean }) => Promise<void>
@@ -1738,6 +1740,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   /** Leave the finished match and matchmake into a fresh one — no page refresh.
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
+  playHouse: async () => {
+    get().leaveToDiscovery()
+    await get().loadDiscovery()
+    const table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet))
+    if (table) await get().joinGame(table.matchId)
+  },
+
   playAgain: async () => {
     set({
       // Back to the Room page first — createGame() now opens the create sheet as an

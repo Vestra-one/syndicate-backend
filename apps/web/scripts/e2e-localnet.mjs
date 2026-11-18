@@ -371,24 +371,28 @@ async function houseHand(browser) {
   await sleep(500)
   await shot(me, 'h1-lobby-house-table')
   const before = BigInt((await state(me)).chipBalance ?? 0)
+  const t0 = Date.now(); const T = (l) => log(`     ⏱ ${l}: +${((Date.now() - t0) / 1000).toFixed(0)}s`)
   await me.page.evaluate((id) => void window.__gameStore.getState().joinGame(id), table.match_id)
   await waitFor(me, 'join sheet ready', () => window.__gameStore.getState().playMode === 'join')
+  await sleep(800); await shot(me, 'h1b-join-sheet')
   await me.page.evaluate(() => void window.__gameStore.getState().joinTable())
   await waitFor(me, 'deposit confirmed → seated with the bots', () => {
     const s = window.__gameStore.getState()
     if (s.txProgress?.stage === 'error') throw new Error(s.txProgress.errorRaw ?? s.txProgress.error)
     return s.view === 'table' && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
   }, 120_000)
-  await shot(me, 'h2-seated-with-bots')
+  T('seated'); await shot(me, 'h2-seated-with-bots')
   await waitFor(me, 'table locked → SEALING', () => {
     const s = window.__gameStore.getState()
     return s.match?.phase === 'SEALING' && (s.terms?.timelockTargetRound ?? 0) > 0 && s.match?.yourSeat != null
   }, 180_000)
+  T('sealing opens'); await sleep(1500); await shot(me, 'h2b-seal-panel')
   const spot = (await state(me)).lastPrice ?? 64000
   await me.page.evaluate((price) => void window.__gameStore.getState().sealPrediction(price), Math.round((spot + 10) * 100))
   await waitFor(me, 'visitor sealed', () => window.__gameStore.getState().sealStatus === 'sealed', 90_000)
+  T('sealed'); await sleep(1500); await shot(me, 'h2c-sealed-waiting')
   await waitFor(me, 'match LIVE', () => window.__gameStore.getState().match?.phase === 'LIVE', 180_000)
-  await shot(me, 'h3-live-with-bots')
+  T('live'); await shot(me, 'h3-live-with-bots')
   let actions = 0
   let shotTurn = false
   const deadline = Date.now() + 15 * 60_000
@@ -410,8 +414,9 @@ async function houseHand(browser) {
   expect(actions >= 1, `the visitor's moves were accepted (${actions})`)
   expect(end.seats.length === bots.length + 1, `table had the bots plus the visitor (${end.seats.length} seats)`)
   expect(end.feed > actions, `the bots acted too (${end.feed} feed events, ${actions} mine)`)
-  await sleep(1500)
+  T('settled'); await sleep(1500)
   await shot(me, 'h5-result-vs-bots')
+  await sleep(9000); await shot(me, 'h6-after-result')
   const total = end.settlement.awards.reduce((a, x) => a + BigInt(x.amount), 0n) + BigInt(end.settlement.rake ?? 0)
   log(`     awards ${JSON.stringify(end.settlement.awards)} rake ${end.settlement.rake} (pot ${total})`)
   // A second table must already be opening for the next visitor.

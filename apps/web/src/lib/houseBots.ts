@@ -10,6 +10,11 @@ export function setHouseBots(wallets?: string[] | null): void {
   bots = new Set(wallets ?? [])
 }
 
+/** True when this deployment runs a house table. */
+export function hasHouseBots(): boolean {
+  return bots.size > 0
+}
+
 export function isHouseBot(wallet?: string | null): boolean {
   return wallet != null && bots.has(wallet)
 }

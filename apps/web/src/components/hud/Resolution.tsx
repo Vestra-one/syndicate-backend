@@ -1,3 +1,4 @@
+import { hasHouseBots } from '@/lib/houseBots'
 import { useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
@@ -23,6 +24,8 @@ export function Resolution() {
 function CeremonyActions({ primary = 'again' }: { primary?: 'again' }) {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
+  const playHouse = useGameStore((s) => s.playHouse)
+  const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
   return (
     <div className="ceremony-actions">
@@ -32,9 +35,15 @@ function CeremonyActions({ primary = 'again' }: { primary?: 'again' }) {
       <button className="ghost-btn" onClick={() => leave()}>
         Live tables
       </button>
-      <button className={`ghost-btn ${primary === 'again' ? 'ghost-btn--primary' : ''}`} onClick={() => playAgain()}>
-        Deal a new table
-      </button>
+      {house ? (
+        <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse()}>
+          Play again
+        </button>
+      ) : (
+        <button className={`ghost-btn ${primary === 'again' ? 'ghost-btn--primary' : ''}`} onClick={() => playAgain()}>
+          Deal a new table
+        </button>
+      )}
     </div>
   )
 }
@@ -43,6 +52,8 @@ function CeremonyActions({ primary = 'again' }: { primary?: 'again' }) {
 function ReviewBar() {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
+  const playHouse = useGameStore((s) => s.playHouse)
+  const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
   return (
     <div className="review-bar panel">
@@ -53,8 +64,8 @@ function ReviewBar() {
       <button className="ghost-btn" onClick={() => leave()}>
         Live tables
       </button>
-      <button className="ghost-btn ghost-btn--primary" onClick={() => playAgain()}>
-        Deal a new table
+      <button className="ghost-btn ghost-btn--primary" onClick={() => (house ? void playHouse() : playAgain())}>
+        {house ? 'Play again' : 'Deal a new table'}
       </button>
     </div>
   )
@@ -230,7 +241,7 @@ function RevealRow({
       <span className="reveal-rank mono reveal-col-rank">{winner ? '♛' : rank ?? '—'}</span>
       <span className="reveal-name reveal-col-name">
         {seatAlias(r.seat, yourSeat)}
-        {r.seat === yourSeat && <span className="reveal-you"> · you</span>}
+        
       </span>
       <span className="reveal-pred mono reveal-col-pred">{formatPrice(predFloat)}</span>
       <span className={`reveal-dist mono reveal-col-dist reveal-dist--${r.dir}`}>

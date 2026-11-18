@@ -748,10 +748,10 @@ async fn act_if_ours(
     let fair = to_call.saturating_mul(2) <= pot; // getting 2:1 or better
     let (tag, amount, action) = if to_call == 0 {
         let bet_freq = match read {
-            Read::InRange => 0.60,
-            Read::NeedsMove => 0.20,
-            Read::LongShot => 0.12,
-            Read::Blind => 0.25,
+            Read::InRange => 0.80,
+            Read::NeedsMove => 0.40,
+            Read::LongShot => 0.15,
+            Read::Blind => 0.35,
         };
         if can_raise && roll < bet_freq {
             raise
