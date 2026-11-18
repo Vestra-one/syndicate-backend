@@ -1,4 +1,4 @@
-import { hasHouseBots } from '@/lib/houseBots'
+import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { useEffect, useRef, useState } from 'react'
 import { readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
 import { useGameStore } from '@/store/gameStore'
@@ -21,24 +21,40 @@ export function Resolution() {
   return voided ? <VoidCeremony reason={voided.reason} /> : <SettledCeremony />
 }
 
-/** Shared footer: review the final table, leave to the lobby, or rematch. */
-function CeremonyActions({ primary = 'again' }: { primary?: 'again' }) {
+/**
+ * Shared footer: review the final table, leave to the lobby, or play on. At a house table
+ * the next hand deals itself after a short countdown (`autoNext`) — a sitting, not a
+ * string of separate visits — unless the player sits out.
+ */
+function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'again'; autoNext?: boolean }) {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
   const playHouse = useGameStore((s) => s.playHouse)
   const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
+  const [left, setLeft] = useState(10)
+  const [sitOut, setSitOut] = useState(false)
+  const rolling = house && autoNext && !sitOut
+  useEffect(() => {
+    if (!rolling) return
+    if (left <= 0) {
+      void playHouse({ sit: true })
+      return
+    }
+    const t = setTimeout(() => setLeft((n) => n - 1), 1000)
+    return () => clearTimeout(t)
+  }, [rolling, left, playHouse])
   return (
     <div className="ceremony-actions">
-      <button className="ghost-btn" onClick={() => setReviewing(true)}>
+      <button className="ghost-btn" onClick={() => { setSitOut(true); setReviewing(true) }}>
         Review table
       </button>
-      <button className="ghost-btn" onClick={() => leave()}>
-        Live tables
+      <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>
+        {rolling ? 'Sit out' : 'Live tables'}
       </button>
       {house ? (
-        <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse()}>
-          Play again
+        <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse({ sit: true })}>
+          {rolling ? `Next hand in ${left}` : 'Next hand'}
         </button>
       ) : (
         <button className={`ghost-btn ${primary === 'again' ? 'ghost-btn--primary' : ''}`} onClick={() => playAgain()}>
@@ -65,8 +81,8 @@ function ReviewBar() {
       <button className="ghost-btn" onClick={() => leave()}>
         Live tables
       </button>
-      <button className="ghost-btn ghost-btn--primary" onClick={() => (house ? void playHouse() : playAgain())}>
-        {house ? 'Play again' : 'Deal a new table'}
+      <button className="ghost-btn ghost-btn--primary" onClick={() => (house ? void playHouse({ sit: true }) : playAgain())}>
+        {house ? 'Next hand' : 'Deal a new table'}
       </button>
     </div>
   )
@@ -256,7 +272,7 @@ function SettledCeremony() {
         )}
         {claimError && <div className="ceremony-error eyebrow" role="alert">{claimError}</div>}
 
-        <CeremonyActions />
+        <CeremonyActions autoNext={amountsKnown && (!!tx || yourAward === 0n) && !!seats?.some((x) => x.seat !== yourSeat && isHouseBot(x.wallet))} />
       </div>
     </div>
   )

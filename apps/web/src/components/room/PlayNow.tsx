@@ -5,6 +5,7 @@ import { useGameStore } from '@/store/gameStore'
 import { formatChips } from '@/lib/format'
 import { hostAlias } from '@/lib/seats'
 import { isHouseBot } from '@/lib/houseBots'
+import { guestAllowed, startGuest } from '@/lib/guestWallet'
 import type { UpcomingGame } from '@/lib/protocol'
 import { Coin, SeatPips, AvatarStack, FillRing } from './bits'
 import { useNow } from '@/lib/useNow'
@@ -65,7 +66,13 @@ export function PlayNow() {
   )
 
   const handleJoin = (matchId: string) => {
-    if (!connected) { setVisible(true); return }
+    if (!connected) {
+      // No wallet? Sit down anyway: a table wallet is made here and filled with test chips.
+      // (Players who want their own wallet connect it from the header first.)
+      if (guestAllowed()) startGuest(matchId)
+      else setVisible(true)
+      return
+    }
     void joinGame(matchId)
   }
   const handleCreate = () => {

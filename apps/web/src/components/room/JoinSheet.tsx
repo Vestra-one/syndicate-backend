@@ -1,3 +1,4 @@
+import { guestAllowed, startGuest } from '@/lib/guestWallet'
 import { TestChips } from '@/components/hud/TestChips'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
@@ -107,6 +108,12 @@ export function JoinSheet({ matchId }: { matchId: string }) {
       <button className="btn-gold" type="button" disabled={busy} onClick={handleCommit}>
         {connected ? `Take your seat · deposit ${formatChips(total)} USDC` : 'Connect wallet to continue'}
       </button>
+      {!connected && guestAllowed() && (
+        <button className="guest-btn" type="button" onClick={() => startGuest(matchId)}>
+          Play instantly — no wallet needed
+          <small>A table wallet is made in this browser and filled with test chips.</small>
+        </button>
+      )}
       <p className="sheet-fine">entry refunded if the table never fills</p>
       {!busy && <button className="sheet-back" type="button" onClick={close}>← Back to tables</button>}
     </Shell>

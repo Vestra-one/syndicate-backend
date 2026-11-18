@@ -5510,3 +5510,9 @@
 .table-talk-btn:hover { color: var(--text, #f3ead2); border-color: rgba(231, 200, 115, 0.5); }
 @keyframes talk-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .reveal-record { display: block; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+
+/* Play instantly (table wallet) */
+.guest-btn { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 100%; margin-top: 10px; padding: 11px 14px; border-radius: 12px; border: 1px solid rgba(231, 200, 115, 0.45); background: transparent; color: var(--gold, #e7c873); font: inherit; font-size: 14px; letter-spacing: 0.03em; cursor: pointer; }
+.guest-btn:hover { background: rgba(231, 200, 115, 0.1); }
+.guest-btn small { font-size: 11px; color: var(--text-dim); letter-spacing: 0; }
+.wc-btn--guest { margin-left: 8px; background: transparent; border: 1px solid rgba(231, 200, 115, 0.45); color: var(--gold, #e7c873); }

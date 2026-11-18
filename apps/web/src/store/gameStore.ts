@@ -266,7 +266,7 @@ interface GameState {
   setReviewing: (v: boolean) => void
   playAgain: () => Promise<void>
   /** One click from a finished hand to a seat at the open house table (the join sheet). */
-  playHouse: () => Promise<void>
+  playHouse: (opts?: { sit?: boolean }) => Promise<void>
 
   /** Load a page of settled hands. `more: true` appends the next page via cursor. */
   loadHistory: (opts?: { more?: boolean }) => Promise<void>
@@ -1784,11 +1784,20 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  playHouse: async () => {
+  playHouse: async (opts) => {
     get().leaveToDiscovery()
-    await get().loadDiscovery()
-    const table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet))
-    if (table) await get().joinGame(table.matchId)
+    // The house opens its next table as the last one locks, so one is nearly always up;
+    // give it a few seconds if we arrive in the gap.
+    let table: UpcomingGame | undefined
+    for (let i = 0; i < 8 && !table; i++) {
+      await get().loadDiscovery({ silent: i > 0 })
+      table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet))
+      if (!table) await new Promise((r) => setTimeout(r, 2000))
+    }
+    if (!table) return
+    await get().joinGame(table.matchId)
+    // Staying at the table: take the seat straight away instead of stopping at the sheet.
+    if (opts?.sit && get().playMode === 'join' && get().terms) await get().joinTable()
   },
 
   playAgain: async () => {

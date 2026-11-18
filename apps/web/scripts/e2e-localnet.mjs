@@ -440,6 +440,86 @@ async function houseHand(browser) {
 }
 
 // ---------------------------------------------------------------------------------------
+// Guest sitting (E2E_GUEST=1, stack started with BOTS=1): a visitor with NO wallet clicks
+// "Play instantly", is given a table wallet and test chips, plays a hand against the bots,
+// and is dealt straight into the next one without touching anything.
+// ---------------------------------------------------------------------------------------
+async function guestSitting(browser) {
+  const ctx = await browser.createBrowserContext()
+  const page = await ctx.newPage()
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
+  const me = { name: 'guest', page, errors: [], prompts: {} }
+  await page.goto(APP, { waitUntil: 'domcontentloaded' })
+  await waitFor(me, 'store ready', () => !!window.__gameStore)
+  const cfg = await (await fetch(`${gameUrl}/v1/config`)).json()
+  const bots = cfg.house_bot_wallets ?? []
+  let table = null
+  for (let i = 0; i < 400 && !table; i++) {
+    const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
+    const row = lobby.rooms.find((r) => bots.includes(r.creator_wallet))
+    if (row && row.fill_deadline - Date.now() > 40_000) table = row
+    else await sleep(1000)
+  }
+  expect(!!table, `a house table is open (${table?.match_id})`)
+  await page.evaluate(() => void window.__gameStore.getState().loadDiscovery())
+  await waitFor(me, 'guest sees the house table', (id) => window.__gameStore.getState().upcomingGames.some((g) => g.matchId === id), 30_000, table.match_id)
+  await page.waitForSelector('.wc-btn--guest', { timeout: 20_000 })
+  await shot(me, 'g1-play-instantly')
+  const t0 = Date.now(); const T = (l) => log(`     ⏱ ${l}: +${((Date.now() - t0) / 1000).toFixed(0)}s`)
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('.wc-btn--guest')])
+  await waitFor(me, 'reloaded into the table wallet', () => !!window.__gameStore?.getState().walletAddress, 30_000)
+  await waitFor(me, 'test chips arrived on their own', () => BigInt(window.__gameStore.getState().chipBalance ?? 0) >= 100000000n, 60_000)
+  T('funded')
+  await page.evaluate((id) => void window.__gameStore.getState().joinGame(id), table.match_id)
+  await waitFor(me, 'join sheet open', () => window.__gameStore.getState().playMode === 'join', 30_000)
+  await sleep(600); await shot(me, 'g2-join-as-guest')
+  await page.evaluate(() => void window.__gameStore.getState().joinTable())
+  const seatedAt = async (label) => waitFor(me, label, () => {
+    const s = window.__gameStore.getState()
+    if (s.txProgress?.stage === 'error') throw new Error(s.txProgress.errorRaw ?? s.txProgress.error)
+    return s.view === 'table' && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
+  }, 120_000)
+  await seatedAt('guest seated with the bots — no wallet prompts')
+  T('seated')
+  const playHand = async (n) => {
+    await waitFor(me, `hand ${n}: SEALING`, () => {
+      const s = window.__gameStore.getState()
+      return s.match?.phase === 'SEALING' && (s.terms?.timelockTargetRound ?? 0) > 0 && s.match?.yourSeat != null
+    }, 240_000)
+    const spot = (await state(me)).lastPrice ?? 64000
+    await page.evaluate((price) => void window.__gameStore.getState().sealPrediction(price), Math.round((spot + 5) * 100))
+    await waitFor(me, `hand ${n}: sealed`, () => window.__gameStore.getState().sealStatus === 'sealed', 90_000)
+    await waitFor(me, `hand ${n}: LIVE`, () => window.__gameStore.getState().match?.phase === 'LIVE', 180_000)
+    const deadline = Date.now() + 12 * 60_000
+    for (;;) {
+      const s = await state(me)
+      if (s.settlement || s.voided) break
+      if (Date.now() > deadline) throw new Error(`hand ${n} never settled`)
+      if (s.yourTurn && !s.actPending && s.phase === 'LIVE' && s.bettingOpen) {
+        await act(me, s.yourTurn.toCall > 0 ? { type: 'call' } : { type: 'check' })
+      }
+      await sleep(700)
+    }
+    expect(!(await state(me)).voided, `hand ${n} settled`)
+    return (await state(me)).matchId
+  }
+  const first = await playHand(1)
+  T('hand 1 settled')
+  await sleep(4000); await shot(me, 'g3-result-next-hand-countdown')
+  // Touch nothing: the claim lands, the countdown runs out, and the next hand deals itself.
+  await waitFor(me, 'dealt into the next hand without touching anything', (prev) => {
+    const s = window.__gameStore.getState()
+    return !!s.match?.matchId && s.match.matchId !== prev && s.seated && s.lastTx?.label === 'Deposit confirmed on-chain'
+  }, 150_000, first)
+  T('seated at hand 2')
+  await shot(me, 'g4-seated-hand-2')
+  const second = await playHand(2)
+  T('hand 2 settled')
+  expect(second !== first, 'two hands in one sitting')
+  await sleep(1500); await shot(me, 'g5-result-hand-2')
+}
+
+// ---------------------------------------------------------------------------------------
 // The hand
 // ---------------------------------------------------------------------------------------
 async function main() {
@@ -459,6 +539,20 @@ async function main() {
       '--disable-backgrounding-occluded-windows',
     ],
   })
+  if (process.env.E2E_GUEST) {
+    try {
+      await guestSitting(browser)
+    } finally {
+      await browser.close()
+      vite.kill()
+    }
+    if (failed) {
+      console.error('\nGUEST SITTING E2E FAILED')
+      process.exit(1)
+    }
+    console.log('\nGUEST SITTING E2E PASSED — no wallet → play instantly → hand → next hand deals itself')
+    process.exit(0)
+  }
   if (process.env.E2E_HOUSE) {
     try {
       await houseHand(browser)

@@ -12,10 +12,15 @@ import {
 } from '@solana/wallet-adapter-wallets'
 import type { WalletError, Adapter } from '@solana/wallet-adapter-base'
 import App from './App.tsx'
+import { registerGuestWallet } from '@/lib/guestWallet'
+import { GuestBoot } from '@/components/GuestBoot'
 import { WalletBridgeSync } from '@/components/WalletBridgeSync.tsx'
 import { useGameStore } from '@/store/gameStore'
 import './styles/global.css'
 import '@solana/wallet-adapter-react-ui/styles.css'
+
+// A returning guest's table wallet must exist before the wallet layer looks for wallets.
+registerGuestWallet()
 
 const RPC_URL =
   (import.meta.env.VITE_SOLANA_RPC_URL as string | undefined) ?? 'https://api.devnet.solana.com'
@@ -67,6 +72,7 @@ function SolanaProviders({ children }: { children: ReactNode }) {
   const inner = (
     <>
       <WalletBridgeSync />
+      <GuestBoot />
       {children}
     </>
   )

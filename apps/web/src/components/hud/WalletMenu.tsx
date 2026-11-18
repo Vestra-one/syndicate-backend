@@ -1,3 +1,4 @@
+import { guestAllowed, startGuest } from '@/lib/guestWallet'
 import { TestChips } from '@/components/hud/TestChips'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react'
@@ -89,9 +90,16 @@ export function WalletMenu() {
 
   if (!connected) {
     return (
+      <>
       <button className="wc-btn" onClick={() => setVisible(true)} disabled={connecting}>
         {connecting ? <><span className="wc-spinner" /> Connecting…</> : <>◎ Connect Wallet</>}
       </button>
+      {guestAllowed() && (
+        <button className="wc-btn wc-btn--guest" onClick={() => startGuest()} title="A table wallet is made in this browser and filled with test chips.">
+          Play instantly
+        </button>
+      )}
+      </>
     )
   }
 
