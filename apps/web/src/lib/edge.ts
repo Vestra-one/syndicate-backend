@@ -32,7 +32,11 @@ export function volPerSqrtSec(history: PricePoint[]): number | null {
 export function typicalMove(history: PricePoint[], seconds: number): number | null {
   const last = history.at(-1)?.price
   if (last == null || seconds <= 0) return null
-  const vol = volPerSqrtSec(history) ?? last * FALLBACK_VOL_PER_SQRT_SEC
+  // A calm minute of tape says little about the next two: volatility comes in bursts, and a
+  // quiet reading right before a burst is what made this number look wrong to players. Never
+  // read calmer than the market's long-run norm, and lean wide rather than narrow.
+  const floor = last * FALLBACK_VOL_PER_SQRT_SEC
+  const vol = Math.max(volPerSqrtSec(history) ?? floor, floor) * 1.25
   const walk = vol * Math.sqrt(seconds)
   // Tick-to-tick volatility scaled by √time assumes the market wanders without direction.
   // When it trends, that badly understates how far it travels — so also measure what the

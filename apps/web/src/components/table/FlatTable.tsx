@@ -15,6 +15,9 @@ export function FlatTable() {
   const pts = history.slice(-180)
   const last = pts.at(-1)?.price
   const callPx = call != null ? Number(call) / scale : null
+  // While you are choosing a number the seal box takes the lower half of the screen —
+  // the chart moves up out of its way instead of hiding behind it.
+  const sealing = useGameStore((st) => st.match?.phase === 'SEALING')
   // Your own seat, at the near edge of the table like everyone else's.
   const seatedAs = useGameStore((st) => (st.view === 'table' && st.match?.yourSeat != null && (st.match.phase === 'SEALING' || st.match.phase === 'LIVE') ? `You · seat ${st.match.yourSeat + 1}` : null))
   // Once the hand settles, every call goes on the chart against the print: this is the
@@ -51,8 +54,16 @@ export function FlatTable() {
     const up = last >= pts[0].price
     const callY = callPx != null && callPx >= lo && callPx <= hi ? y(callPx) : null
     const money = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    // Calls that landed close together would print their names on top of each other:
+    // keep each label at least a line apart, top to bottom.
+    const labelTops = reveals
+      .map((r) => ({ r, top: (y(r.px) / H) * 100 }))
+      .sort((p, q) => p.top - q.top)
+    for (let i = 1; i < labelTops.length; i++) {
+      if (labelTops[i].top - labelTops[i - 1].top < 9) labelTops[i].top = labelTops[i - 1].top + 9
+    }
     chart = (
-      <div className="flat-chart">
+      <div className={`flat-chart ${sealing ? 'flat-chart--sealing' : ''} ${settlement ? 'flat-chart--settled' : ''}`}>
         <div className="flat-chart-head">
           <span className="eyebrow">{feed} · live</span>
           <b className={`mono ${up ? 'flat-up' : 'flat-down'}`}>${money(last)}</b>
@@ -68,8 +79,8 @@ export function FlatTable() {
         </svg>
         {reveals.length > 0 && (
           <div className="flat-reveal-labels">
-            {reveals.map((r) => (
-              <span key={r.seat} className={`flat-reveal-label ${r.seat === yourSeat ? 'flat-reveal-label--you' : ''}`} style={{ top: `${(y(r.px) / H) * 100}%` }}>
+            {labelTops.map(({ r, top }) => (
+              <span key={r.seat} className={`flat-reveal-label ${r.seat === yourSeat ? 'flat-reveal-label--you' : ''}`} style={{ top: `${top}%` }}>
                 {seatAlias(r.seat, yourSeat ?? undefined)} · ${money(r.px)}
               </span>
             ))}

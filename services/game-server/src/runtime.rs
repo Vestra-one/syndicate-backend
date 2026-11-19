@@ -838,7 +838,21 @@ impl Actor {
         };
         // Street close: force-resolve outstanding turns.
         let street_close = self.fair_close_ms(rt, live_start);
-        if now >= street_close {
+        // One slow player must not cost everyone behind them their turn: while there is
+        // still room in the quiet gap, only the player on the clock is timed out and the
+        // next one gets a turn of their own. The whole round is shut only when the room is gone.
+        let room_left = {
+            let round = rt.engine().round;
+            round >= 1
+                && round <= rt.config().round_count
+                && rt.engine().to_act.is_some()
+                && {
+                    let gap_end = live_start + rt.street_end_offset_sec(round).saturating_mul(1_000);
+                    let keep_shut = if round == rt.config().round_count { 4_000 } else { 500 };
+                    now + 2_500 < gap_end.saturating_sub(keep_shut)
+                }
+        };
+        if now >= street_close && !room_left {
             let Some(rt) = self.runtime.as_mut() else {
                 return;
             };
@@ -858,6 +872,7 @@ impl Actor {
                 .map(|deadline| (idx, deadline))
         });
         if let Some((idx, deadline)) = timeout {
+            let deadline = deadline.min(street_close);
             if now < deadline {
                 return;
             }

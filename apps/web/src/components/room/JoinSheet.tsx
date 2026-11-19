@@ -4,7 +4,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useGameStore } from '@/store/gameStore'
 import { formatChips, formatChipsPrecise } from '@/lib/format'
-import { hostAlias } from '@/lib/seats'
+import { displayName, hostAlias } from '@/lib/seats'
 import { PAST_FILLING_PHASES } from '@/lib/protocol'
 import { SeatPips, mmss } from './bits'
 import { useNow } from '@/lib/useNow'
@@ -31,7 +31,7 @@ export function JoinSheet({ matchId }: { matchId: string }) {
   const { setVisible } = useWalletModal()
 
   const listed = upcomingGames.find((g) => g.matchId === matchId)
-  const dealtBy = listed?.creatorHandle ?? hostAlias(matchId)
+  const dealtBy = listed?.creatorWallet ? displayName(listed.creatorWallet, listed.creatorHandle) : (listed?.creatorHandle ?? hostAlias(matchId))
   const busy = !!txProgress
 
   if (playResolving) {

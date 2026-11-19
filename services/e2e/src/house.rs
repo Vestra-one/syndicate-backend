@@ -607,6 +607,17 @@ async fn level_sol(ctx: &Ctx, bots: &[Player]) {
     }
     let Some((poor, &low)) = bal.iter().enumerate().min_by_key(|(_, b)| **b) else { return };
     let Some((rich, &high)) = bal.iter().enumerate().max_by_key(|(_, b)| **b) else { return };
+    // The whole crew is running low: on a test network, ask its faucet. (A mainnet RPC has
+    // no faucet and simply refuses; the request is skipped there by its URL.)
+    if high < 150_000_000 {
+        let url = ctx.rpc.url();
+        if url.contains("devnet") || url.contains("testnet") || url.contains("127.0.0.1") || url.contains("localhost") {
+            match ctx.rpc.request_airdrop(&bots[poor].pubkey(), 1_000_000_000).await {
+                Ok(_) => println!("house: asked the faucet for 1 SOL for {}", bots[poor].name),
+                Err(e) => println!("house: faucet refused ({e}) — the bots need a manual SOL top-up soon"),
+            }
+        }
+    }
     if poor == rich || low >= 50_000_000 || high < 120_000_000 {
         return;
     }
@@ -815,7 +826,7 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     // Which bot plays which style rotates by table, so no one bot is always
                     // the one sitting on the market (and winning every showdown).
                     let turn = room.match_id.bytes().fold(0usize, |a, b| a + b as usize);
-                    let (lo, hi) = [(0.0, 3.0), (4.0, 9.0), (8.0, 15.0)][(i + turn) % 3];
+                    let (lo, hi) = [(0.5, 4.0), (5.0, 11.0), (10.0, 20.0)][(i + turn) % 3];
                     let side = if rng.unit() < 0.5 { -1.0 } else { 1.0 };
                     let drift = side * (lo + rng.unit() * (hi - lo)) / 10_000.0;
                     let call = (spot as f64 * (1.0 + drift)) as i128;
@@ -911,7 +922,18 @@ async fn act_if_ours(
         .as_u64()
         .unwrap_or_else(|| detail["round"].as_u64().unwrap_or(1));
     if let Some(wait_ms) = wait_until_betting_open_ms(detail, round) {
-        return tokio::time::sleep(Duration::from_millis(wait_ms.clamp(250, 2_000))).await;
+        // A turn handed over after the round's scheduled close still has its own clock
+        // (the server lends it time from the quiet gap) — play it rather than sit it out.
+        let now = detail["server_time_ms"].as_u64().unwrap_or(0);
+        let own_clock = turn["deadline_ms"].as_u64().is_some_and(|d| d > now + 1_200);
+        let opened = detail["timing"]["street_schedule"]
+            .as_array()
+            .and_then(|s| s.iter().find(|w| w["street"].as_u64() == Some(round.saturating_sub(1))))
+            .and_then(|w| w["open"].as_u64())
+            .is_some_and(|open| now >= open);
+        if !(own_clock && opened) {
+            return tokio::time::sleep(Duration::from_millis(wait_ms.clamp(250, 2_000))).await;
+        }
     }
     let Some(seat) = detail["seats"].as_array().and_then(|seats| {
         seats
@@ -1055,6 +1077,14 @@ async fn act_if_ours(
             let want = min_raise_to
                 .max(current_bet + (pot as f64 * frac) as u64)
                 .min(max_total);
+            // Nobody shoves a stack before the market has shown anything: early bets stay
+            // a fraction of the stack, and the big bets come when the price has spoken.
+            let early_cap = match round {
+                0 | 1 => 0.3,
+                2 => 0.6,
+                _ => 1.0,
+            };
+            let want = want.min(min_raise_to.max((max_total as f64 * early_cap) as u64));
             // Whole cents (chips have six decimals): no half-cent bets on the table.
             let raise_to = if want < max_total {
                 (want / 10_000 * 10_000).max(min_raise_to)

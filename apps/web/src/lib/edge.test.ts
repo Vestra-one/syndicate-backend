@@ -11,13 +11,14 @@ describe('edge', () => {
     // ±4 every second → 4 per √s.
     const t = tape(Array.from({ length: 60 }, (_, i) => (i % 2 ? 4 : -4)))
     expect(volPerSqrtSec(t)).toBeCloseTo(4, 5)
-    expect(typicalMove(t, 100)).toBeCloseTo(40, 5)
+    // never calmer than the long-run floor, and 25% wide of it
+    expect(typicalMove(t, 100)).toBeCloseTo(64_000 * 0.00009 * 10 * 1.25, 3)
   })
 
   it('falls back to a BTC-like volatility on a short tape', () => {
     const t = tape([0, 1, -1])
     expect(volPerSqrtSec(t)).toBeNull()
-    expect(typicalMove(t, 100)).toBeCloseTo(64_000 * 0.00009 * 10, 3)
+    expect(typicalMove(t, 100)).toBeCloseTo(64_000 * 0.00009 * 10 * 1.25, 3)
   })
 
   it('reads the gap in typical moves', () => {

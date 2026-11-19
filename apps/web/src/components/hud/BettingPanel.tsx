@@ -267,7 +267,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
       )}
       {moveText && (
         <p className="seal-guide">
-          The market typically moves about <b className="mono">±{moveText}</b> by settlement.
+          The market typically moves about <b className="mono">±{moveText}</b> by settlement — about one hand in three it goes further.
           Sit on the market and you share it with everyone who did the same; step far out and you need a big move.
         </p>
       )}
@@ -463,8 +463,8 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
           </span>
         </div>
         <p className="seal-note eyebrow">
-          The match runs to its scheduled end, then settles automatically
-          {folded ? '.' : ' — the pot comes to you.'}
+          The hand is over — the result arrives in a few seconds
+          {folded ? '.' : ' and the pot comes to you.'}
         </p>
       </div>
     )

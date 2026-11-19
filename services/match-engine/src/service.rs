@@ -364,7 +364,12 @@ impl FencedMatchRuntime {
         if seat_index >= self.engine.seats.len() {
             return Err(MatchServiceError::InvalidIntent("seat index out of range"));
         }
+        // Running out the clock facing a blind or less is always played as a call (or a
+        // check), whatever was registered: nobody throws a hand away for the price of a blind.
+        let cheap_call = default == DefaultAction::CheckCallAny
+            && self.engine.to_call(seat_index) <= self.engine.big_blind;
         match self.registered_defaults.get(&seat_index) {
+            _ if cheap_call => {}
             Some(registered) if registered.policy != default => {
                 return Err(MatchServiceError::InvalidIntent(
                     "timeout default does not match registered policy",
