@@ -2111,7 +2111,7 @@ function startCollector(set: SetState, get: () => GameState): void {
             const winner = detail.seats.find((x) => BigInt(x.pot_won_chips ?? 0) > 0n)
             if (!won && winner && dist(mine?.prediction_wad) < dist(winner.prediction_wad)) tail = ' — and you had folded a closer number than the winner'
           } catch { /* the plain line is fine */ }
-          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${tail}` }, collectNote: { id: sig, label: `${won ? `You won your last hand: +${formatChips(payout - BigInt(c.staked))}` : `${formatChips(payout)} back from your last hand`}${won ? '' : tail}` } })
+          set({ collectNote: { id: sig, label: `${won ? `You won your last hand: +${formatChips(payout - BigInt(c.staked))}` : `${formatChips(payout)} back from your last hand`}${won ? '' : tail}` } })
           drop()
           void refreshBalance(set, true)
         } catch (err) {
