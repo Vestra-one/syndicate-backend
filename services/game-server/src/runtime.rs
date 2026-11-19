@@ -270,7 +270,7 @@ impl Actor {
     /// borrowed from the quiet gap after the round. In the last round the borrowing stops
     /// short of the end, so bets are always shut for the final seconds before settlement.
     fn fair_close_ms(&self, rt: &FencedMatchRuntime, live_ms: u64) -> u64 {
-        const FAIR_TURN_MS: u64 = 12_000;
+        const FAIR_TURN_MS: u64 = 15_000;
         let close = rt.current_street_close_ms(live_ms);
         let round = rt.engine().round;
         if rt.engine().to_act.is_none() || round == 0 || round > rt.config().round_count {

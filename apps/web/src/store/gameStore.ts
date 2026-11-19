@@ -2070,7 +2070,16 @@ function startCollector(set: SetState, get: () => GameState): void {
         if (payout === 0n || !isGuestWallet(wallet)) { drop(); continue }
         try {
           const sig = await adapters.chain.claimSettled(c.onchainMatchId)
-          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${won ? ' — you won it' : ''}` } })
+          // The line the result card would have shown, so skipping ahead does not cost
+          // the player the best part of the hand they left.
+          let tail = won ? ' — you won it' : ''
+          try {
+            const px = Number((detail as { settlement_price_wad?: string | null }).settlement_price_wad ?? 0)
+            const dist = (w?: string | null) => (w != null && px > 0 ? Math.abs(Number(w) - px) : Infinity)
+            const winner = detail.seats.find((x) => BigInt(x.pot_won_chips ?? 0) > 0n)
+            if (!won && winner && dist(mine?.prediction_wad) < dist(winner.prediction_wad)) tail = ' — and you had folded a closer number than the winner'
+          } catch { /* the plain line is fine */ }
+          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${tail}` } })
           drop()
           void refreshBalance(set, true)
         } catch (err) {
@@ -2086,6 +2095,9 @@ function startCollector(set: SetState, get: () => GameState): void {
     }
   }, 6_000)
 }
+
+/** The dealer button of the hand in view (see matchFromState). */
+let liveButton: number | null = null
 
 /** Consecutive seat reads of a dealt hand that did not include us (one could be a race). */
 let dealtOutStrikes = 0
@@ -2181,7 +2193,8 @@ function snapshotToMatchState(state: WsMatchState, myWallet: string | null): Mat
     round: state.round ?? 1,
     pot: BigInt(state.pot ?? 0),
     currentBet: BigInt(state.current_bet ?? 0),
-    buttonSeat: state.button ?? 0,
+    // Action frames do not repeat the button; the go-live frame and the record carry it.
+    buttonSeat: state.button ?? liveButton ?? 0,
     toActSeat: state.to_act ?? null,
     seats,
     feedPrice: 0, // live price arrives via `action` frames / the price WS, not the snapshot
@@ -2313,8 +2326,10 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
 
     case 'phase': {
       const phase = mapPhase(frame.phase)
+      const fb = (frame as { button?: number | null }).button
+      if (fb != null) liveButton = fb
       set((s) => ({
-        match: s.match ? { ...s.match, phase } : s.match,
+        match: s.match ? { ...s.match, phase, buttonSeat: fb ?? s.match.buttonSeat } : s.match,
         terms: s.terms && frame.timelock_target != null ? { ...s.terms, timelockTargetRound: frame.timelock_target } : s.terms,
         fillDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.fillDeadline,
         sealDeadline: frame.seal_deadline != null ? toEpochMs(frame.seal_deadline) : s.sealDeadline,
@@ -2843,6 +2858,7 @@ async function refreshMatchSeats(set: SetState, get: () => GameState): Promise<v
               pot: detail.pot != null ? BigInt(detail.pot) : s.match.pot,
               currentBet: detail.current_bet != null ? BigInt(detail.current_bet) : s.match.currentBet,
               toActSeat: detail.to_act ?? null,
+              buttonSeat: detail.button != null ? (liveButton = detail.button) : s.match.buttonSeat,
               yourSeat: mine?.seat_index ?? s.match.yourSeat,
               yourStack: mine?.stack != null ? BigInt(mine.stack) : s.match.yourStack,
               yourExposure: mine?.total_contribution != null ? BigInt(mine.total_contribution) : s.match.yourExposure,

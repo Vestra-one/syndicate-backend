@@ -82,7 +82,7 @@ export function edgeRead(gap: number, move: number): EdgeRead {
   const label = level === 'in-range' ? 'In range' : level === 'needs-move' ? 'Needs a move' : 'Long shot'
   const tip =
     level === 'in-range'
-      ? 'The market is sitting on your call. This is the time to bet.'
+      ? (moves <= 0.2 ? 'The market is sitting on your call. This is the time to bet.' : 'Your call is within reach of the market. A good spot to bet — it can still drift away.')
       : level === 'needs-move'
         ? 'You need the market to come back. Call small bets, fold to big ones.'
         : 'The market has run away from your call. Fold to a bet — or bluff.'

@@ -6,7 +6,6 @@ import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
 import { getFibsBoard, reportFibs } from '@/lib/api'
 import type { VoidReason } from '@/lib/protocol'
-import { isGuestWallet } from '@/lib/guestWallet'
 
 const STEP_MS = 850 // between one call turning over and the next
 
@@ -38,14 +37,17 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const leave = useGameStore((s) => s.leaveToDiscovery)
   const [left, setLeft] = useState(20)
   const [sitOut, setSitOut] = useState(false)
-  // Dealing the next hand spends another buy-in, so it is the player's choice and it is
-  // on show: free test chips (the table wallet) default to on, a real wallet to off.
-  const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
+  // Dealing the next hand spends another buy-in, so it never happens unless the player
+  // ticked the box themselves — free chips or not.
+  const guest = false
   const [auto, setAuto] = useState<boolean>(() => {
     try { const v = localStorage.getItem('st-autodeal'); return v == null ? guest : v === 'on' } catch { return guest }
   })
   const toggleAuto = () => setAuto((v) => { try { localStorage.setItem('st-autodeal', v ? 'off' : 'on') } catch { /* private mode */ } return !v })
-  const rolling = house && autoNext && !sitOut && auto
+  // Was this the house table (three bots), or a table someone dealt? "Next hand" only
+  // means "this table again" at the house; anywhere else it is a move, and says so.
+  const here = useGameStore((s) => (s.match?.seats.filter((x) => isHouseBot(x.wallet)).length ?? 0) >= 3)
+  const rolling = house && here && autoNext && !sitOut && auto
   useEffect(() => {
     if (!rolling) return
     if (left <= 0) {
@@ -57,7 +59,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   }, [rolling, left, playHouse])
   return (
     <>
-    {house && autoNext && (
+    {house && here && autoNext && (
       <label className="ceremony-auto">
         <input type="checkbox" checked={auto} onChange={toggleAuto} /> Deal me into the next hand automatically
       </label>
@@ -68,13 +70,19 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
       </button>
       {rolling ? (
         // Stops the countdown and nothing else: read the result for as long as you like.
-        <button className="ghost-btn" onClick={() => setSitOut(true)}>Stay here</button>
+        <>
+          <button className="ghost-btn" onClick={() => setSitOut(true)}>Stay here</button>
+          <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>Lobby</button>
+        </>
       ) : (
         <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>Lobby</button>
       )}
+      {house && !here && (
+        <button className="ghost-btn" onClick={() => playAgain()}>Deal this table again</button>
+      )}
       {house ? (
         <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse({ sit: true })}>
-          {rolling ? `Next hand in ${left}` : 'Next hand'}
+          {rolling ? `Next hand in ${left}` : here ? 'Next hand' : 'Play the house table'}
         </button>
       ) : (
         <button className={`ghost-btn ${primary === 'again' ? 'ghost-btn--primary' : ''}`} onClick={() => playAgain()}>

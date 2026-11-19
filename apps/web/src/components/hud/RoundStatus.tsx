@@ -64,7 +64,9 @@ export function RoundStatus() {
     const bettingDone = match.round > round || now >= cur.close
     const next = schedule?.[cur.street + 1]
     // A turn that opened late in the round is allowed to finish past the scheduled close.
-    const lastTurn = match.round === round && now >= cur.close && match.toActSeat != null && now < cur.end
+    // …and from a turn-length before the close, the round ends when that turn does — so
+    // stop counting down to a close the turn's own clock is allowed to run past.
+    const lastTurn = match.round === round && now >= cur.close - 15_000 && match.toActSeat != null && now < cur.end
     if (lastTurn) clock = 'last action of the round'
     else if (!bettingDone) clock = `betting closes in ${formatCountdown(cur.close - now)}`
     else if (next) clock = `betting done · round ${round + 1} opens in ${formatCountdown(next.open - now)}`

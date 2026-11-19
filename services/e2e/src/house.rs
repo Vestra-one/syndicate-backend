@@ -991,6 +991,7 @@ async fn act_if_ours(
     // Value-bet a live call, bluff a dead one now and then, and respect the price of a call.
     let cheap = to_call.saturating_mul(4) <= pot; // getting 4:1 or better
     let fair = to_call.saturating_mul(2) <= pot; // getting 2:1 or better
+    let big = to_call > pot.saturating_sub(to_call); // more than the pot that was there
     let (tag, amount, action) = if to_call == 0 {
         let bet_freq = style.0
             * match read {
@@ -1006,6 +1007,13 @@ async fn act_if_ours(
         }
     } else {
         let (raise_freq, call_freq) = match read {
+            // A shove or an overbet is a different question: only a call the market is
+            // close to pays it off, and even then not every time. Calling every all-in is
+            // what turns each big hand into the same four-way showdown.
+            Read::InRange if big => (0.04, 0.6),
+            Read::NeedsMove if big => (0.0, 0.12),
+            Read::LongShot if big => (0.0, 0.03),
+            Read::Blind if big => (0.0, 0.10),
             Read::InRange => (0.25, 1.0),
             Read::NeedsMove if fair => (0.05, 0.75),
             Read::NeedsMove => (0.04, 0.45),

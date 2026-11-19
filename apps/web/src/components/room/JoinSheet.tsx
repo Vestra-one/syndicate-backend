@@ -79,7 +79,7 @@ export function JoinSheet({ matchId }: { matchId: string }) {
 
       <div className="seatline">
         <SeatPips seated={filled} total={terms.maxPlayers} youAt={filled + 1} />
-        <p><b>{filled} of {terms.maxPlayers} seated</b> — you'll take seat {filled + 1}. Table deals when it fills.</p>
+        <p><b>{filled} of {terms.maxPlayers} seated</b> — you'll take one of the open seats. Table deals when it fills.</p>
       </div>
 
       <div className="terms">

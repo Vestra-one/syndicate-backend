@@ -6,7 +6,7 @@ import { formatChips, formatCountdown } from '@/lib/format'
 import { buildInviteUrl } from '@/lib/invite'
 import { projectFeltCentre, projectWaitingSeat } from '@/three/table/tableView'
 import { PAST_FILLING_PHASES, type SeatView } from '@/lib/protocol'
-import { seatAlias, seatTag, describeEvent, hostAlias } from '@/lib/seats'
+import { seatAlias, seatTag, describeEvent, displayName } from '@/lib/seats'
 import { SeatPod } from './SeatPod'
 import { personaEmblem } from './Seats'
 import { ReclaimCard } from './ReclaimCard'
@@ -229,7 +229,7 @@ export function SeatSlot({ angle, side, children }: { angle: number; side: 'left
 
 function YouPod({ seatNo, stack, token, yourSeat, side }: { seatNo: number; stack: bigint; token: string; yourSeat: number; side: 'left' | 'right' }) {
   const addr = useGameStore((s) => s.walletAddress)
-  const short = addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : 'You'
+  const short = addr ? displayName(addr) : 'You'
   return (
     <SeatPod
       size="compact"
@@ -334,7 +334,8 @@ function YourSeatCard() {
       <div className="wr-card-title">Your seat</div>
       <div className="wr-seat-hero">
         <span className="wr-seat-label">Seat</span>
-        <span className="wr-seat-num mono">{seatNo}</span>
+        {/* Seat numbers are dealt with the hand; before that, promising one is a guess. */}
+        <span className="wr-seat-num mono">{match?.yourSeat != null ? seatNo : '✓'}</span>
       </div>
       <div className="wr-seat-money">
         <span className="mono">{formatChips(terms.buyIn)}</span> buy-in
@@ -579,9 +580,10 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
+  const me = useGameStore((s) => s.walletAddress)
   if (!matchId || filled >= max) return null
-  // Sign the link with a stable table alias so the invitee sees "<name> invited you".
-  const url = buildInviteUrl(matchId, hostAlias(matchId))
+  // Sign the link with the inviter's own name so the invitee sees "<name> invited you".
+  const url = buildInviteUrl(matchId, me ? displayName(me) : undefined)
 
   const copy = () => {
     // Only show "copied" if the write actually succeeded — a denied/insecure-context clipboard

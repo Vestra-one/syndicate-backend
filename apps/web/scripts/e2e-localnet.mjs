@@ -462,6 +462,8 @@ async function guestSitting(browser) {
   const me = { name: 'guest', page, errors: [], prompts: {} }
   await page.goto(APP, { waitUntil: 'domcontentloaded' })
   await waitFor(me, 'store ready', () => !!window.__gameStore)
+  // Auto-deal is the player's opt-in; this test is the one that opts in.
+  await page.evaluate(() => localStorage.setItem('st-autodeal', 'on'))
   const cfg = await (await fetch(`${gameUrl}/v1/config`)).json()
   const bots = cfg.house_bot_wallets ?? []
   let table = null

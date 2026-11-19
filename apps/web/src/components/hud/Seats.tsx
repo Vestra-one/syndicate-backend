@@ -140,7 +140,8 @@ function podStatus(
         return { text: 'Checked', tone: 'idle' }
     }
   }
-  if (seat.committedThisStreet > 0) return { text: `Called ${amt}`, tone: 'called' }
+  // Chips in before any action of their own in round 1 are a forced blind, not a call.
+  if (seat.committedThisStreet > 0) return { text: `${match.round === 1 ? 'Blind' : 'Called'} ${amt}`, tone: 'called' }
   return { text: 'Waiting', tone: 'idle' }
 }
 
