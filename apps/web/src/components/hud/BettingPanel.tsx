@@ -415,6 +415,13 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
   const folded = useGameStore((s) => s.match?.seats.find((x) => x.seat === s.match?.yourSeat)?.folded)
   const alias = toActSeat != null ? seatAlias(toActSeat, yourSeat) : null
   const toggle = (a: Exclude<Armed, null>) => setArmed(armed === a ? null : a)
+  // Between rounds nobody is deciding anything: say when betting reopens instead.
+  const schedule = useGameStore((s) => s.streetSchedule)
+  const engineRound = useGameStore((s) => s.match?.round ?? 0)
+  const now = useNow(500)
+  const cur = schedule?.length ? (schedule.find((e) => now < e.end) ?? null) : null
+  const nextStreet = cur ? schedule?.[cur.street + 1] : null
+  const gapLeft = cur && nextStreet && (engineRound > cur.street + 1 || now >= cur.close) && nextStreet.open > now ? nextStreet.open - now : null
 
   // All but one player folded and nobody is to act: betting is over for good —
   // "waiting for the next turn…" would be a lie. Say what actually happens next.
@@ -423,7 +430,7 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
   // This is the sweat — say so, instead of offering buttons that cannot do anything.
   const me = seats?.find((x) => x.seat === yourSeat)
   const canAct = seats?.filter((x) => !x.folded && !x.allIn).length ?? 0
-  if (alive > 1 && (me?.allIn || canAct <= 1) && toActSeat == null) {
+  if (alive > 1 && (me?.allIn || (canAct <= 1 && toActSeat == null))) {
     return (
       <div className="betpanel panel">
         <div className="betpanel-head">
@@ -468,10 +475,13 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
       <div className="betpanel-head">
         <span className="panel-title">Live</span>
         <span className="betpanel-locked eyebrow">
-          {alias ? `${alias} is deciding…` : 'waiting for the next turn…'}
+          {gapLeft != null ? `next round in ${formatCountdown(gapLeft)}` : alias ? `${alias} is deciding…` : 'waiting for the next turn…'}
         </span>
       </div>
-      {!folded && (
+      {gapLeft != null && !folded && (
+        <p className="seal-note eyebrow">Betting is closed for this round. Watch the price — it decides what your number is worth when betting reopens.</p>
+      )}
+      {!folded && gapLeft == null && (
         <>
           <div className="prearm-label eyebrow">arm your next move</div>
           <div className="prearm-row">

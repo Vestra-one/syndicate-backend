@@ -923,12 +923,15 @@ async fn act_if_ours(
     let pot = detail["pot"].as_u64().unwrap_or(0);
     // Each bot has a temperament — (how often it bets, how often it calls) relative to the
     // baseline — so the table is not three copies of one player: steady, wild, careful.
-    const STYLES: [(f64, f64); 3] = [(1.0, 1.0), (1.4, 1.15), (0.6, 0.8)];
+    const STYLES: [(f64, f64); 3] = [(1.0, 1.0), (1.3, 1.1), (0.8, 0.9)];
     let who = bots
         .iter()
         .position(|b| b.pubkey() == bot.pubkey())
         .unwrap_or(0);
-    let style = STYLES[who % STYLES.len()];
+    // The temperaments move round the table from hand to hand, so no one bot is always
+    // the aggressor (and no one bot ends every session with everybody's chips).
+    let hand = room.match_id.bytes().fold(0u32, |a, b| a.wrapping_mul(131).wrapping_add(b as u32));
+    let style = STYLES[(who + hand as usize) % STYLES.len()];
     // A mood for this hand only (fixed by table + seat), so the same bot is not the same
     // player every deal: some hands it sits back, some hands it comes out firing.
     let mood = [0.55, 1.0, 1.6][(room
@@ -1012,7 +1015,8 @@ async fn act_if_ours(
             }
         } else if can_raise && margin > 0.22 && roll < 0.4 * style.0 {
             Move::Raise((0.45 + 0.6 * equity).clamp(0.4, 1.1))
-        } else if margin > 0.0 {
+        } else if margin > 0.0 && !(equity < 0.2 && price > 0.3) {
+            // (a number that far out never pays off a big bet, whatever is already in)
             Move::Call
         } else if can_raise && equity < 0.3 && roll < 0.05 * style.0 {
             Move::Raise(0.6 + rng.unit() * 0.4) // the occasional re-bluff keeps bets honest
