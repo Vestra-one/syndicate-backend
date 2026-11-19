@@ -291,6 +291,7 @@ async fn reveal_view(st: &AppState, row: &MatchRow) -> Value {
                 "predictions": audit.as_ref().and_then(|a| a.get("predictions")).cloned(),
                 "rake": audit.as_ref().and_then(|a| a.get("rake_collected")).cloned(),
                 "final_pot_chips": audit.as_ref().and_then(|a| a.get("final_pot_chips")).cloned(),
+                "uncontested": audit.as_ref().and_then(|a| a.get("uncontested")).cloned(),
                 "tx_sig": tx,
             })
         }

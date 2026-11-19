@@ -129,7 +129,8 @@ export function YourPosition() {
         </div>
       )}
 
-      {live && deciding && <DefaultToggle />}
+      {/* Only on your own turn: beside the "arm your next move" pair it reads as the same buttons twice. */}
+      {live && deciding && yourTurn != null && <DefaultToggle />}
     </div>
   )
 }

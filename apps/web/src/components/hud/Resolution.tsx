@@ -35,6 +35,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const playHouse = useGameStore((s) => s.playHouse)
   const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
+  const rematch = useGameStore((s) => s.rematch)
   const [left, setLeft] = useState(20)
   const [sitOut, setSitOut] = useState(false)
   // Dealing the next hand spends another buy-in, so it never happens unless the player
@@ -78,7 +79,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
         <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>Lobby</button>
       )}
       {house && !here && (
-        <button className="ghost-btn" onClick={() => playAgain()}>Deal this table again</button>
+        <button className="ghost-btn" onClick={() => void rematch()}>Deal this table again</button>
       )}
       {house ? (
         <button className="ghost-btn ghost-btn--primary" onClick={() => void playHouse({ sit: true })}>
@@ -182,7 +183,9 @@ function SettledCeremony() {
 
   // Crown the paid seat when payout amounts are known; otherwise the closest active
   // conviction (the REST/on-chain recovery may know the reveal but not every seat's amount).
-  const winnerSeat = settlement.awards[0]?.seat ?? active[0]?.seat
+  // …and with amounts in hand, the winner is whoever came out ahead — not whoever is listed first.
+  const ahead = settlement.awards.filter((a) => a.amount > staked).sort((a, b) => (b.amount > a.amount ? 1 : -1))[0]
+  const winnerSeat = ahead?.seat ?? settlement.awards[0]?.seat ?? active[0]?.seat
 
   // Rake transparency: the pot that was actually bet, and what the house took from it.
   // (Summing payouts would count every returned stack and make a 0.04 pot read as "2.00".)
@@ -207,10 +210,12 @@ function SettledCeremony() {
     // lost their ante) count for nobody — a bot that never won a pot leads no one.
     const mine = ranked.find((r) => r.seat === yourSeat)
     const faced = ranked
-      .filter((r) => r.seat !== yourSeat && walletOf(r.seat) && !!mine && r.net !== mine.net)
+      // A result between two players exists when one of them took the pot, or when both
+      // went to the showdown (closer wins). Two players who both lost settle nothing.
+      .filter((r) => r.seat !== yourSeat && walletOf(r.seat) && !!mine && (mine.net > 0n || r.net > 0n || (!mine.folded && !r.folded)))
       .map((r) => ({
         wallet: walletOf(r.seat)!,
-        beat: mine!.net > r.net,
+        beat: mine!.net > 0n ? true : r.net > 0n ? false : mine!.dist < r.dist,
       }))
     const before = readStats(wallet).hands
     const after = recordHand(wallet, settlement.matchId, yourNet, isWinner, faced)
@@ -233,6 +238,12 @@ function SettledCeremony() {
   // The one line worth retelling: what the betting did that the numbers alone would not.
   const story = (() => {
     if (!amountsKnown || yourSeat == null) return null
+    if (settlement.uncontested) {
+      const top = [...settlement.awards].sort((a, b) => (b.amount > a.amount ? 1 : -1))[0]
+      return isWinner
+        ? 'They all folded to you. Nobody will ever know what number you were holding.'
+        : top ? `${seatAlias(top.seat, yourSeat)} took it without showing a number. You will never know if the fold was right.` : null
+    }
     const me = ranked.find((r) => r.seat === yourSeat)
     const win = ranked.find((r) => r.seat === winnerSeat)
     if (!me || !win) return null
@@ -299,7 +310,12 @@ function SettledCeremony() {
           </div>
         )}
         <div className="ceremony-eyebrow eyebrow">settlement · {terms?.priceFeedId ?? 'BTC/USD'}</div>
-        {settlePrice > 0 && ranked.length > 0 ? (
+        {settlement.uncontested ? (
+          <>
+            <div className="ceremony-price ceremony-price--reading">Won without a showdown</div>
+            <div className="ceremony-sub eyebrow">everyone else folded · the calls stay sealed, like mucked cards</div>
+          </>
+        ) : settlePrice > 0 && ranked.length > 0 ? (
           <>
             <div className="ceremony-price mono">{formatPrice(settlePrice)}</div>
             <div className="ceremony-sub eyebrow">the closest conviction takes the pot</div>

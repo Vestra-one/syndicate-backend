@@ -31,6 +31,9 @@ pub enum SettleOutcome {
         args: SettleArgs,
         confirmed_players: Vec<Pubkey>,
         oracle_audit: Value,
+        /// Everyone but one seat folded: no price was fetched and nothing was unsealed —
+        /// submit with `submit_uncontested`, which needs neither.
+        uncontested: bool,
     },
     /// Not ready yet (drand round pending, oracle momentarily unavailable, engine mid-flight).
     Wait { delay_ms: u64, reason: String },
@@ -155,12 +158,23 @@ pub async fn prepare_settlement(
         };
     }
 
+    // One seat left in the hand: it wins whatever the price does, so there is nothing to
+    // unseal and no price to wait for. The hand settles now, not at its scheduled end —
+    // and the folded calls stay sealed, like mucked cards.
+    let uncontested = engine.seats.iter().filter(|s| !s.folded).count() == 1;
+
     // ---- 3. Open the timelock + decrypt sealed predictions -------------------------
     let sealed: Vec<&SeatRow> = seats.iter().filter(|s| s.is_sealed()).collect();
     let mut predictions: BTreeMap<u16, Price> = BTreeMap::new();
     let mut timelock_receipt = Value::Null;
 
-    if !sealed.is_empty() {
+    if uncontested {
+        // settle() only needs the lone contender to hold *a* prediction.
+        for s in engine.seats.iter().filter(|s| !s.folded) {
+            predictions.insert(s.id.0, 1);
+        }
+    }
+    if !sealed.is_empty() && !uncontested {
         // All seals of a match target the same bounded round (on-chain enforced window);
         // use the max as the open target.
         let target_round = sealed
@@ -234,7 +248,7 @@ pub async fn prepare_settlement(
 
     // ---- 4. Non-sealers: seal-close spot snapshot ----------------------------------
     let non_sealers: Vec<&SeatRow> = seats.iter().filter(|s| !s.is_sealed()).collect();
-    if !non_sealers.is_empty() {
+    if !non_sealers.is_empty() && !uncontested {
         let snapshot_row = match db::load_seal_close_snapshot(deps.pool, match_id).await {
             Ok(Some(s)) => s,
             Ok(None) => {
@@ -266,10 +280,27 @@ pub async fn prepare_settlement(
 
     // ---- 5. Company-signed settlement price at exactly scheduled_end_ts ------------
     let symbol = oracle_symbol(row.feed_symbol.as_deref().unwrap_or("BTC/USD"));
-    let oracle_res = tokio::task::block_in_place(|| {
-        deps.oracle
-            .fetch_price_at(&symbol, scheduled_end_ts, &price_token)
-    });
+    let oracle_res = if uncontested {
+        Ok(crate::oracle::ValidatedSignedPrice {
+            dto: syndicate_chain::settle_args::SignedPriceDto {
+                token: price_token,
+                price_in_wad: [0u8; 32],
+                timestamp_ms: 0,
+                v: 0,
+                r: [0u8; 32],
+                s: [0u8; 32],
+            },
+            price_wad: 1,
+            publish_time_sec: 0,
+            payload_sha256_hex: String::new(),
+            source_url: String::new(),
+        })
+    } else {
+        tokio::task::block_in_place(|| {
+            deps.oracle
+                .fetch_price_at(&symbol, scheduled_end_ts, &price_token)
+        })
+    };
     let signed = match oracle_res {
         Ok(v) => v,
         Err(OracleError::Unavailable(e)) => {
@@ -372,7 +403,8 @@ pub async fn prepare_settlement(
         "signed_price_sha256": signed.payload_sha256_hex,
         "signed_price_source": signed.source_url,
         "publish_time_sec": signed.publish_time_sec,
-        "settlement_price_wad": result.settlement_price.to_string(),
+        "settlement_price_wad": if uncontested { Value::Null } else { json!(result.settlement_price.to_string()) },
+        "uncontested": uncontested,
         "rake_collected": result.rake_collected,
         "final_pot_chips": final_pot_chips,
         "event_root": hex::encode(replay_root),
@@ -381,7 +413,7 @@ pub async fn prepare_settlement(
             "engine_seat": s.engine_seat,
             "wallet": s.wallet,
             "source": if s.is_sealed() { "sealed" } else { "spot" },
-            "prediction_wad": predictions.get(&(s.engine_seat as u16)).map(|p| p.to_string()),
+            "prediction_wad": if uncontested { None } else { predictions.get(&(s.engine_seat as u16)).map(|p| p.to_string()) },
             "payout_chips": payouts.iter()
                 .find(|p| p.engine_seat == s.engine_seat)
                 .map(|p| p.amount),
@@ -397,6 +429,7 @@ pub async fn prepare_settlement(
         },
         confirmed_players,
         oracle_audit,
+        uncontested,
     }
 }
 

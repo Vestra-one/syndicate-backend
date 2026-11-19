@@ -586,6 +586,104 @@ pub mod syndicate_program {
         Ok(())
     }
 
+    /// Settle a hand that everyone but one player folded, as soon as that happens.
+    ///
+    /// Same authority, same conservation rule and the same backend-trusted payouts as
+    /// `submit_settlement`, but with no signed price and no wait for `scheduled_end_ts`:
+    /// a hand with a single seat left has no price question to answer, so its chips need
+    /// not stay locked until the clock runs out. `args.signed_price` is ignored.
+    pub fn submit_uncontested<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SubmitSettlement<'info>>,
+        args: SettleArgs,
+    ) -> Result<()> {
+        let p = &ctx.accounts.protocol_state;
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            p.settlement_admin,
+            SyndicateError::Unauthorized
+        );
+        require!(!p.pause_settlement, SyndicateError::Paused);
+
+        let m = &mut ctx.accounts.match_account;
+        require!(m.status == MatchStatus::Live, SyndicateError::BadStatus);
+        require!(m.button_set, SyndicateError::ButtonNotSet);
+        let match_key = m.key();
+        let buy_in = m.buy_in;
+        let confirmed_count = m.confirmed_count;
+
+        require!(
+            ctx.remaining_accounts.len() == confirmed_count as usize,
+            SyndicateError::SeatSetMismatch
+        );
+        require!(
+            args.payouts.len() == confirmed_count as usize,
+            SyndicateError::SeatSetMismatch
+        );
+
+        // No price: with one seat left in the hand there is nothing to measure against.
+        let confirmed_deposited = (confirmed_count as u64)
+            .checked_mul(buy_in)
+            .ok_or(SyndicateError::Overflow)?;
+        require!(
+            args.rake_collected <= confirmed_deposited,
+            SyndicateError::ConservationViolation
+        );
+        require!(
+            args.rake_collected <= m.rake_cap,
+            SyndicateError::ConservationViolation
+        );
+
+        let mut payout_by_engine = [None::<u64>; 5];
+        for p in &args.payouts {
+            let idx = p.engine_seat as usize;
+            require!(idx < confirmed_count as usize, SyndicateError::InvalidSeat);
+            require!(payout_by_engine[idx].is_none(), SyndicateError::SeatSetMismatch);
+            payout_by_engine[idx] = Some(p.amount);
+        }
+
+        let mut seen_seats = [false; 5];
+        let mut total_payout: u64 = 0;
+        for acc in ctx.remaining_accounts.iter() {
+            let mut seat: Account<SeatAccount> = Account::try_from(acc)?;
+            require_keys_eq!(seat.match_key, match_key, SyndicateError::Unauthorized);
+            require!(seat.confirmed, SyndicateError::SeatNotConfirmed);
+            let idx = seat.engine_seat as usize;
+            require!(idx < confirmed_count as usize, SyndicateError::InvalidSeat);
+            require!(!seen_seats[idx], SyndicateError::SeatSetMismatch);
+            seen_seats[idx] = true;
+            let (expected, _bump) = Pubkey::find_program_address(
+                &[b"seat", match_key.as_ref(), seat.player.as_ref()],
+                &crate::ID,
+            );
+            require_keys_eq!(expected, acc.key(), SyndicateError::Unauthorized);
+
+            let payout = payout_by_engine[idx].ok_or(SyndicateError::SeatSetMismatch)?;
+            seat.payout = payout;
+            total_payout = total_payout
+                .checked_add(payout)
+                .ok_or(SyndicateError::Overflow)?;
+            seat.exit(&crate::ID)?;
+        }
+
+        let expected_payout = confirmed_deposited
+            .checked_sub(args.rake_collected)
+            .ok_or(SyndicateError::ConservationViolation)?;
+        require!(
+            total_payout == expected_payout,
+            SyndicateError::ConservationViolation
+        );
+
+        m.total_fees = m
+            .total_fees
+            .checked_add(args.rake_collected)
+            .ok_or(SyndicateError::Overflow)?;
+        m.settled_payout = total_payout;
+        m.signed_price_hash = [0u8; 32];
+        m.signed_price_timestamp_ms = 0;
+        m.status = MatchStatus::Settled;
+        Ok(())
+    }
+
     /// Pull-based, idempotent claim of a settled seat's payout (confirmed seats only —
     /// unconfirmed candidates use `refund`).
     pub fn claim(ctx: Context<Claim>) -> Result<()> {

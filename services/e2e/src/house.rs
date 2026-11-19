@@ -966,77 +966,87 @@ async fn act_if_ours(
     use syndicate_shared::intent::{
         ACTION_TAG_BET_TO, ACTION_TAG_CALL, ACTION_TAG_CHECK, ACTION_TAG_FOLD, ACTION_TAG_RAISE_TO,
     };
-    let fold = (ACTION_TAG_FOLD, 0, json!("fold"));
-    let call = (ACTION_TAG_CALL, 0, json!("call"));
-    let check = (ACTION_TAG_CHECK, 0, json!("check"));
-    // Bets are about half the pot, never below the minimum and never beyond the stack.
-    // …sized like a person would: a probe, half the pot, most of it, or all of it.
-    let frac = [0.33, 0.5, 0.5, 0.75, 1.0][(rng.unit() * 5.0) as usize % 5];
-    let raise_to = min_raise_to
-        .max(current_bet + (pot as f64 * frac) as u64)
-        .min(max_total);
-    // Whole cents (chips have six decimals): no half-cent bets on the table.
-    let raise_to = if raise_to < max_total { (raise_to / 10_000 * 10_000).max(min_raise_to) } else { raise_to };
-    let raise = if current_bet > 0 {
-        (
-            ACTION_TAG_RAISE_TO,
-            raise_to,
-            json!({"kind": "raise_to", "amount": raise_to}),
-        )
-    } else {
-        (
-            ACTION_TAG_BET_TO,
-            raise_to,
-            json!({"kind": "bet_to", "amount": raise_to}),
-        )
-    };
-    // Value-bet a live call, bluff a dead one now and then, and respect the price of a call.
-    let cheap = to_call.saturating_mul(4) <= pot; // getting 4:1 or better
-    let fair = to_call.saturating_mul(2) <= pot; // getting 2:1 or better
-    let big = to_call > pot.saturating_sub(to_call); // more than the pot that was there
-    let (tag, amount, action) = if to_call == 0 {
-        let bet_freq = style.0
-            * match read {
-                Read::InRange => 0.80,
-                Read::NeedsMove => 0.50,
-                Read::LongShot => 0.22,
-                Read::Blind => 0.40,
-            };
-        if can_raise && roll < bet_freq {
-            raise
+    // ---- the decision -------------------------------------------------------------
+    // One judgement instead of a table of habits: how likely is this number to be the
+    // closest at the end, what is the price of staying in, and how much is already in.
+    let alive = detail["seats"]
+        .as_array()
+        .map(|a| a.iter().filter(|x| x["folded"].as_bool() != Some(true)).count())
+        .unwrap_or(2)
+        .max(2);
+    let invested = seat["total_contribution"].as_u64().unwrap_or(0);
+    let committed_share = invested as f64 / (invested + stack).max(1) as f64;
+    let c = if matches!(read, Read::Blind) { 0.35 } else { closeness };
+    // On the price heads-up this is ~0.9; half a move away ~0.5; far away ~0.12 — and
+    // every extra player still in takes a share of it.
+    let equity = (0.12 + 0.78 * c) / (1.0 + 0.45 * (alive - 2) as f64);
+    let noise = (rng.unit() - 0.5) * 0.24; // nobody reads a spot the same way twice
+    let nerve = (style.1 - 1.0) * 0.5; // the wild one pays off lighter, the careful one tighter
+
+    enum Move {
+        Fold,
+        Check,
+        Call,
+        Raise(f64), // fraction of the pot
+    }
+    let pick = if to_call == 0 {
+        let value = (0.15 + 0.75 * equity) * style.0;
+        let bluff = if equity < 0.3 { 0.14 * style.0 } else { 0.0 };
+        if can_raise && roll < value {
+            Move::Raise((0.35 + 0.65 * equity + noise).clamp(0.3, 1.1))
+        } else if can_raise && roll < value + bluff {
+            Move::Raise(0.5 + rng.unit() * 0.4)
         } else {
-            check
+            Move::Check
         }
     } else {
-        let (raise_freq, call_freq) = match read {
-            // A shove or an overbet is a different question: only a call the market is
-            // close to pays it off, and even then not every time. Calling every all-in is
-            // what turns each big hand into the same four-way showdown.
-            // …so the answer scales with how close the bot's own number is: on the price
-            // it nearly always pays the bet off, a move away it sometimes does, far away
-            // almost never. A bluffer has to wonder; a caller has to have something.
-            Read::InRange if big => (0.06, 0.55 + 0.4 * closeness),
-            Read::NeedsMove if big => (0.0, 0.10 + 0.5 * closeness),
-            Read::LongShot if big => (0.0, 0.04),
-            Read::Blind if big => (0.0, 0.25),
-            Read::InRange => (0.25, 1.0),
-            Read::NeedsMove if fair => (0.05, 0.75),
-            Read::NeedsMove => (0.04, 0.45),
-            Read::LongShot if cheap => (0.03, 0.45),
-            Read::LongShot => (0.05, 0.20),
-            Read::Blind if fair => (0.05, 0.80),
-            Read::Blind => (0.0, 0.40),
-        };
-        let (raise_freq, call_freq) = (raise_freq * style.0, (call_freq * style.1).min(1.0));
-        // Nobody folds for pennies: at 10:1 or better even a long shot is a call. Folding
-        // the blind into a pot of antes is what makes a table feel asleep.
-        let call_freq = if to_call.saturating_mul(10) <= pot { 1.0 } else { call_freq };
-        if can_raise && roll < raise_freq {
-            raise
-        } else if roll < call_freq {
-            call
+        let price = to_call as f64 / (pot + to_call).max(1) as f64;
+        // Chips already in pull a player along; so does a taste for seeing showdowns.
+        let margin = equity - price + 0.25 * committed_share + nerve + noise;
+        if to_call.saturating_mul(10) <= pot {
+            // Nobody folds for pennies — and a strong number raises them.
+            if can_raise && margin > 0.3 && roll < 0.35 * style.0 {
+                Move::Raise(0.5 + 0.5 * equity)
+            } else {
+                Move::Call
+            }
+        } else if can_raise && margin > 0.22 && roll < 0.4 * style.0 {
+            Move::Raise((0.45 + 0.6 * equity).clamp(0.4, 1.1))
+        } else if margin > 0.0 {
+            Move::Call
+        } else if can_raise && equity < 0.3 && roll < 0.05 * style.0 {
+            Move::Raise(0.6 + rng.unit() * 0.4) // the occasional re-bluff keeps bets honest
         } else {
-            fold
+            Move::Fold
+        }
+    };
+    let (tag, amount, action) = match pick {
+        Move::Fold => (ACTION_TAG_FOLD, 0, json!("fold")),
+        Move::Check => (ACTION_TAG_CHECK, 0, json!("check")),
+        Move::Call => (ACTION_TAG_CALL, 0, json!("call")),
+        Move::Raise(frac) => {
+            let want = min_raise_to
+                .max(current_bet + (pot as f64 * frac) as u64)
+                .min(max_total);
+            // Whole cents (chips have six decimals): no half-cent bets on the table.
+            let raise_to = if want < max_total {
+                (want / 10_000 * 10_000).max(min_raise_to)
+            } else {
+                want
+            };
+            if current_bet > 0 {
+                (
+                    ACTION_TAG_RAISE_TO,
+                    raise_to,
+                    json!({"kind": "raise_to", "amount": raise_to}),
+                )
+            } else {
+                (
+                    ACTION_TAG_BET_TO,
+                    raise_to,
+                    json!({"kind": "bet_to", "amount": raise_to}),
+                )
+            }
         }
     };
 

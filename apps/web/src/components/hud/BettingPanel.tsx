@@ -227,6 +227,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
         <span className="seal-currency mono">$</span>
         <input
           className="seal-input mono"
+          onFocus={(e) => e.currentTarget.select()}
           inputMode="decimal"
           value={text}
           onChange={(e) => { setTouched(true); setText(e.target.value); if (sealError) useGameStore.setState({ playError: null }) }}
@@ -504,6 +505,8 @@ const RAISE_PRESETS: { key: string; label: string }[] = [
 
 function ActionPanel() {
   const match = useGameStore((s) => s.match)!
+  const [sure, setSure] = useState(false)
+  useEffect(() => { if (!sure) return; const t = setTimeout(() => setSure(false), 4000); return () => clearTimeout(t) }, [sure])
   const yourTurn = useGameStore((s) => s.yourTurn)!
   const act = useGameStore((s) => s.act)
   const actPending = useGameStore((s) => s.actPending)
@@ -585,8 +588,8 @@ function ActionPanel() {
         )}
         {/* When calling already takes the whole stack, a second button for the same thing only invites a misclick. */}
         {!(toCall > 0n && toCall >= stack) && (
-        <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''}`} onClick={() => send({ type: 'allIn' })} disabled={pending} aria-busy={pendingType === 'allIn'}>
-          {pendingType === 'allIn' ? 'Sending…' : `All-in ${formatChips(stack)}`}
+        <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''} ${sure ? 'pk-allin--sure' : ''}`} onClick={() => (sure ? send({ type: 'allIn' }) : setSure(true))} disabled={pending} aria-busy={pendingType === 'allIn'}>
+          {pendingType === 'allIn' ? 'Sending…' : sure ? `Confirm all-in ${formatChips(stack)}` : `All-in ${formatChips(stack)}`}
         </button>
         )}
       </div>

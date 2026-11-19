@@ -5639,3 +5639,4 @@
 .early-exit--won .early-exit-title { color: #1a1305; font-size: 21px; }
 .early-exit--won .early-exit-sub { color: #3a2c0c; }
 .early-exit--won .ghost-btn { background: rgba(26, 19, 5, 0.85); color: #f1d98a; border-color: rgba(26, 19, 5, 0.9); }
+.pk-allin--sure { outline: 2px solid var(--gold, #e7c873); }

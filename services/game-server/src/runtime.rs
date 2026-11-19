@@ -824,7 +824,12 @@ impl Actor {
         let now = now_ms();
         let end = self.row.scheduled_end_ts.map(ts_ms).unwrap_or(u64::MAX);
 
-        if now >= end {
+        // The hand also ends the moment everyone but one seat has folded: nothing is left
+        // to decide, so it settles now instead of holding chips until the clock runs out.
+        let walkover = self.runtime.as_ref().is_some_and(|rt| {
+            rt.engine().is_complete() && rt.engine().seats.iter().filter(|s| !s.folded).count() == 1
+        });
+        if now >= end || walkover {
             self.finish_live().await;
             return;
         }

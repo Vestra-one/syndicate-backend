@@ -142,6 +142,7 @@ export function describeEvent(e: PublicEvent, yourSeat?: SeatIndex, token = ''):
       const s = you ? '' : 's'
       const verb: Record<string, string> = {
         check: `check${s}`,
+        timeout: you ? 'ran out of time' : 'ran out of time',
         call: `call${s}${amt}`,
         betTo: `bet${s}${amt}`,
         raiseTo: `raise${s}${amt}`,

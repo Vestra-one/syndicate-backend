@@ -322,16 +322,18 @@ impl Executor {
                         args,
                         confirmed_players,
                         oracle_audit,
-                    } => Ok((
-                        ix::submit_settlement(
-                            program_id,
-                            &authority,
-                            match_key,
-                            &confirmed_players,
-                            &args,
-                        ),
-                        Some(oracle_audit),
-                    )),
+                        uncontested,
+                    } => {
+                        let build = if uncontested {
+                            ix::submit_uncontested
+                        } else {
+                            ix::submit_settlement
+                        };
+                        Ok((
+                            build(program_id, &authority, match_key, &confirmed_players, &args),
+                            Some(oracle_audit),
+                        ))
+                    }
                     SettleOutcome::Wait { delay_ms, reason } => {
                         Err(StepResult::Wait { delay_ms, reason })
                     }

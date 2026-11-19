@@ -36,6 +36,7 @@ mod tests {
             "begin_live",
             "register_prediction_commitment",
             "submit_settlement",
+            "submit_uncontested",
             "claim",
             "refund",
             "void",

@@ -270,6 +270,31 @@ pub fn submit_settlement(
     }
 }
 
+/// `submit_uncontested`: same accounts and args as `submit_settlement` (the price is ignored).
+pub fn submit_uncontested(
+    program_id: &Pubkey,
+    authority: &Pubkey,
+    match_key: &Pubkey,
+    confirmed_players: &[Pubkey],
+    args: &SettleArgs,
+) -> Instruction {
+    let (protocol, _) = pda::protocol(program_id);
+    let mut accounts = vec![
+        AccountMeta::new_readonly(*authority, true),
+        AccountMeta::new_readonly(protocol, false),
+        AccountMeta::new(*match_key, false),
+    ];
+    for player in confirmed_players {
+        let (seat, _) = pda::seat(program_id, match_key, player);
+        accounts.push(AccountMeta::new(seat, false));
+    }
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: data("submit_uncontested", args),
+    }
+}
+
 fn claim_like(
     name: &str,
     program_id: &Pubkey,

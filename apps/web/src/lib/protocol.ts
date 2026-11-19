@@ -196,6 +196,8 @@ export interface SettlementView {
   rakeCollected: Chips
   oracleProof?: SignedPriceView
   revealedPredictions: { seat: SeatIndex; prediction: FixedPrice }[]
+  /** Everyone but one player folded: settled at once, with no price and no calls unsealed. */
+  uncontested?: boolean
 }
 
 export interface SignedPriceView {

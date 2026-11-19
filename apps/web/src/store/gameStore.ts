@@ -276,6 +276,8 @@ interface GameState {
   refund: () => Promise<string | null>
   setReviewing: (v: boolean) => void
   playAgain: () => Promise<void>
+  /** Deal the table that just finished again: same market, stakes and seats, one click. */
+  rematch: () => Promise<void>
   /** One click from a finished hand to a seat at the open house table (the join sheet). */
   playHouse: (opts?: { sit?: boolean }) => Promise<void>
   /** Out of this hand (folded, or everyone folded to us): go to the next table now and
@@ -1903,6 +1905,28 @@ export const useGameStore = create<GameState>((set, get) => ({
     await get().playHouse({ sit: true })
   },
 
+  rematch: async () => {
+    const prev = get().terms
+    if (!prev) return get().playAgain()
+    const keep = { feed: prev.priceFeedId, buyIn: prev.buyIn, maxPlayers: prev.maxPlayers }
+    await get().playAgain() // back to the lobby and open a fresh create context
+    const t = get().terms
+    if (!createCtx || !t) return // connection or config failed; the create sheet says why
+    const limits = get().createLimits
+    createCtx.feed = keep.feed
+    set({
+      terms: {
+        ...t,
+        priceFeedId: keep.feed,
+        buyIn: keep.buyIn,
+        maxPlayers: keep.maxPlayers,
+        // A short door: the players are already here, and bots take what is left.
+        fillWindowSec: limits ? Math.max(limits.fillWindowMinSec, 30) : 30,
+      },
+    })
+    await get().createTable()
+  },
+
   playAgain: async () => {
     set({
       // Back to the Room page first — createGame() now opens the create sheet as an
@@ -2247,6 +2271,15 @@ function wsEventToFeed(ev: { type: string; body: Record<string, unknown>; seq?: 
       const amount = m?.[2] ? BigInt(m[2]) : 0n
       if (action === 'fold') return { kind: 'fold', matchId, seat, ts: Date.now() }
       return { kind: 'action', matchId, seat, action, amount, feedPrice, pot, ts: Date.now() }
+    }
+    case 'timeout.default': {
+      // The clock played the seat's default. Put it on the record — and tell the player
+      // it happened to, because a silent fold reads as the game eating a hand.
+      const st = useGameStore.getState()
+      if (st.match?.yourSeat === seat) {
+        useGameStore.setState({ collectNote: { id: `timeout-${matchId}-${ev.seq ?? Date.now()}`, label: 'Your clock ran out — your time-out choice was played for you.' } })
+      }
+      return { kind: 'action', matchId, seat, action: 'timeout', amount: 0n, feedPrice, pot, ts: Date.now() }
     }
     case 'street_closed':
     case 'snapshot.written': {
@@ -2663,20 +2696,22 @@ function settlementFromDetail(
 ): SettlementView {
   const reveal = detail.reveal as {
     settlement_price_wad?: string | null
-    predictions?: { engine_seat: number; prediction_wad: string }[] | null
+    predictions?: { engine_seat: number; prediction_wad: string | null }[] | null
     rake?: number | null
     final_pot_chips?: number | null
+    uncontested?: boolean | null
   } | null
   return {
+    uncontested: reveal?.uncontested === true,
     matchId: detail.match_id,
     settlementPrice: reveal?.settlement_price_wad ? wadToFixed(reveal.settlement_price_wad, decimals) : 0,
     awards,
     uncalledReturns: [],
     finalPot: reveal?.final_pot_chips != null ? BigInt(reveal.final_pot_chips) : undefined,
     rakeCollected: BigInt(reveal?.rake ?? 0),
-    revealedPredictions: (reveal?.predictions ?? []).map((p) => ({
+    revealedPredictions: (reveal?.predictions ?? []).filter((p) => p.prediction_wad != null).map((p) => ({
       seat: p.engine_seat,
-      prediction: wadToFixed(p.prediction_wad, decimals),
+      prediction: wadToFixed(p.prediction_wad as string, decimals),
     })),
   }
 }
