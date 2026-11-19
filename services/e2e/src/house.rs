@@ -1027,7 +1027,7 @@ async fn act_if_ours(
     let c = if matches!(read, Read::Blind) { 0.35 } else { closeness };
     // On the price heads-up this is ~0.9; half a move away ~0.5; far away ~0.12 — and
     // every extra player still in takes a share of it.
-    let equity = (0.12 + 0.78 * c) / (1.0 + 0.45 * (alive - 2) as f64);
+    let equity = (0.12 + 0.78 * c) / (1.0 + 0.22 * (alive - 2) as f64);
     let noise = (rng.unit() - 0.5) * 0.24; // nobody reads a spot the same way twice
     let nerve = (style.1 - 1.0) * 0.5; // the wild one pays off lighter, the careful one tighter
 

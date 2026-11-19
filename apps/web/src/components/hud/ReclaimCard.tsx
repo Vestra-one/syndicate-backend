@@ -71,7 +71,7 @@ export function ReclaimCard({ onchainMatchId }: { onchainMatchId: string | null 
   return (
     <div className="reclaim-card panel">
       <div className="reclaim-head">
-        <div className="reclaim-title">Room never filled</div>
+        <div className="reclaim-title">Table cancelled — your chips are waiting</div>
         <div className="reclaim-sub eyebrow">
           You'll get back {fmt(total)} USDC (buy-in + entry fee) + your seat rent
         </div>

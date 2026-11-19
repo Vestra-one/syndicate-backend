@@ -589,8 +589,14 @@ impl FencedMatchRuntime {
                     let Some(e) = engine.as_mut() else {
                         return Err(MatchServiceError::Replay("timeout before match start"));
                     };
+                    // Same rule as the live path: a call of one blind or less on a timeout
+                    // needs no registered policy.
+                    let cheap_call = *default == DefaultAction::CheckCallAny
+                        && *seat_index < e.seats.len()
+                        && e.to_call(*seat_index) <= e.big_blind;
                     if !registered_defaults.contains_key(seat_index)
                         && *default != DefaultAction::CheckFold
+                        && !cheap_call
                     {
                         return Err(MatchServiceError::Replay(
                             "timeout without registered default",

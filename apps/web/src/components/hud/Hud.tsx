@@ -117,7 +117,9 @@ function LeaveButton() {
     const me = m.seats.find((x) => x.seat === m.yourSeat)
     return !me?.folded
   })
-  const show = useGameStore((s) => s.view === 'table' && (s.match?.phase === 'SEALING' || s.match?.phase === 'LIVE'))
+  // Always a way out: also while a result is being worked out (the result card, once it
+  // is up, has its own Lobby button).
+  const show = useGameStore((s) => s.view === 'table' && !!s.match && !s.settlement && !s.voided)
   const leaveHand = useGameStore((s) => s.leaveHand)
   const [asking, setAsking] = useState(false)
   if (!show) return null
