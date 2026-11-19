@@ -312,7 +312,7 @@ function SettledCeremony() {
         <div className="ceremony-eyebrow eyebrow">settlement · {terms?.priceFeedId ?? 'BTC/USD'}</div>
         {settlement.uncontested ? (
           <>
-            <div className="ceremony-price ceremony-price--reading">Won without a showdown</div>
+            <div className="ceremony-price ceremony-price--reading">{isWinner ? 'You won without a showdown' : `${winnerSeat != null ? seatAlias(winnerSeat, yourSeat ?? undefined) : 'One player'} won without a showdown`}</div>
             <div className="ceremony-sub eyebrow">everyone else folded · the calls stay sealed, like mucked cards</div>
           </>
         ) : settlePrice > 0 && ranked.length > 0 ? (

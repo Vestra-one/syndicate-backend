@@ -99,12 +99,17 @@ export function heldMove(matchId: string | null | undefined, history: PricePoint
   if (seconds <= 0) return null
   const key = matchId ?? ''
   let perRoot = key ? held.get(key) : undefined
+  if (perRoot == null && key) {
+    // A reload must not produce a second opinion about the same hand.
+    try { const v = Number(sessionStorage.getItem(`st-vol:${key}`)); if (Number.isFinite(v) && v > 0) { perRoot = v; held.set(key, v) } } catch { /* no storage */ }
+  }
   if (perRoot == null) {
     const m = typicalMove(history, Math.max(seconds, 60))
     if (m == null) return null
     perRoot = m / Math.sqrt(Math.max(seconds, 60))
     if (key && history.length > 20) {
       held.set(key, perRoot)
+      try { sessionStorage.setItem(`st-vol:${key}`, String(perRoot)) } catch { /* no storage */ }
       if (held.size > 30) held.delete(held.keys().next().value as string)
     }
   }

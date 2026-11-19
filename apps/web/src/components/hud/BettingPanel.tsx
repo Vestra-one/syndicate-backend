@@ -187,7 +187,7 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
     (terms?.roundDurationsSec ?? []).reduce((a, b) => a + b + 10, 0)
   // Measured once when the seal box opens and then held: buttons whose numbers change every
   // second cannot be aimed at.
-  const handKey = useGameStore((s) => s.match?.matchId ?? s.terms?.onchainMatchId ?? null)
+  const handKey = useGameStore((s) => s.terms?.onchainMatchId ?? s.match?.matchId ?? null)
   const sealSpan = useRef<number | null>(null)
   if (sealSpan.current == null && handSec > 0) sealSpan.current = handSec // the clock ticks; the buttons must not
   const move = heldMove(handKey != null ? String(handKey) : null, history, sealSpan.current ?? handSec)
@@ -506,7 +506,6 @@ const RAISE_PRESETS: { key: string; label: string }[] = [
 function ActionPanel() {
   const match = useGameStore((s) => s.match)!
   const [sure, setSure] = useState(false)
-  useEffect(() => { if (!sure) return; const t = setTimeout(() => setSure(false), 4000); return () => clearTimeout(t) }, [sure])
   const yourTurn = useGameStore((s) => s.yourTurn)!
   const act = useGameStore((s) => s.act)
   const actPending = useGameStore((s) => s.actPending)

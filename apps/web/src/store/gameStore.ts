@@ -367,7 +367,7 @@ function configToTerms(config: ApiConfig, feed: string): TableTerms {
     buyIn: BigInt(buyIn),
     entryFee: BigInt(d.entry_fee),
     rakeBps: d.rake_bps,
-    rakeCap: BigInt(buyIn),
+    rakeCap: BigInt(Math.floor(buyIn / 10)), // the server's rule: 10% of the buy-in
     smallBlind: BigInt(Math.max(1, Math.floor(buyIn / 200))),
     bigBlind: BigInt(Math.max(2, Math.floor(buyIn / 100))),
     ante: BigInt(Math.floor(buyIn / 10)),
@@ -1311,7 +1311,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       terms: {
         ...base,
         buyIn: s.terms.buyIn,
-        rakeCap: s.terms.buyIn,
+        rakeCap: s.terms.buyIn / 10n,
         smallBlind: BigInt(Math.max(1, Math.floor(Number(s.terms.buyIn) / 200))),
         bigBlind: BigInt(Math.max(2, Math.floor(Number(s.terms.buyIn) / 100))),
         fillWindowSec: s.terms.fillWindowSec,
@@ -2272,6 +2272,7 @@ function wsEventToFeed(ev: { type: string; body: Record<string, unknown>; seq?: 
       if (action === 'fold') return { kind: 'fold', matchId, seat, ts: Date.now() }
       return { kind: 'action', matchId, seat, action, amount, feedPrice, pot, ts: Date.now() }
     }
+    case 'timeout_default':
     case 'timeout.default': {
       // The clock played the seat's default. Put it on the record — and tell the player
       // it happened to, because a silent fold reads as the game eating a hand.

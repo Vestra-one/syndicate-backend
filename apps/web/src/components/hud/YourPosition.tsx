@@ -52,7 +52,7 @@ export function YourPosition() {
   const settlesAt = useGameStore((s) => s.streetSchedule?.at(-1)?.end ?? null)
   const now = useNow(1000)
   const secLeft = settlesAt != null ? Math.max(0, (settlesAt - now) / 1000) : null
-  const move = live && secLeft != null && secLeft > 0 ? heldMove(match?.matchId, history, secLeft) : null
+  const move = live && secLeft != null && secLeft > 0 ? heldMove(terms?.onchainMatchId != null ? String(terms.onchainMatchId) : match?.matchId, history, secLeft) : null
   // Advice is for players who still have a decision: not after a fold, not all-in, and
   // not once everyone else has folded.
   const mySeat = match?.seats.find((x) => x.seat === match.yourSeat)
