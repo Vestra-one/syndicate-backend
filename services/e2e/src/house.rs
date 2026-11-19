@@ -597,8 +597,31 @@ async fn take(ctx: &Ctx, bot: &Player, onchain: u64, refund: bool) {
     }
 }
 
+/// One bot hosts the always-open table and pays for every table it opens, so it runs dry
+/// long before the others — and one dry bot used to stop every table. Before that
+/// happens, the best-funded bot shares half the difference with the poorest.
+async fn level_sol(ctx: &Ctx, bots: &[Player]) {
+    let mut bal = Vec::with_capacity(bots.len());
+    for bot in bots {
+        bal.push(ctx.rpc.get_balance(&bot.pubkey()).await.unwrap_or(0));
+    }
+    let Some((poor, &low)) = bal.iter().enumerate().min_by_key(|(_, b)| **b) else { return };
+    let Some((rich, &high)) = bal.iter().enumerate().max_by_key(|(_, b)| **b) else { return };
+    if poor == rich || low >= 50_000_000 || high < 120_000_000 {
+        return;
+    }
+    let give = (high - low) / 2;
+    #[allow(deprecated)]
+    let ix = solana_sdk::system_instruction::transfer(&bots[rich].pubkey(), &bots[poor].pubkey(), give);
+    match try_send_tx(ctx, &bots[rich].kp, vec![ix]).await {
+        Ok(_) => println!("house: {} sent {give} lamports to {} to keep tables opening", bots[rich].name, bots[poor].name),
+        Err(e) => println!("house: could not level SOL between bots: {e}"),
+    }
+}
+
 /// Every bot needs a buy-in of chips and SOL for fees before a table opens.
 async fn funded(ctx: &Ctx, bots: &[Player]) -> bool {
+    level_sol(ctx, bots).await;
     let mut ok = true;
     for bot in bots {
         let chips = token_balance(ctx, &bot.ata(&ctx.mint)).await;
