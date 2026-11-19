@@ -1,5 +1,5 @@
 import { formatChips } from '@/lib/format'
-import { recordHand } from '@/lib/sessionStats'
+import { HAND_FIBS, WIN_FIBS, addFibs, recordHand } from '@/lib/sessionStats'
 import { isGuestWallet } from '@/lib/guestWallet'
 import { create } from 'zustand'
 import type {
@@ -48,6 +48,7 @@ import {
 import { ed25519 } from '@noble/curves/ed25519' // TEMP: seal signature self-verify diagnostic
 import { walletBridge } from '@/lib/walletBridge' // TEMP: seal signature diagnostic (wallet name)
 import type { PastHand } from '@/lib/protocol'
+import { reportFibs } from '@/lib/api'
 import {
   api,
   ensureSession,
@@ -206,6 +207,8 @@ interface GameState {
   playResolving: boolean // true while deciding join-vs-create
   /** Looking for the next house table to sit at (shown as a curtain, not an empty lobby). */
   findingTable: boolean
+  /** Chips that just landed from a hand the player had already left. */
+  collectNote: { id: string; label: string } | null
   /** Tables (match ids) the connected wallet holds a seat at right now. */
   mySeats: string[]
   /** Back to a table we are seated at (from the lobby). */
@@ -969,6 +972,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   seated: false,
 
   mySeats: [],
+  collectNote: null,
   findingTable: false,
   playResolving: false,
   playMode: null,
@@ -2067,6 +2071,10 @@ function startCollector(set: SetState, get: () => GameState): void {
         const payout = BigInt(mine?.payout_chips ?? 0)
         const won = BigInt(mine?.pot_won_chips ?? 0) > 0n
         recordHand(wallet, c.matchId, payout - BigInt(c.staked), won)
+        // The points for that hand too — leaving early must not cost them.
+        const earned = HAND_FIBS + (won ? WIN_FIBS : 0)
+        addFibs(wallet, earned)
+        void reportFibs(earned).catch(() => {})
         if (payout === 0n || !isGuestWallet(wallet)) { drop(); continue }
         try {
           const sig = await adapters.chain.claimSettled(c.onchainMatchId)
@@ -2079,7 +2087,7 @@ function startCollector(set: SetState, get: () => GameState): void {
             const winner = detail.seats.find((x) => BigInt(x.pot_won_chips ?? 0) > 0n)
             if (!won && winner && dist(mine?.prediction_wad) < dist(winner.prediction_wad)) tail = ' — and you had folded a closer number than the winner'
           } catch { /* the plain line is fine */ }
-          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${tail}` } })
+          set({ lastTx: { sig, label: `${formatChips(payout)} back from your last hand${tail}` }, collectNote: { id: sig, label: `${won ? `You won your last hand: +${formatChips(payout - BigInt(c.staked))}` : `${formatChips(payout)} back from your last hand`}${won ? '' : tail}` } })
           drop()
           void refreshBalance(set, true)
         } catch (err) {

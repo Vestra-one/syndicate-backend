@@ -864,6 +864,15 @@ impl Actor {
             let Some(rt) = self.runtime.as_mut() else {
                 return;
             };
+            // Running out the clock never throws a hand away for the price of a blind: a
+            // call of one big blind or less is made for the player; anything real folds.
+            let policy = if matches!(policy, DefaultAction::CheckFold)
+                && rt.engine().to_call(idx) <= rt.engine().big_blind
+            {
+                DefaultAction::CheckCallAny
+            } else {
+                policy
+            };
             let seq_before = rt.events().len();
             if let Err(e) = rt.apply_timeout_default(&ActorLease, now, idx, policy, deadline) {
                 warn!(match_id = %self.id, seat = idx, "timeout default: {e:?}");

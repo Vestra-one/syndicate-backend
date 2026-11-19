@@ -88,3 +88,25 @@ export function edgeRead(gap: number, move: number): EdgeRead {
         : 'The market has run away from your call. Fold to a bet — or bluff.'
   return { level, label, moves, tip, fill: Math.max(0, Math.min(1, 1 - moves / 3)) }
 }
+
+/**
+ * One volatility reading per hand. Measured when the hand's seal box opens and then held, so
+ * the quick-pick buttons stay put while the player aims and "typical move left" only ever
+ * shrinks with the clock instead of jumping as the tape grows.
+ */
+const held = new Map<string, number>() // matchId → typical move per √second
+export function heldMove(matchId: string | null | undefined, history: PricePoint[], seconds: number): number | null {
+  if (seconds <= 0) return null
+  const key = matchId ?? ''
+  let perRoot = key ? held.get(key) : undefined
+  if (perRoot == null) {
+    const m = typicalMove(history, Math.max(seconds, 60))
+    if (m == null) return null
+    perRoot = m / Math.sqrt(Math.max(seconds, 60))
+    if (key && history.length > 20) {
+      held.set(key, perRoot)
+      if (held.size > 30) held.delete(held.keys().next().value as string)
+    }
+  }
+  return perRoot * Math.sqrt(seconds)
+}

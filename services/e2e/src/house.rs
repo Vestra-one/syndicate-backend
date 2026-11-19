@@ -939,6 +939,7 @@ async fn act_if_ours(
     let style = (style.0 * mood, style.1);
 
     // Read the bot's own hand: where is the market relative to what it sealed?
+    let mut closeness = 0.4_f64; // how near the bot's own number is to the price (1 = on it)
     let read = match (
         calls.get(&(to_act as u16)),
         spot_wad(ctx, house, detail).await,
@@ -950,6 +951,7 @@ async fn act_if_ours(
             // ~0.009% of price per √second — BTC-like volatility.
             let typical = spot as f64 * 0.00009 * sec_left.sqrt();
             let moves = (spot - call).abs() as f64 / typical;
+            closeness = (1.0 - moves / 2.0).clamp(0.0, 1.0);
             if moves <= 0.75 {
                 Read::InRange
             } else if moves <= 2.0 {
@@ -1010,10 +1012,13 @@ async fn act_if_ours(
             // A shove or an overbet is a different question: only a call the market is
             // close to pays it off, and even then not every time. Calling every all-in is
             // what turns each big hand into the same four-way showdown.
-            Read::InRange if big => (0.04, 0.6),
-            Read::NeedsMove if big => (0.0, 0.12),
-            Read::LongShot if big => (0.0, 0.03),
-            Read::Blind if big => (0.0, 0.10),
+            // …so the answer scales with how close the bot's own number is: on the price
+            // it nearly always pays the bet off, a move away it sometimes does, far away
+            // almost never. A bluffer has to wonder; a caller has to have something.
+            Read::InRange if big => (0.06, 0.55 + 0.4 * closeness),
+            Read::NeedsMove if big => (0.0, 0.10 + 0.5 * closeness),
+            Read::LongShot if big => (0.0, 0.04),
+            Read::Blind if big => (0.0, 0.25),
             Read::InRange => (0.25, 1.0),
             Read::NeedsMove if fair => (0.05, 0.75),
             Read::NeedsMove => (0.04, 0.45),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
-import { typicalMove } from '@/lib/edge'
+import { heldMove } from '@/lib/edge'
 import { useNow } from '@/lib/useNow'
 import { formatChips, formatCountdown } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
@@ -187,10 +187,10 @@ function SealPanel({ waiting }: { waiting?: boolean }) {
     (terms?.roundDurationsSec ?? []).reduce((a, b) => a + b + 10, 0)
   // Measured once when the seal box opens and then held: buttons whose numbers change every
   // second cannot be aimed at.
-  const liveMove = typicalMove(history, handSec)
-  const heldMove = useRef<number | null>(null)
-  if (heldMove.current == null && liveMove != null && history.length > 20) heldMove.current = liveMove
-  const move = heldMove.current ?? liveMove
+  const handKey = useGameStore((s) => s.match?.matchId ?? s.terms?.onchainMatchId ?? null)
+  const sealSpan = useRef<number | null>(null)
+  if (sealSpan.current == null && handSec > 0) sealSpan.current = handSec // the clock ticks; the buttons must not
+  const move = heldMove(handKey != null ? String(handKey) : null, history, sealSpan.current ?? handSec)
   const fmtMove = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })
   const moveText = move != null ? `$${fmtMove(move)}` : null
 
@@ -341,12 +341,6 @@ function QueuedPanel() {
 
 /** The seal window closed before this seat sealed. */
 function SealClosedPanel() {
-  const terms = useGameStore((s) => s.terms)
-  const lastPrice = useGameStore((s) => s.priceHistory.at(-1)?.price ?? null)
-  const decimals = terms?.decimals ?? 2
-  const defaulted = lastPrice != null
-    ? `$${lastPrice.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`
-    : 'the market price at seal close'
   return (
     <div className="betpanel panel seal-missed">
       <div className="betpanel-head">
@@ -354,7 +348,7 @@ function SealClosedPanel() {
         <span className="seal-lock" aria-hidden="true">⚠</span>
       </div>
       <p className="seal-note eyebrow">
-        You didn’t seal in time, so your call is the market price at seal close ({defaulted}).
+        You didn’t seal in time, so your call is the market price at the moment the seal window closed.
         You are still in the hand and can win it like anyone else — but the whole table can
         work out your number, so you are playing with your call face up.
       </p>
@@ -589,9 +583,12 @@ function ActionPanel() {
             {pendingType === 'call' ? 'Sending…' : `Call ${formatChips(toCall)}`}
           </button>
         )}
+        {/* When calling already takes the whole stack, a second button for the same thing only invites a misclick. */}
+        {!(toCall > 0n && toCall >= stack) && (
         <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''}`} onClick={() => send({ type: 'allIn' })} disabled={pending} aria-busy={pendingType === 'allIn'}>
           {pendingType === 'allIn' ? 'Sending…' : `All-in ${formatChips(stack)}`}
         </button>
+        )}
       </div>
 
       {canRaise && (

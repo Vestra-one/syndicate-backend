@@ -52,7 +52,7 @@ function PriceBoardChartButton() {
       type="button"
       className="pb-chart-btn"
       style={{ opacity: 0 }}
-      aria-label="Open full BTC/USD chart"
+      aria-label="Open full chart"
       onClick={() => openPriceChart()}
     />
   )

@@ -122,3 +122,4 @@ html.lite *, html.lite *::before, html.lite *::after { backdrop-filter: none !im
 html.lite .guest-curtain-spin, html.lite .sheet-spinner-dot { animation-iteration-count: infinite !important; }
 /* Without blur a translucent panel lets whatever is behind it show through the text. */
 html.lite .panel, html.lite .ceremony-card, html.lite .sheet, html.lite .guest-curtain-card { background: rgb(15, 12, 9) !important; }
+html.lite .chrome, html.lite .roomnav { background: rgb(11, 9, 7) !important; }

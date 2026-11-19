@@ -5634,3 +5634,8 @@
 .wr-leave-note { position: absolute; left: 0; bottom: calc(100% + 10px); max-width: 420px; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; color: var(--text, #f3ead2); display: flex; gap: 10px; align-items: center; pointer-events: auto; }
 .flat-you { position: absolute; left: 50%; top: 72%; transform: translateX(-50%); padding: 6px 16px; border-radius: 999px; border: 1px solid var(--gold, #e7c873); background: rgb(15, 12, 9); color: var(--gold, #e7c873); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 .guest-curtain-card small { max-width: 440px; line-height: 1.5; font-size: 13px; }
+.lobby-toast { top: 84px; bottom: auto; cursor: pointer; }
+.early-exit--won { background: linear-gradient(100deg, #b98f2f, #f1d98a 45%, #caa23f) !important; }
+.early-exit--won .early-exit-title { color: #1a1305; font-size: 21px; }
+.early-exit--won .early-exit-sub { color: #3a2c0c; }
+.early-exit--won .ghost-btn { background: rgba(26, 19, 5, 0.85); color: #f1d98a; border-color: rgba(26, 19, 5, 0.9); }

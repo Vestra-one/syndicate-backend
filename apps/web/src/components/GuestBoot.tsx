@@ -96,21 +96,21 @@ function Curtain({ title, note }: { title: string; note: string }) {
   )
 }
 
-/** In the lobby, say it when chips land (a hand left early settling, a claim): the table
- *  has its own banner for this, the lobby had nothing. */
+/** Chips landing from a hand the player already left — said wherever they are now, lobby
+ *  or the next table, because that payout has no result screen of its own. */
 export function LobbyToast() {
-  const tx = useGameStore((s) => (s.view === 'discovery' ? s.lastTx : null))
+  const note = useGameStore((s) => s.collectNote)
   const [seen, setSeen] = useState<string | null>(null)
   useEffect(() => {
-    if (!tx) return
-    const t = setTimeout(() => setSeen(tx.sig), 9000)
+    if (!note) return
+    const t = setTimeout(() => setSeen(note.id), 12000)
     return () => clearTimeout(t)
-  }, [tx])
-  if (!tx || seen === tx.sig || tx.label.startsWith('Deposit')) return null
+  }, [note])
+  if (!note || seen === note.id) return null
   return (
-    <div className="lobby-toast" role="status">
+    <div className="lobby-toast" role="status" onClick={() => setSeen(note.id)}>
       <span className="lobby-toast-dot" aria-hidden="true" />
-      {tx.label}
+      {note.label}
     </div>
   )
 }

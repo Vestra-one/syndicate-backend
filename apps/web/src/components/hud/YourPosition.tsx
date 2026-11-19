@@ -1,7 +1,7 @@
 import { useGameStore } from '@/store/gameStore'
 import { formatMoney, formatPrice } from '@/lib/format'
 import type { DefaultAction } from '@/lib/protocol'
-import { edgeRead, typicalMove } from '@/lib/edge'
+import { edgeRead, heldMove } from '@/lib/edge'
 import { useNow } from '@/lib/useNow'
 import { useEffect, useRef, useState } from 'react'
 
@@ -52,7 +52,7 @@ export function YourPosition() {
   const settlesAt = useGameStore((s) => s.streetSchedule?.at(-1)?.end ?? null)
   const now = useNow(1000)
   const secLeft = settlesAt != null ? Math.max(0, (settlesAt - now) / 1000) : null
-  const move = live && secLeft != null && secLeft > 0 ? typicalMove(history, secLeft) : null
+  const move = live && secLeft != null && secLeft > 0 ? heldMove(match?.matchId, history, secLeft) : null
   // Advice is for players who still have a decision: not after a fold, not all-in, and
   // not once everyone else has folded.
   const mySeat = match?.seats.find((x) => x.seat === match.yourSeat)
@@ -83,7 +83,7 @@ export function YourPosition() {
         ) : (
           <span className="position-pred-empty eyebrow">
             {defaulted
-              ? (fallback != null ? `not sealed — playing the market price at close, about ${formatPrice(fallback)}` : 'not sealed — you are playing the market price at close')
+              ? 'not sealed — you are playing the market price at seal close'
               : sealStatus === 'sealed'
                 ? '🔒 sealed' // recovered after a reload — the plaintext never leaves the old device
                 : sealStatus === 'sealing'

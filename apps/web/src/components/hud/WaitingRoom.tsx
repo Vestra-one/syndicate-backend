@@ -671,7 +671,7 @@ function Dock({ seatsLocked }: { seatsLocked: boolean }) {
           disabled={seatsLocked}
           title={seatsLocked ? 'Seats are locked — the hand is being dealt' : undefined}
         >
-          {leaving ? 'Go to the lobby' : 'Leave table'}
+          {leaving ? 'Go to the lobby' : 'Lobby · seat kept'}
         </button>
         <button className="wr-dock-btn wr-dock-btn--sound" onClick={toggleSound}>
           {sound ? '🔊' : '🔈'} Sound: {sound ? 'On' : 'Off'}

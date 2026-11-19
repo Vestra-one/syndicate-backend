@@ -19,6 +19,7 @@ import { explorerTxUrl } from '@/lib/network'
 import './hud.css'
 import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { isGuestWallet } from '@/lib/guestWallet'
+import { formatChips } from '@/lib/format'
 
 /**
  * Read-only stand-in for YourPosition + BettingPanel when the viewer holds no seat
@@ -85,6 +86,9 @@ function EarlyExit() {
   const guest = isGuestWallet(useGameStore((s) => s.walletAddress))
   const moveOn = useGameStore((s) => s.moveOn)
   const [stay, setStay] = useState<string | null>(null)
+  const token = useGameStore((s) => s.terms?.chipsToken ?? 'USDC')
+  // What the win is worth to us: the pot less the rake, less what we put in ourselves.
+  const gain = useGameStore((s) => { const m = s.match; if (!m) return 0n; const net = (m.pot * 97n) / 100n - (m.yourExposure ?? 0n); return net > 0n ? net : 0n })
   // "Next hand" always means the open house table — say so when that is a different table.
   const atHouse = useGameStore((s) => !!s.match?.seats.some((x) => x.seat !== s.match?.yourSeat && isHouseBot(x.wallet)) && s.match.seats.filter((x) => isHouseBot(x.wallet)).length >= 3)
   const matchId = useGameStore((s) => s.match?.matchId ?? null)
@@ -92,7 +96,7 @@ function EarlyExit() {
   return (
     <div className={`early-exit panel early-exit--${state}`} role="status">
       <div className="early-exit-title">
-        {state === 'won' ? 'Everyone folded — the pot is yours' : 'You folded this one'}
+        {state === 'won' ? <><span aria-hidden="true">♛</span> Everyone folded — you take the pot{gain > 0n ? <b className="mono"> about +{formatChips(gain)} {token}</b> : null}</> : 'You folded this one'}
       </div>
       <div className="early-exit-sub">
         {state === 'won'
