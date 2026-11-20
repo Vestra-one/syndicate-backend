@@ -291,7 +291,13 @@ function SettledCeremony() {
         ? `You folded the best number at the table: ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
         : `You folded a winner: your number was ${usd(win.dist - me.dist)} closer than ${name(win.seat)}, who took the pot.`
     }
-    if (me.folded) return `Good fold — ${name(win.seat)} was ${usd(me.dist - win.dist)} closer than you.`
+    if (me.folded) {
+      // A hand the clock folded for you was not a decision — do not praise it as one.
+      const timedOut = useGameStore.getState().feed.some((e) => e.kind === 'action' && e.seat === me.seat && e.action === 'timeout')
+      return timedOut
+        ? `The clock folded this one for you. As it turned out, ${name(win.seat)} was ${usd(me.dist - win.dist)} closer.`
+        : `Good fold — ${name(win.seat)} was ${usd(me.dist - win.dist)} closer than you.`
+    }
     return `${name(win.seat)} beat you by ${usd(me.dist - win.dist)}.`
   })()
 

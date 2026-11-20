@@ -282,10 +282,20 @@ impl Actor {
             return close;
         }
         let street_start = self.street_open_ms(rt, live_ms, round);
-        let gap_end = live_ms + rt.street_end_offset_sec(round).saturating_mul(1_000);
-        let fair = self.turn_started_ms.max(street_start) + FAIR_TURN_MS;
-        let keep_shut = if round == rt.config().round_count { 4_000 } else { 500 };
-        close.max(fair.min(gap_end.saturating_sub(keep_shut)))
+        // Every turn gets the full action clock, wherever in the round it starts. Rounds
+        // usually finish well ahead of the timetable, so the time is there; the only hard
+        // stop is the end of the hand (with a few seconds kept back for each round to come).
+        let fair = self.turn_started_ms.max(street_start)
+            + self.row.action_timeout_ms.max(FAIR_TURN_MS);
+        close.max(fair.min(Self::turn_limit_ms(rt, live_ms, round)))
+    }
+
+    /// The latest a turn in `round` may run: the hand's fixed end, less four seconds of
+    /// shut betting before the price is read, less four seconds for each later round.
+    fn turn_limit_ms(rt: &FencedMatchRuntime, live_ms: u64, round: u8) -> u64 {
+        let last = rt.config().round_count;
+        let end = live_ms + rt.street_end_offset_sec(last).saturating_mul(1_000);
+        end.saturating_sub(4_000 + 4_000 * u64::from(last.saturating_sub(round)))
     }
 
     /// When a round opens: its scheduled time, or sooner if the round before it finished early.
@@ -902,11 +912,7 @@ impl Actor {
             round >= 1
                 && round <= rt.config().round_count
                 && rt.engine().to_act.is_some()
-                && {
-                    let gap_end = live_start + rt.street_end_offset_sec(round).saturating_mul(1_000);
-                    let keep_shut = if round == rt.config().round_count { 4_000 } else { 500 };
-                    now + 2_500 < gap_end.saturating_sub(keep_shut)
-                }
+                && now + 2_500 < Self::turn_limit_ms(rt, live_start, round)
         };
         if now >= street_close && !room_left {
             let Some(rt) = self.runtime.as_mut() else {

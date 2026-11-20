@@ -1,3 +1,4 @@
+import { isLite } from '@/lib/liteMode'
 import { formatChips } from '@/lib/format'
 import { HAND_FIBS, WIN_FIBS, addFibs, recordHand } from '@/lib/sessionStats'
 import { isGuestWallet } from '@/lib/guestWallet'
@@ -1048,7 +1049,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setPriceBoardRange: (range) => set({ priceBoardRange: range }),
   // Never over the seal box: while a number still has to be sealed the big chart stays shut.
-  openPriceChart: () => { const st = get(); if (st.match?.phase === 'SEALING' && st.yourPrediction == null) return; set({ priceChartOpen: true }) },
+  openPriceChart: () => { const st = get(); if (isLite() || st.yourTurn || (st.match?.phase === 'SEALING' && st.yourPrediction == null)) return; set({ priceChartOpen: true }) },
   closePriceChart: () => set({ priceChartOpen: false }),
 
   setDashboardSort: (key) => set({ dashboardSort: key }),
@@ -2477,6 +2478,8 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       // Whoever it's for, the frame names the acting seat — keep the banner/pods honest.
       set((s) => ({
         match: s.match ? { ...s.match, toActSeat: frame.seat, round: frame.round ?? s.match.round } : s.match,
+        // nothing may sit on top of the action buttons while the clock is running
+        priceChartOpen: mySeat != null && mySeat === frame.seat ? false : s.priceChartOpen,
       }))
       if (mySeat == null) {
         // Seat unknown (e.g. reconnected mid-hand) — resolve it from REST, then decide.
