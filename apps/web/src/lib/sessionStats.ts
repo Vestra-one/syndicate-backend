@@ -117,3 +117,25 @@ export function adoptServerFibs(wallet: string | null, serverFibs: number): Sess
   return next
 }
 
+
+
+/**
+ * Tonight's ladder: the next thing worth doing at the table, worked out from what has
+ * already been counted. One goal at a time — when it is met, the next one appears.
+ */
+export function nextGoal(s: SessionStats): { label: string; done: number; of: number } | null {
+  const rivals = Object.values(s.rivals ?? {})
+  const beaten = rivals.filter((r) => r.w >= 1).length
+  const leading = rivals.filter((r) => r.w > r.l).length
+  const ladder: { label: string; done: number; of: number }[] = [
+    { label: 'Play 3 hands', done: s.hands, of: 3 },
+    { label: 'Take a hand off 3 different opponents', done: beaten, of: 3 },
+    { label: 'Win 2 hands in a row', done: s.bestStreak, of: 2 },
+    { label: 'Lead 3 opponents head-to-head', done: leading, of: 3 },
+    { label: 'Win 3 hands in a row', done: s.bestStreak, of: 3 },
+    { label: 'Play 15 hands', done: s.hands, of: 15 },
+    { label: 'Win 5 hands in a row', done: s.bestStreak, of: 5 },
+  ]
+  const open = ladder.find((g) => g.done < g.of)
+  return open ? { ...open, done: Math.max(0, Math.min(open.done, open.of)) } : null
+}

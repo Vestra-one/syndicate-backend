@@ -1,6 +1,7 @@
+import { recordReads } from '@/lib/reads'
 import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { useEffect, useRef, useState } from 'react'
-import { HAND_FIBS, WIN_FIBS, adoptServerFibs, levelOf, readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
+import { HAND_FIBS, WIN_FIBS, adoptServerFibs, levelOf, nextGoal, readStats, recordHand, type SessionStats } from '@/lib/sessionStats'
 import { useGameStore } from '@/store/gameStore'
 import { formatPrice, formatMoney, formatChips } from '@/lib/format'
 import { seatAlias } from '@/lib/seats'
@@ -29,6 +30,20 @@ export function Resolution() {
  * the next hand deals itself after a short countdown (`autoNext`) — a sitting, not a
  * string of separate visits — unless the player sits out.
  */
+/** Your own number against the price when a hand ended without a showdown — latched once
+ *  per hand so the line does not drift as the live price keeps moving. */
+const heldLatch = new Map<string, { dist: number; close: boolean } | null>()
+function heldAtEnd(matchId: string): { dist: number; close: boolean } | null {
+  if (heldLatch.has(matchId)) return heldLatch.get(matchId) ?? null
+  const st = useGameStore.getState()
+  const scale = 10 ** (st.terms?.decimals ?? 2)
+  const last = st.priceHistory.at(-1)?.price
+  const call = st.yourPrediction != null ? Number(st.yourPrediction) / scale : null
+  const out = last != null && call != null ? { dist: Math.abs(last - call), close: Math.abs(last - call) <= last * 0.0005 } : null
+  heldLatch.set(matchId, out)
+  return out
+}
+
 function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'again'; autoNext?: boolean }) {
   const setReviewing = useGameStore((s) => s.setReviewing)
   const playAgain = useGameStore((s) => s.playAgain)
@@ -36,7 +51,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
   const rematch = useGameStore((s) => s.rematch)
-  const [left, setLeft] = useState(20)
+  const [left, setLeft] = useState(8)
   const [sitOut, setSitOut] = useState(false)
   // Dealing the next hand spends another buy-in, so it never happens unless the player
   // ticked the box themselves — free chips or not.
@@ -217,6 +232,7 @@ function SettledCeremony() {
         wallet: walletOf(r.seat)!,
         beat: mine!.net > 0n ? true : r.net > 0n ? false : mine!.dist < r.dist,
       }))
+    recordReads(settlement.matchId, useGameStore.getState().feed, walletOf, yourSeat, ranked.map((r) => ({ seat: r.seat, dist: r.dist, folded: r.folded })))
     const before = readStats(wallet).hands
     const after = recordHand(wallet, settlement.matchId, yourNet, isWinner, faced)
     setRun(after)
@@ -240,9 +256,22 @@ function SettledCeremony() {
     if (!amountsKnown || yourSeat == null) return null
     if (settlement.uncontested) {
       const top = [...settlement.awards].sort((a, b) => (b.amount > a.amount ? 1 : -1))[0]
-      return isWinner
-        ? 'They all folded to you. Nobody will ever know what number you were holding.'
-        : top ? `${seatAlias(top.seat, yourSeat)} took it without showing a number. You will never know if the fold was right.` : null
+      // Nobody else ever sees it, but you get to know what you were holding: how far your
+      // own number was from the price at the moment the hand ended.
+      const held = heldAtEnd(settlement.matchId)
+      const usd0 = (n: number) => `$${n.toFixed(2)}`
+      if (isWinner) {
+        if (!held) return 'They all folded to you. Nobody will ever know what number you were holding.'
+        return held.close
+          ? `They all folded — and you did not even need it: the price was only ${usd0(held.dist)} from your number. Nobody else will ever know.`
+          : `They all folded to a number that was ${usd0(held.dist)} off the price. A clean bluff — and nobody else will ever know.`
+      }
+      if (!top) return null
+      const who = seatAlias(top.seat, yourSeat)
+      if (!held) return `${who} took it without showing a number.`
+      return held.close
+        ? `${who} took it without showing a number. The price was only ${usd0(held.dist)} from yours when it ended — that fold may have cost you the pot.`
+        : `${who} took it without showing a number. The price was ${usd0(held.dist)} from yours when it ended — the fold looks right.`
     }
     const me = ranked.find((r) => r.seat === yourSeat)
     const win = ranked.find((r) => r.seat === winnerSeat)
@@ -266,6 +295,7 @@ function SettledCeremony() {
     return `${name(win.seat)} beat you by ${usd(me.dist - win.dist)}.`
   })()
 
+  const goal = nextGoal(run)
   const recordFor = (seat: number): string | undefined => {
     const w = walletOf(seat)
     const r = w ? run.rivals?.[w] : undefined
@@ -375,6 +405,14 @@ function SettledCeremony() {
             {run.streak >= 2 ? ` · ${run.streak} wins in a row` : ''}
             {(run.days ?? 0) >= 2 ? ` · day ${run.days} at the table` : ''}
             {` · ${run.fibs ?? 0} Fibs (+${HAND_FIBS + (isWinner ? WIN_FIBS : 0)} this hand) · Lv ${levelOf(run.fibs ?? 0).level} ${levelOf(run.fibs ?? 0).title}`}
+          </div>
+        )}
+        {run.hands > 0 && yourSeat != null && goal && (
+          <div className="ceremony-goal">
+            <span className="eyebrow">next goal</span>
+            <b>{goal.label}</b>
+            <span className="ceremony-goal-bar" aria-hidden="true"><i style={{ width: `${(goal.done / goal.of) * 100}%` }} /></span>
+            <span className="mono">{goal.done}/{goal.of}</span>
           </div>
         )}
 

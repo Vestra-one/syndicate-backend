@@ -90,10 +90,11 @@ export function RoundStatus() {
         </div>
         <div className="round-label">{label}</div>
         {clock && <div className="round-toact eyebrow mono">{clock}</div>}
-        <div className="round-prices mono">
-          <span>pot {formatChips(match.pot)} {token}</span>
-          <span>bet {formatChips(match.currentBet)} {token}</span>
-        </div>
+        {match.phase === 'LIVE' && match.currentBet > 0n && (
+          <div className="round-prices mono">
+            <span>bet to match {formatChips(match.currentBet)} {token}</span>
+          </div>
+        )}
       </div>
     </div>
   )

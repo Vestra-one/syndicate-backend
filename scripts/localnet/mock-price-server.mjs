@@ -35,11 +35,35 @@ const FEEDS = {
   SOLUSD: { token: '0xD31a59c85aE9D8edEFeC411D448f90841571b89c', base: 150, amp: 1.2 },
 }
 
+function lattice(symbol, i, salt) {
+  let h = 2166136261 ^ salt
+  for (const c of symbol) h = Math.imul(h ^ c.charCodeAt(0), 16777619)
+  h = Math.imul(h ^ (i | 0), 16777619)
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995); h ^= h >>> 15
+  return ((h >>> 0) / 4294967295) * 2 - 1
+}
+/** Smooth noise in [-1, 1]: hashed values at whole steps, eased between them. */
+function noise(symbol, x, salt) {
+  const i = Math.floor(x)
+  const f = x - i
+  const u = f * f * (3 - 2 * f)
+  const a = lattice(symbol, i, salt * 1000 | 0)
+  const b = lattice(symbol, i + 1, salt * 1000 | 0)
+  return a + (b - a) * u
+}
+
 /** Deterministic price (integer cents) for a symbol at a millisecond timestamp. */
 function centsAt(symbol, tsMs) {
   const f = FEEDS[symbol]
   const t = tsMs / 1000
-  const walk = Math.sin(t / 37) * 0.6 + Math.sin(t / 7.3) * 0.3 + Math.sin(t / 1.9) * 0.1
+  // A market-like wander rather than a sine wave: layered smooth noise, sized so a
+  // two-minute move is typically about 0.1% of the price (what the live feeds do), with
+  // the occasional larger run. Still a pure function of time, so any past second can be
+  // looked up again.
+  let walk = 0
+  for (const [period, weight] of [[600, 0.8], [150, 0.45], [40, 0.25], [10, 0.12], [2.5, 0.05]]) {
+    walk += noise(symbol, t / period, period) * weight
+  }
   return Math.round((f.base + walk * f.amp) * 100)
 }
 

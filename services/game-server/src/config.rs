@@ -12,7 +12,7 @@ pub const MAX_TIMELOCK_SKEW_SEC: u64 = 20;
 /// longer has to fit two wallet prompts — and a seal now lands in a few seconds (it is
 /// acted on at `confirmed`). 30s is time to think of a number; more is dead air before
 /// the first bet.
-pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 30;
+pub const DEFAULT_SEAL_WINDOW_SEC: u64 = 25;
 pub const MIN_SAFE_SEAL_WINDOW_SEC: u64 = 20;
 
 /// League of Entropy quicknet.

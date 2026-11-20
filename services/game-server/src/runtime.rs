@@ -108,6 +108,8 @@ impl Registry {
             events: event_tx,
             cmd: cmd_rx,
             turn_started_ms: now_ms(),
+            early_open: HashMap::new(),
+            last_round: 0,
             last_fill_broadcast_confirmed: None,
             seat_wallets: HashMap::new(),
             last_emote: HashMap::new(),
@@ -189,6 +191,11 @@ struct Actor {
     cmd: mpsc::Receiver<Cmd>,
     /// Wall-clock anchor of the current turn (per-turn timer base).
     turn_started_ms: u64,
+    /// Rounds that opened ahead of schedule (round → ms). When everyone has acted there is
+    /// nothing to wait for: the next round opens after a short look at the price, and the
+    /// time saved is spent at the end of the hand, where the price decides it.
+    early_open: HashMap<u8, u64>,
+    last_round: u8,
     last_fill_broadcast_confirmed: Option<usize>,
     /// engine seat → owning wallet, loaded once the confirmed seats exist. Every gameplay
     /// frame is checked against it: a valid signature only proves WHO signed, not that
@@ -255,9 +262,7 @@ impl Actor {
         // Per-turn timer anchored at the last event (approximation: last broadcast);
         // we track it via `turn_started_ms` kept in the row of events — simplest correct
         // anchor is the max(now-of-last-action, street open). We keep it in memory:
-        let street_start_ms = live_ms
-            + rt.street_start_offset_sec(rt.engine().round)
-                .saturating_mul(1_000);
+        let street_start_ms = self.street_open_ms(rt, live_ms, rt.engine().round);
         Some(turn_deadline_ms(
             self.turn_started_ms,
             street_start_ms,
@@ -276,11 +281,62 @@ impl Actor {
         if rt.engine().to_act.is_none() || round == 0 || round > rt.config().round_count {
             return close;
         }
-        let street_start = live_ms + rt.street_start_offset_sec(round).saturating_mul(1_000);
+        let street_start = self.street_open_ms(rt, live_ms, round);
         let gap_end = live_ms + rt.street_end_offset_sec(round).saturating_mul(1_000);
         let fair = self.turn_started_ms.max(street_start) + FAIR_TURN_MS;
         let keep_shut = if round == rt.config().round_count { 4_000 } else { 500 };
         close.max(fair.min(gap_end.saturating_sub(keep_shut)))
+    }
+
+    /// When a round opens: its scheduled time, or sooner if the round before it finished early.
+    fn street_open_ms(&self, rt: &FencedMatchRuntime, live_ms: u64, round: u8) -> u64 {
+        let scheduled = live_ms + rt.street_start_offset_sec(round.max(1)).saturating_mul(1_000);
+        self.early_open.get(&round).copied().unwrap_or(u64::MAX).min(scheduled)
+    }
+
+    /// Called after every change to the hand: if the betting round just advanced, open the
+    /// next one after a short quiet gap instead of waiting out the schedule. True if it moved.
+    fn note_round(&mut self) -> bool {
+        const QUIET_GAP_MS: u64 = 5_000;
+        let (Some(rt), Some(live)) = (self.runtime.as_ref(), self.row.live_start_ts.map(ts_ms)) else {
+            return false;
+        };
+        let round = rt.engine().round;
+        if round == 0 || round > rt.config().round_count || round <= self.last_round {
+            return false;
+        }
+        let first_sighting = self.last_round == 0;
+        self.last_round = round;
+        if first_sighting || rt.engine().to_act.is_none() {
+            return false;
+        }
+        let scheduled = live + rt.street_start_offset_sec(round).saturating_mul(1_000);
+        let early = now_ms() + QUIET_GAP_MS;
+        if early + 1_000 < scheduled {
+            self.early_open.insert(round, early);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The round timetable as the table should see it, early openings included.
+    fn schedule_view(&self) -> Option<Value> {
+        let rt = self.runtime.as_ref()?;
+        let live = self.row.live_start_ts.map(ts_ms)?;
+        let n = rt.config().round_count;
+        let mut out = Vec::with_capacity(n as usize);
+        for round in 1..=n {
+            let open = self.street_open_ms(rt, live, round);
+            let mut close = rt.current_street_close_ms_for(live, round);
+            let mut end = live + rt.street_end_offset_sec(round).saturating_mul(1_000);
+            if let Some(next) = self.early_open.get(&(round + 1)) {
+                end = end.min(*next);
+                close = close.min(end);
+            }
+            out.push(json!({ "street": round - 1, "open": open, "close": close, "end": end }));
+        }
+        Some(json!(out))
     }
 
     fn turn_view(&self) -> Option<Value> {
@@ -1011,9 +1067,16 @@ impl Actor {
             .as_mut()
             .ok_or_else(|| ApiError::internal("engine not started"))?;
         let now = now_ms();
-        let street_open = live_start
-            + rt.street_start_offset_sec(rt.engine().round.max(1))
-                .saturating_mul(1_000);
+        let street_open = self
+            .early_open
+            .get(&rt.engine().round.max(1))
+            .copied()
+            .unwrap_or(u64::MAX)
+            .min(
+                live_start
+                    + rt.street_start_offset_sec(rt.engine().round.max(1))
+                        .saturating_mul(1_000),
+            );
         if !(rt.betting_open(live_start, now) || (now >= street_open && now < fair_close)) {
             return Err(ApiError::conflict(
                 "betting_closed",
@@ -1145,6 +1208,14 @@ impl Actor {
     }
 
     async fn announce_turn(&mut self) {
+        if self.note_round() {
+            if let Some(schedule) = self.schedule_view() {
+                self.broadcast(json!({
+                    "v": 1, "t": "schedule", "server_time_ms": now_ms(),
+                    "match_id": self.id, "street_schedule": schedule,
+                }));
+            }
+        }
         let Some(turn) = self.turn_view() else {
             return;
         };
@@ -1180,6 +1251,14 @@ impl Actor {
         let mut view = crate::view::match_view(&self.st, &self.row, self.runtime.as_ref()).await;
         if let Some(obj) = view.as_object_mut() {
             let turn = self.turn_view().unwrap_or(Value::Null);
+            if !self.early_open.is_empty() {
+                if let (Some(schedule), Some(timing)) = (
+                    self.schedule_view(),
+                    obj.get_mut("timing").and_then(Value::as_object_mut),
+                ) {
+                    timing.insert("street_schedule".into(), schedule);
+                }
+            }
             obj.insert("open_turn".into(), turn.clone());
             obj.insert("turn".into(), turn);
         }

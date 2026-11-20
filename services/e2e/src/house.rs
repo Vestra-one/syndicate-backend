@@ -921,7 +921,9 @@ async fn act_if_ours(
     let round = turn["round"]
         .as_u64()
         .unwrap_or_else(|| detail["round"].as_u64().unwrap_or(1));
+    let mut late = false;
     if let Some(wait_ms) = wait_until_betting_open_ms(detail, round) {
+        late = true;
         // A turn handed over after the round's scheduled close still has its own clock
         // (the server lends it time from the quiet gap) — play it rather than sit it out.
         let now = detail["server_time_ms"].as_u64().unwrap_or(0);
@@ -963,20 +965,21 @@ async fn act_if_ours(
     let current_bet = detail["current_bet"].as_u64().unwrap_or(0);
     let stack = seat["stack"].as_u64().unwrap_or(0);
     let max_total = seat["committed"].as_u64().unwrap_or(0) + stack;
-    let can_raise = min_raise_to > 0 && min_raise_to <= max_total;
+    // On borrowed time (the round's scheduled close has passed) a bot only calls, checks or
+    // folds: a raise would reopen the betting with no time left for anyone to answer it.
+    let can_raise = !late && min_raise_to > 0 && min_raise_to <= max_total;
     let roll = rng.unit();
     let pot = detail["pot"].as_u64().unwrap_or(0);
     // Each bot has a temperament — (how often it bets, how often it calls) relative to the
     // baseline — so the table is not three copies of one player: steady, wild, careful.
-    const STYLES: [(f64, f64); 3] = [(1.0, 1.0), (1.3, 1.1), (0.8, 0.9)];
+    // (how often it bets, how lightly it calls): a rock, a bluffer, and a calling station.
+// Each bot keeps its temperament, so a player who pays attention can learn who is who.
+const STYLES: [(f64, f64); 3] = [(0.75, 0.85), (1.5, 1.0), (0.7, 1.35)];
     let who = bots
         .iter()
         .position(|b| b.pubkey() == bot.pubkey())
         .unwrap_or(0);
-    // The temperaments move round the table from hand to hand, so no one bot is always
-    // the aggressor (and no one bot ends every session with everybody's chips).
-    let hand = room.match_id.bytes().fold(0u32, |a, b| a.wrapping_mul(131).wrapping_add(b as u32));
-    let style = STYLES[(who + hand as usize) % STYLES.len()];
+    let style = STYLES[who % STYLES.len()];
     // A mood for this hand only (fixed by table + seat), so the same bot is not the same
     // player every deal: some hands it sits back, some hands it comes out firing.
     let mood = [0.55, 1.0, 1.6][(room

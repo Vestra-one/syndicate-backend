@@ -111,6 +111,8 @@ export type ServerFrame =
   | (Base & { t: 'event'; match_id: string; seq: number; type: string; body: Record<string, unknown>; hash: string })
   | (Base & { t: 'lobby_delta'; kind: 'upsert' | 'started' | 'retired'; match_id: string; confirmed?: number; max_players?: number })
   | (Base & { t: 'seat_update'; match_id: string; confirmed: number })
+  /** The round timetable changed: a round finished early, so the next one opens sooner. */
+  | (Base & { t: 'schedule'; match_id: string; street_schedule: { street: number; open: number; close: number; end: number }[] })
   | (Base & {
       t: 'phase'
       match_id: string

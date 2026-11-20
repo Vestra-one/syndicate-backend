@@ -241,7 +241,7 @@ if [ "$BOTS" = "1" ]; then
   say "house table"
   [ "${SKIP_BUILD:-0}" = "1" ] || (cd "$ROOT" && cargo build -q -p syndicate-e2e --bin e2e-devnet)
   spawn house-bots env E2E_MODE=house BUY_IN="${HOUSE_BUY_IN:-10000000}" \
-    STREET_SEC="${HOUSE_STREET_SEC:-25}" OBSERVATION_SEC="${HOUSE_OBSERVATION_SEC:-10}" ROUND_COUNT="${HOUSE_ROUND_COUNT:-3}" \
+    STREET_SEC="${HOUSE_STREET_SEC:-20}" OBSERVATION_SEC="${HOUSE_OBSERVATION_SEC:-6}" ROUND_COUNT="${HOUSE_ROUND_COUNT:-3}" \
     HOUSE_FILL_SEC="${HOUSE_FILL_SEC:-120}" HOUSE_EVENT_EVERY_SEC="${HOUSE_EVENT_EVERY_SEC:-600}" "$TARGET/e2e-devnet"
   ok "house bots running (log: $STATE/logs/house-bots.log)"
 fi

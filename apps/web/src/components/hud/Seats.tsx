@@ -1,3 +1,4 @@
+import { readLine } from '@/lib/reads'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { seatAlias, seatTag } from '@/lib/seats'
@@ -131,9 +132,10 @@ function podStatus(
   const amt = committed > 0 ? `${formatChips(committed)} ${token}` : ''
   if (a?.kind === 'action') {
     switch (a.action) {
-      case 'raiseTo':
       case 'betTo':
-        return { text: `Raised ${amt}`.trim(), tone: 'raised' }
+        return { text: `Bet ${amt}`.trim(), tone: 'raised' }
+      case 'raiseTo':
+        return { text: `Raised to ${amt}`.trim(), tone: 'raised' }
       case 'call':
         return { text: `Called ${amt}`.trim(), tone: 'called' }
       case 'check':
@@ -226,6 +228,7 @@ function OpponentPod({
         // "not dealt in", not "broke" — show nothing rather than a false 0.00.
         stack={seat.stack === 0n && match.phase === 'SEALING' ? undefined : `${formatChips(seat.stack)} ${token}`}
         tag={seatTag(seat.seat, match.yourSeat, seat.wallet, feed)}
+        read={seat.seat === match.yourSeat ? null : readLine(seat.wallet)}
         history={history}
         active={active}
         folded={seat.folded}

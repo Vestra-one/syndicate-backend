@@ -77,6 +77,22 @@ export function InviteBanner({
     mode = 'loading'
   }
 
+  // An invite is to a PERSON's table, not to one hand: when that hand is over, follow the
+  // host to the table they dealt next ("Deal this table again"), and wait for it if they
+  // have not dealt it yet. One link keeps working for the whole evening.
+  const hostWallet = listed?.creatorWallet
+    ?? active.find((g) => g.matchId === matchId || g.onchainMatchId === matchId)?.creatorWallet
+    ?? detail?.creator_wallet
+    ?? null
+  const successor = mode === 'closed' && hostWallet
+    ? upcoming
+        .filter((g) => g.creatorWallet === hostWallet && g.matchId !== matchId && g.seated < g.maxPlayers && !(g.fillDeadline != null && g.fillDeadline <= now))
+        .sort((a, b) => (b.fillDeadline ?? 0) - (a.fillDeadline ?? 0))[0]
+    : undefined
+  if (successor) {
+    return <InviteBanner matchId={successor.matchId} inviter={inviter} connected={connected} onTakeSeat={onTakeSeat} onDeal={onDeal} onDismiss={onDismiss} />
+  }
+
   if (mode === 'loading') {
     return (
       <div className="dash-invite dash-invite--loading">
@@ -98,9 +114,9 @@ export function InviteBanner({
       <div className="dash-invite dash-invite--closed">
         <InviteAvatar alias={name} muted />
         <div className="dash-invite-body">
-          <div className="eyebrow">invite expired</div>
-          <div className="dash-invite-title">That table {started ? 'already started' : 'filled up'}</div>
-          <div className="dash-invite-sub">{name}’s table is closed — deal your own?</div>
+          <div className="eyebrow">{hostWallet ? 'hand in progress' : 'invite expired'}</div>
+          <div className="dash-invite-title">{started ? `${name}’s hand is already under way` : `${name}’s table has closed`}</div>
+          <div className="dash-invite-sub">{hostWallet ? `Stay here — the moment ${name} deals the next hand, your seat appears.` : 'Deal your own table?'}</div>
         </div>
         <div className="dash-invite-actions">
           <button className="play-now-btn" onClick={onDeal}>Deal a table</button>

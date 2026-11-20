@@ -459,6 +459,11 @@ impl FencedMatchRuntime {
         )
     }
 
+    /// Scheduled betting close (ms epoch) of any round, not just the current one.
+    pub fn current_street_close_ms_for(&self, live_start_ms: u64, round: u8) -> u64 {
+        live_start_ms.saturating_add(self.betting_close_offset_sec(round).saturating_mul(1000))
+    }
+
     /// Total betting span = scheduled_end - live_start (Σ all durations + observations).
     pub fn total_betting_duration_sec(&self) -> u64 {
         let n = self.config.round_count;

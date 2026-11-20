@@ -50,6 +50,8 @@ export interface SeatPodProps {
   joining?: boolean
   /** this player's recent public betting actions (newest first) — shown on hover */
   history?: { label: string; ago: string }[]
+  /** What you have learned about this player over the sitting (see lib/reads). */
+  read?: { label: string; hint: string } | null
 }
 
 function SeatGlyph() {
@@ -96,6 +98,7 @@ export function SeatPod({
   next,
   joining,
   history,
+  read,
 }: SeatPodProps) {
   const cls = [
     'pod',
@@ -185,6 +188,10 @@ export function SeatPod({
           <TagIcon kind={tag.kind} />
           {tag.label}
         </span>
+      )}
+
+      {read && !empty && (
+        <span className="pod-read" title={read.hint}>{read.label}</span>
       )}
 
       {history && !empty && (

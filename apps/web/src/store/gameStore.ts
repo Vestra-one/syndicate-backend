@@ -2366,6 +2366,12 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
       break
     }
 
+    case 'schedule': {
+      const next = normalizeSchedule(frame.street_schedule)
+      if (next) set({ streetSchedule: next })
+      break
+    }
+
     case 'phase': {
       const phase = mapPhase(frame.phase)
       const fb = (frame as { button?: number | null }).button

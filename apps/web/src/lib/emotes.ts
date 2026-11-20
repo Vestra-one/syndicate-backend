@@ -15,5 +15,7 @@ export const EMOTES = [
 export type EmoteId = (typeof EMOTES)[number]['id']
 
 export function emoteLabel(id: string): string {
+  // A typed line travels as "say:<text>"; it is shown as text, never as markup.
+  if (id.startsWith('say:')) return id.slice(4)
   return EMOTES.find((e) => e.id === id)?.label ?? id
 }

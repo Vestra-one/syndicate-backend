@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { EMOTES, emoteLabel } from '@/lib/emotes'
 import { seatAlias } from '@/lib/seats'
@@ -6,7 +7,7 @@ import { levelOf, readStats } from '@/lib/sessionStats'
 
 /**
  * Table talk: the last few reactions from the table, and — for a seated player — the row
- * of reactions to send. Fixed phrases only.
+ * of reactions to send, plus a box to type a short line of your own.
  */
 export function TableTalk() {
   const talk = useGameStore((s) => s.talk)
@@ -16,7 +17,9 @@ export function TableTalk() {
   const now = useNow(1000)
   const wallet = useGameStore((s) => s.walletAddress)
   const level = levelOf(readStats(wallet).fibs ?? 0).level
-  const recent = talk.filter((t) => now - t.at < 6000).slice(-3)
+  const recent = talk.filter((t) => now - t.at < (t.emote.startsWith('say:') ? 12000 : 6000)).slice(-4)
+  const [text, setText] = useState('')
+  const say = () => { const t = [...text].map((c) => (c < ' ' ? ' ' : c)).join('').trim().slice(0, 80); if (t) void sendEmote(`say:${t}`); setText('') }
   const seated = useGameStore((s) => s.seated)
   const canTalk = (yourSeat != null || seated) && (phase === 'SEALING' || phase === 'LIVE')
   if (!canTalk && recent.length === 0) return null
@@ -33,6 +36,8 @@ export function TableTalk() {
         <div className="table-talk-bar">
           {EMOTES.map((e) => {
             const locked = level < e.level
+            // Reactions not earned yet stay out of the way; they appear the moment you level up.
+            if (locked) return null
             return (
               <button
                 key={e.id}
@@ -46,6 +51,16 @@ export function TableTalk() {
               </button>
             )
           })}
+          <form className="table-talk-say" onSubmit={(ev) => { ev.preventDefault(); say() }}>
+            <input
+              className="table-talk-input"
+              value={text}
+              maxLength={80}
+              placeholder="Say something…"
+              aria-label="Say something to the table"
+              onChange={(ev) => setText(ev.target.value)}
+            />
+          </form>
         </div>
       )}
     </div>

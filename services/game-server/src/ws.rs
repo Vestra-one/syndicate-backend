@@ -209,7 +209,13 @@ impl Conn {
                 let Some(wallet) = self.current_wallet() else {
                     return self.error("unauthorized", "auth required").await;
                 };
-                if !crate::runtime::EMOTES.contains(&emote.as_str()) {
+                // Table talk: one of the fixed reactions, or a short typed line ("say:…") —
+                // plain text only, capped, and rate-limited like every other frame.
+                let typed = emote.strip_prefix("say:").is_some_and(|t| {
+                    let n = t.chars().count();
+                    (1..=80).contains(&n) && !t.chars().any(char::is_control) && !t.trim().is_empty()
+                });
+                if !typed && !crate::runtime::EMOTES.contains(&emote.as_str()) {
                     return self.error("bad_frame", "unknown emote").await;
                 }
                 if self.st.limits.check_actions(&wallet).is_err() {

@@ -533,7 +533,8 @@ function ActionPanel() {
   const remaining = Math.max(0, deadline - now)
   const totalMs = (terms?.actionTimerSec ?? 20) * 1000
 
-  const maxRaiseTo = currentBet + stack // shove level
+  // Shove level: what is already in front of me this round plus everything behind.
+  const maxRaiseTo = Math.max(0, currentBet - Number(toCall)) + stack
   const clampRaise = (v: number) => Math.max(minRaiseTo, Math.min(maxRaiseTo, v))
 
   // raiseTo is kept in token base units (what the engine speaks); the input
