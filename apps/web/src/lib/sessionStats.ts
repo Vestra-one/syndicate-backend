@@ -130,11 +130,11 @@ export function nextGoal(s: SessionStats): { label: string; done: number; of: nu
   const ladder: { label: string; done: number; of: number }[] = [
     { label: 'Play 3 hands', done: s.hands, of: 3 },
     { label: 'Take a hand off 3 different opponents', done: beaten, of: 3 },
-    { label: 'Win 2 hands in a row', done: s.bestStreak, of: 2 },
+    { label: 'Win 2 hands in a row', done: s.bestStreak >= 2 ? 2 : s.streak, of: 2 },
     { label: 'Lead 3 opponents head-to-head', done: leading, of: 3 },
-    { label: 'Win 3 hands in a row', done: s.bestStreak, of: 3 },
+    { label: 'Win 3 hands in a row', done: s.bestStreak >= 3 ? 3 : s.streak, of: 3 },
     { label: 'Play 15 hands', done: s.hands, of: 15 },
-    { label: 'Win 5 hands in a row', done: s.bestStreak, of: 5 },
+    { label: 'Win 5 hands in a row', done: s.bestStreak >= 5 ? 5 : s.streak, of: 5 },
   ]
   const open = ladder.find((g) => g.done < g.of)
   return open ? { ...open, done: Math.max(0, Math.min(open.done, open.of)) } : null

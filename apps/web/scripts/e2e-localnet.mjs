@@ -594,6 +594,9 @@ async function main() {
       s.setCreateSeats(2)
       s.setCreateFillWindow(120)
     })
+    // E2E_PRIVATE=1: a friends-only table — not listed, joined with the code alone.
+    const PRIVATE = !!process.env.E2E_PRIVATE
+    if (PRIVATE) await host.page.evaluate(() => window.__gameStore.getState().setPrivateTable(true))
     const before = { host: BigInt((await state(host)).chipBalance ?? 0), guest: 0n }
     await shot(host, '02-create-sheet')
     await host.page.evaluate(() => void window.__gameStore.getState().createTable())
@@ -608,17 +611,28 @@ async function main() {
 
     // ---- join (discovered from the lobby, like a real second player) ----
     let matchId = null
+    if (PRIVATE) {
+      const code = await host.page.evaluate(() => window.__gameStore.getState().roomCode)
+      expect(!!code, `host got a table code (${code})`)
+      const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
+      expect(!lobby.rooms.some((r) => r.creator_wallet === host.wallet), 'the friends-only table is NOT in the public lobby')
+      await guest.page.evaluate((c) => void window.__gameStore.getState().joinByCode(c), code)
+      await waitFor(guest, 'join sheet ready (by code)', () => window.__gameStore.getState().playMode === 'join', 60_000)
+      matchId = await guest.page.evaluate(() => window.__gameStore.getState().roomModal?.matchId ?? null)
+    }
     for (let i = 0; i < 60 && !matchId; i++) {
       const lobby = await (await fetch(`${gameUrl}/v1/lobby`)).json()
       matchId = lobby.rooms.find((r) => r.creator_wallet === host.wallet)?.match_id ?? null
       if (!matchId) await sleep(1000)
     }
-    expect(!!matchId, `host's table is listed in the public lobby (${matchId})`)
-    await guest.page.evaluate(() => void window.__gameStore.getState().loadDiscovery())
-    await waitFor(guest, 'guest sees the table in its lobby', (id) => window.__gameStore.getState().upcomingGames.some((g) => g.matchId === id), 30_000, matchId)
-    await shot(guest, '04-lobby-with-table')
-    await guest.page.evaluate((id) => void window.__gameStore.getState().joinGame(id), matchId)
-    await waitFor(guest, 'join sheet ready', () => window.__gameStore.getState().playMode === 'join')
+    expect(!!matchId, `host's table is ${PRIVATE ? 'found by its code' : 'listed in the public lobby'} (${matchId})`)
+    if (!PRIVATE) {
+      await guest.page.evaluate(() => void window.__gameStore.getState().loadDiscovery())
+      await waitFor(guest, 'guest sees the table in its lobby', (id) => window.__gameStore.getState().upcomingGames.some((g) => g.matchId === id), 30_000, matchId)
+      await shot(guest, '04-lobby-with-table')
+      await guest.page.evaluate((id) => void window.__gameStore.getState().joinGame(id), matchId)
+      await waitFor(guest, 'join sheet ready', () => window.__gameStore.getState().playMode === 'join')
+    }
     before.guest = BigInt((await state(guest)).chipBalance ?? 0)
     await shot(guest, '05-join-sheet')
     await guest.page.evaluate(() => void window.__gameStore.getState().joinTable())

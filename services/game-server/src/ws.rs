@@ -215,7 +215,12 @@ impl Conn {
                     let n = t.chars().count();
                     (1..=80).contains(&n) && !t.chars().any(char::is_control) && !t.trim().is_empty()
                 });
-                if !typed && !crate::runtime::EMOTES.contains(&emote.as_str()) {
+                // "next:<table>" — a player who dealt the next table telling this one where.
+                let next = emote.strip_prefix("next:").is_some_and(|t| {
+                    (4..=48).contains(&t.len())
+                        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+                });
+                if !typed && !next && !crate::runtime::EMOTES.contains(&emote.as_str()) {
                     return self.error("bad_frame", "unknown emote").await;
                 }
                 if self.st.limits.check_actions(&wallet).is_err() {

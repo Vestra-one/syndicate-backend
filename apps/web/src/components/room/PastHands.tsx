@@ -71,7 +71,7 @@ function PastCard({ hand }: { hand: PastHand }) {
           <Coin base={base} />
           <span className="card-mkt">
             <b>{base}<i>/{quote}</i></b>
-            <span className="eyebrow">{hand.maxPlayers ?? '—'} players · {agoLabel(hand.endedAt, now)}</span>
+            <span className="eyebrow">{hand.maxPlayers ?? '—'} seats · {agoLabel(hand.endedAt, now)}</span>
           </span>
           <span className="card-flag">
             <span className="flag flag--won">{isVoided ? 'Voided' : isYours ? 'Your win' : 'Settled'}</span>
@@ -121,7 +121,9 @@ function PastCard({ hand }: { hand: PastHand }) {
                   <span className="payout mono">
                     {s.total_contribution != null
                       ? (() => { const net = (s.pot_won_chips ?? 0) - s.total_contribution; return `${net >= 0 ? '+' : '−'}${formatChips(Math.abs(net))} USDC` })()
-                      : `${s.payout_chips != null ? formatChips(s.payout_chips) : '—'} USDC back`}
+                      : s.payout_chips != null && hand.buyIn != null
+                        ? (() => { const net = Number(s.payout_chips) - Number(hand.buyIn); return `${net >= 0 ? '+' : '−'}${formatChips(Math.abs(net))} USDC` })()
+                        : `${s.payout_chips != null ? formatChips(s.payout_chips) : '—'} USDC returned`}
                   </span>
                 </div>
               ))}

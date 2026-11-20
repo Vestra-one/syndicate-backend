@@ -826,7 +826,7 @@ async fn play(ctx: &Ctx, room: &Room, bots: &[Player], house: &House) -> String 
                     // Which bot plays which style rotates by table, so no one bot is always
                     // the one sitting on the market (and winning every showdown).
                     let turn = room.match_id.bytes().fold(0usize, |a, b| a + b as usize);
-                    let (lo, hi) = [(0.5, 4.0), (5.0, 11.0), (10.0, 20.0)][(i + turn) % 3];
+                    let (lo, hi) = [(0.5, 4.0), (4.0, 9.0), (8.0, 15.0)][(i + turn) % 3];
                     let side = if rng.unit() < 0.5 { -1.0 } else { 1.0 };
                     let drift = side * (lo + rng.unit() * (hi - lo)) / 10_000.0;
                     let call = (spot as f64 * (1.0 + drift)) as i128;

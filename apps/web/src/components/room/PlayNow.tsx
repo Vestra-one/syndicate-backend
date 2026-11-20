@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMemo } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
@@ -94,6 +95,7 @@ export function PlayNow() {
           <h2 id="play-h">Play now</h2>
         </div>
         <div className="zone-tools">
+          <CodeEntry />
           <button className="btn-gold" type="button" onClick={handleCreate}>Deal a table</button>
         </div>
       </div>
@@ -150,3 +152,27 @@ function NextTable({ games, onJoin }: { games: UpcomingGame[]; onJoin: (matchId:
   )
 }
 
+
+
+/** Sit at a friends-only table: type the code a friend sent (or accept one from a link). */
+function CodeEntry() {
+  const pending = useGameStore((s) => s.pendingCode)
+  const from = useGameStore((s) => s.inviteFrom)
+  const joinByCode = useGameStore((s) => s.joinByCode)
+  const [code, setCode] = useState('')
+  const value = code || pending || ''
+  return (
+    <form className={`code-entry ${pending ? 'code-entry--invited' : ''}`} onSubmit={(e) => { e.preventDefault(); if (value) void joinByCode(value) }}>
+      {pending && <span className="code-entry-note">{from ? `${from} invited you` : 'You were invited'} to a friends table</span>}
+      <input
+        className="code-entry-input mono"
+        value={value}
+        maxLength={12}
+        placeholder="Table code"
+        aria-label="Friends table code"
+        onChange={(e) => setCode(e.target.value.toUpperCase())}
+      />
+      <button className="ghost-btn" type="submit" disabled={!value}>{pending ? 'Take your seat' : 'Join'}</button>
+    </form>
+  )
+}

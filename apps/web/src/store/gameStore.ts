@@ -198,6 +198,18 @@ interface GameState {
   talk: { seat: number; emote: string; at: number }[]
   /** Send a reaction to the table (seated players only). */
   sendEmote: (emote: string) => Promise<void>
+  /** Deal the next table for friends only: hidden from the lobby, joined with a code. */
+  privateTable: boolean
+  setPrivateTable: (on: boolean) => void
+  /** A friends-table code that arrived in a link, waiting for the player to accept it. */
+  pendingCode: string | null
+  /** The code of the friends-only table we are at (shown to share), if it is one. */
+  roomCode: string | null
+  /** Take a seat at a friends-only table by its code. */
+  joinByCode: (code: string) => Promise<void>
+  /** Someone at the table just finished dealt the next one: where to follow them. */
+  nextTable: { by: number; matchId?: string; code?: string } | null
+  followTable: () => Promise<void>
 
   settlement: SettlementView | null
   voided: { reason: VoidReason } | null
@@ -252,7 +264,7 @@ interface GameState {
   closeRoomModal: () => void
   connect: () => Promise<void>
   disconnect: () => void
-  joinGame: (matchId: string) => Promise<void>
+  joinGame: (matchId: string, room?: { code: string; commitment: string }) => Promise<void>
   createGame: () => Promise<void>
   /** Set the buy-in (token base units) for the table being created — clamped to createLimits. */
   setCreateBuyIn: (baseUnits: number) => void
@@ -733,6 +745,10 @@ function stopMatchPoll() {
  *  feed, and the reserved intent once `/v1/rooms/intents` has returned it. */
 let createCtx: { config: ApiConfig; feed: string; intent: CreateIntentResponse | null } | null = null
 /** The match UUID we resolved to JOIN — target of the deposit POST + candidate polling. */
+/** Friends-only table we are joining: its code and our proof of knowing it. */
+let roomJoin: { code: string; commitment: string } | null = null
+/** The table a rematch was dealt from (told where the next one is once it exists). */
+let rematchFrom: string | null = null
 let joinMatchId: string | null = null
 
 /** The drand beacon the SERVER decrypts against (`GET /v1/config`.drand). The seal must
@@ -1172,14 +1188,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   /** Join a FILLING game by its match UUID — opens the join sheet immediately (resolving
    *  spinner), then connects the wallet, opens a REST session, and loads the match detail
    *  (§5). Stays on the Room page throughout (§ locked decision: in-page modals). */
-  joinGame: async (matchId: string) => {
+  joinGame: async (matchId: string, room?: { code: string; commitment: string }) => {
     if (!adapters) adapters = createAdapters()
     joinMatchId = null
     createCtx = null
+    roomJoin = room ?? null
     leaveActiveMatch()
     set({
       ...FRESH_TABLE,
-      playError: null, pendingInvite: null, inviteFrom: null,
+      playError: null, pendingInvite: null, inviteFrom: null, nextTable: null, roomCode: room?.code ?? null,
       roomModal: { kind: 'join', matchId }, playResolving: true, playMode: null,
       terms: null, seated: false, lobbySeated: null,
     })
@@ -1446,7 +1463,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       // Public room: default (zeroed) join commitment. Private-room joins bind the room
       // code via the /v1/rooms/code/{code} → join_commitment flow (follow-up).
-      const txSig = await adapters.chain.deposit(matchId, undefined, terms.buyIn + terms.entryFee, txProgressCallback(set))
+      const txSig = await adapters.chain.deposit(matchId, roomJoin?.commitment, terms.buyIn + terms.entryFee, txProgressCallback(set))
       set((s) => ({
         lastTx: { sig: txSig, label: 'Deposit confirmed on-chain' },
         txProgress: s.txProgress ? { ...s.txProgress, stage: 'confirmed', sig: txSig } : null,
@@ -1506,8 +1523,10 @@ export const useGameStore = create<GameState>((set, get) => ({
         min_players: terms.minPlayers,
         max_players: terms.maxPlayers,
         streets: { count: streets.count, durations_sec: streets.durations_sec, observation_sec: streets.observation_sec },
-        visibility: 'public',
+        visibility: get().privateTable ? 'private' : 'public',
       })
+      roomJoin = null
+      set({ roomCode: intent.room_code ?? null })
       createCtx = { config, feed, intent }
       const cp = intent.create_params
 
@@ -1564,6 +1583,13 @@ export const useGameStore = create<GameState>((set, get) => ({
         await get().connect()
         subscribeMatch(matchUuid)
         void ensureSessionKey(matchUuid, String(cp.match_id)) // one-tap play (see joinTable)
+      }
+      // Dealt as a rematch: tell the table we just left where the next hand is, so the
+      // same people can follow with one click instead of hunting for a link.
+      if (rematchFrom) {
+        const where = intent.room_code ? `next:code:${intent.room_code}` : matchUuid ? `next:${matchUuid}` : null
+        if (where) gateway?.send({ t: 'emote', match_id: rematchFrom, emote: where })
+        rematchFrom = null
       }
       void refreshBalance(set)
     } catch (err) {
@@ -1826,6 +1852,35 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   /** Leave the finished match and matchmake into a fresh one — no page refresh.
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
+  privateTable: false,
+  pendingCode: null,
+  setPrivateTable: (on) => set({ privateTable: on }),
+  roomCode: null,
+  nextTable: null,
+  followTable: async () => {
+    const next = get().nextTable
+    if (!next) return
+    set({ view: 'discovery' })
+    if (next.code) await get().joinByCode(next.code)
+    else if (next.matchId) await get().joinGame(next.matchId)
+  },
+  joinByCode: async (raw) => {
+    const code = raw.trim().toUpperCase()
+    if (!code) return
+    if (!adapters) adapters = createAdapters()
+    set({ playError: null, playResolving: true, pendingCode: null })
+    try {
+      const addr = await adapters.wallet.connect()
+      set({ walletAddress: addr })
+      const wallet = adapters.wallet.address()
+      if (!wallet || !(await ensureRestSession(adapters, wallet, set))) throw new Error('Could not reach the table server (sign-in failed).')
+      const room = await api.getRoomByCode(code)
+      await get().joinGame(room.match_id, { code, commitment: room.join_commitment })
+    } catch (e) {
+      const msg = e instanceof Error && /sign-in|reach/.test(e.message) ? e.message : 'No open table has that code — it may have started already. Ask for the new one.'
+      set({ playResolving: false, playError: msg })
+    }
+  },
   sendEmote: async (emote) => {
     const matchId = get().match?.matchId
     if (!matchId || (get().match?.yourSeat == null && !get().seated)) return
@@ -1909,6 +1964,8 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   rematch: async () => {
     const prev = get().terms
+    rematchFrom = get().match?.matchId ?? null
+    const wasPrivate = !!get().roomCode
     if (!prev) return get().playAgain()
     const keep = { feed: prev.priceFeedId, buyIn: prev.buyIn, maxPlayers: prev.maxPlayers }
     await get().playAgain() // back to the lobby and open a fresh create context
@@ -1926,6 +1983,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         fillWindowSec: limits ? Math.max(limits.fillWindowMinSec, 30) : 30,
       },
     })
+    set({ privateTable: wasPrivate })
     await get().createTable()
   },
 
@@ -1935,6 +1993,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       // overlay on discovery rather than switching views, so this must happen before it.
       view: 'discovery',
       match: null,
+      roomCode: null,
+      nextTable: null,
       yourTurn: null,
       actPending: null,
       sealStatus: 'unsealed',
@@ -2151,7 +2211,7 @@ function recallDeposit(matchId: string): string | null {
 async function reportDeposit(matchId: string, txSig: string, set: SetState): Promise<void> {
   for (let i = 0; i < 10; i++) {
     try {
-      const r = await api.submitDeposit(matchId, txSig)
+      const r = await api.submitDeposit(matchId, txSig, roomJoin?.code)
       log.info('[deposit] reported — status:', r.status)
       void pollCandidate(matchId, adapters?.wallet.address() ?? '', set)
       return
@@ -2436,6 +2496,13 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
 
     case 'emote': {
       if (frame.match_id !== activeMatchId) return
+      // Not table talk: a player who dealt the next table telling this one where it is.
+      if (frame.emote.startsWith('next:')) {
+        if (frame.seat_index === get().match?.yourSeat) return
+        const rest = frame.emote.slice(5)
+        set({ nextTable: rest.startsWith('code:') ? { by: frame.seat_index, code: rest.slice(5) } : { by: frame.seat_index, matchId: rest } })
+        return
+      }
       set((s) => ({ talk: [...s.talk, { seat: frame.seat_index, emote: frame.emote, at: Date.now() }].slice(-6) }))
       return
     }

@@ -22,6 +22,27 @@ export function buildInviteUrl(matchId: string, from?: string, host?: string | n
   return url.toString()
 }
 
+/** Link to a friends-only table: the code is the invitation (the table is not listed). */
+export function buildCodeUrl(code: string, from?: string): string {
+  const url = new URL(window.location.origin + window.location.pathname)
+  url.searchParams.set('code', code)
+  if (from) url.searchParams.set(FROM, from)
+  return url.toString()
+}
+
+/** Read and strip a `?code=` friends-table link. */
+export function consumeCodeParam(): { code: string; inviter: string | null } | null {
+  const params = new URLSearchParams(window.location.search)
+  const code = params.get('code')
+  if (!code) return null
+  const inviter = params.get(FROM)
+  const url = new URL(window.location.href)
+  url.searchParams.delete('code')
+  url.searchParams.delete(FROM)
+  window.history.replaceState({}, '', url.toString())
+  return { code: code.trim().toUpperCase().slice(0, 16), inviter }
+}
+
 const HOST = 'host'
 let lastHost: string | null = null
 /** The host named by the invite link this page was opened with, if any. */

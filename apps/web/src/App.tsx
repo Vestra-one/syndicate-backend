@@ -6,7 +6,7 @@ import { TxCeremony } from '@/components/hud/TxCeremony'
 import { ComingSoon } from '@/components/coming-soon/ComingSoon'
 import { useGameStore } from '@/store/gameStore'
 import { startPriceFeed } from '@/lib/realtime/priceFeed'
-import { consumeInviteParam } from '@/lib/invite'
+import { consumeCodeParam, consumeInviteParam } from '@/lib/invite'
 
 /**
  * Top-level host router.
@@ -67,6 +67,8 @@ function Game() {
   // A ?table=<id> invite deep-link → stash it; the Dashboard surfaces an accept
   // prompt (needs a user gesture to open the wallet, so we never auto-join on load).
   useEffect(() => {
+    const friends = consumeCodeParam()
+    if (friends) useGameStore.setState({ pendingCode: friends.code, inviteFrom: friends.inviter })
     const inv = consumeInviteParam()
     if (inv) useGameStore.setState({ pendingInvite: inv.matchId, inviteFrom: inv.inviter })
   }, [])

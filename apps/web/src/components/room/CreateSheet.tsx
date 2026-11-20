@@ -27,6 +27,8 @@ export function CreateSheet() {
   const setCreateFeed = useGameStore((s) => s.setCreateFeed)
   const setCreateBuyIn = useGameStore((s) => s.setCreateBuyIn)
   const setCreateFillWindow = useGameStore((s) => s.setCreateFillWindow)
+  const privateTable = useGameStore((s) => s.privateTable)
+  const setPrivateTable = useGameStore((s) => s.setPrivateTable)
   const setCreateSeats = useGameStore((s) => s.setCreateSeats)
   const create = useGameStore((s) => s.createTable)
   const close = useGameStore((s) => s.closeRoomModal)
@@ -150,6 +152,19 @@ export function CreateSheet() {
           ))}
         </div>
         <p className="pick-hint">seat 1 is yours · deals at {terms.minPlayers}, plays best at full</p>
+      </div>
+
+      <div className="pick">
+        <span className="eyebrow">who can sit</span>
+        <div className="pickrow">
+          <button type="button" className={`room-chip ${!privateTable ? 'on' : ''}`} onClick={() => setPrivateTable(false)}>Anyone</button>
+          <button type="button" className={`room-chip ${privateTable ? 'on' : ''}`} onClick={() => setPrivateTable(true)}>Friends only</button>
+        </div>
+        <p className="pick-hint">
+          {privateTable
+            ? 'Hidden from the lobby. You get a code and a link to send; only people who have it can sit. No house bots — it deals when your friends are in.'
+            : 'Listed in the lobby. Friends can use your link, and house bots take up to two seats still empty when the door closes.'}
+        </p>
       </div>
 
       <div className="pick">

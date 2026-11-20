@@ -111,7 +111,7 @@ export function ProfilePanel() {
         <div className="me-stat"><b>{profile?.stats.tablesPlayed ?? 0}</b><span>tables</span></div>
         <div className="me-stat"><b>{profile?.stats.potsWon ?? 0}</b><span>pots won</span></div>
         <div className="me-stat"><b className={netUp ? 'up' : 'down'}>{formatSigned(Number(netChips) / 1e6)}</b><span>net usdc</span></div>
-        <div className="me-stat"><b>{profile?.stats.bestPot != null ? formatChips(profile.stats.bestPot) : '—'}</b><span>best pot</span></div>
+        <div className="me-stat"><b>{profile?.stats.bestPot != null ? formatChips(profile.stats.bestPot) : '—'}</b><span>best win</span></div>
       </div>
     </div>
   )

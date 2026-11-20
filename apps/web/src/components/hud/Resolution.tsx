@@ -51,6 +51,8 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const house = hasHouseBots()
   const leave = useGameStore((s) => s.leaveToDiscovery)
   const rematch = useGameStore((s) => s.rematch)
+  const nextTable = useGameStore((s) => s.nextTable)
+  const followTable = useGameStore((s) => s.followTable)
   const [left, setLeft] = useState(8)
   const [sitOut, setSitOut] = useState(false)
   // Dealing the next hand spends another buy-in, so it never happens unless the player
@@ -93,7 +95,11 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
       ) : (
         <button className="ghost-btn" onClick={() => { setSitOut(true); leave() }}>Lobby</button>
       )}
-      {house && !here && (
+      {nextTable ? (
+        <button className="ghost-btn ghost-btn--primary" onClick={() => void followTable()}>
+          {seatAlias(nextTable.by)} dealt the next hand — take your seat
+        </button>
+      ) : !here && (
         <button className="ghost-btn" onClick={() => void rematch()}>Deal this table again</button>
       )}
       {house ? (
@@ -302,6 +308,7 @@ function SettledCeremony() {
   })()
 
   const goal = nextGoal(run)
+  const [shared, setShared] = useState(false)
   const recordFor = (seat: number): string | undefined => {
     const w = walletOf(seat)
     const r = w ? run.rivals?.[w] : undefined
@@ -389,7 +396,7 @@ function SettledCeremony() {
         )}
 
         <div className="ceremony-rake eyebrow">
-          Pot <span className="mono">{formatChips(pot, token)}</span>
+          <span title="What was actually played for. A bet nobody called goes straight back to whoever made it and is not part of the pot.">Pot played for</span> <span className="mono">{formatChips(pot, token)}</span>
           <span className="ceremony-rake-sep">·</span>
           rake <span className="mono">{formatChips(rake, token)} {token}</span>
         </div>
@@ -420,6 +427,22 @@ function SettledCeremony() {
             <span className="ceremony-goal-bar" aria-hidden="true"><i style={{ width: `${(goal.done / goal.of) * 100}%` }} /></span>
             <span className="mono">{goal.done}/{goal.of}</span>
           </div>
+        )}
+
+        {isWinner && yourSeat != null && (
+          <button
+            className="ghost-btn ceremony-share"
+            onClick={() => {
+              const text = settlement.uncontested
+                ? `Everyone folded to me at Satoshi's Table — ${formatChips(pot, token)} ${token} pot, and nobody saw my number.`
+                : `Called the price at Satoshi's Table and took a ${formatChips(pot, token)} ${token} pot.`
+              const url = window.location.origin
+              if (typeof navigator.share === 'function') void navigator.share({ text, url }).catch(() => {})
+              else void navigator.clipboard?.writeText(`${text} ${url}`).then(() => setShared(true)).catch(() => {})
+            }}
+          >
+            {shared ? 'Copied — paste it anywhere' : 'Share this win'}
+          </button>
         )}
 
         {won && (

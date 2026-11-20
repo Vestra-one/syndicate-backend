@@ -3,7 +3,7 @@ import { useGameStore } from '@/store/gameStore'
 import { useNow } from '@/lib/useNow'
 import { useAnchor } from '@/lib/useAnchor'
 import { formatChips, formatCountdown } from '@/lib/format'
-import { buildInviteUrl } from '@/lib/invite'
+import { buildCodeUrl, buildInviteUrl } from '@/lib/invite'
 import { projectFeltCentre, projectWaitingSeat } from '@/three/table/tableView'
 import { PAST_FILLING_PHASES, type SeatView } from '@/lib/protocol'
 import { seatAlias, seatTag, describeEvent, displayName } from '@/lib/seats'
@@ -584,7 +584,10 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   const hostWallet = useGameStore((s) => s.upcomingGames.find((g) => g.matchId === matchId || g.onchainMatchId === matchId)?.creatorWallet ?? null)
   if (!matchId || filled >= max) return null
   // Sign the link with the inviter's own name so the invitee sees "<name> invited you".
-  const url = buildInviteUrl(matchId, me ? displayName(me) : undefined, hostWallet ?? me)
+  const roomCode = useGameStore.getState().roomCode
+  const url = roomCode
+    ? buildCodeUrl(roomCode, me ? displayName(me) : undefined)
+    : buildInviteUrl(matchId, me ? displayName(me) : undefined, hostWallet ?? me)
 
   const copy = () => {
     // Only show "copied" if the write actually succeeded — a denied/insecure-context clipboard
@@ -604,8 +607,15 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
 
   return (
     <section className="wr-card wr-card--invite">
-      <div className="wr-card-title">Invite friends</div>
-      <div className="wr-invite-copy">Invite more traders and start the match sooner. If seats are still empty when the door closes, house bots take up to two of them — the hand always runs.</div>
+      <div className="wr-card-title">{roomCode ? 'Friends-only table' : 'Invite friends'}</div>
+      {roomCode ? (
+        <div className="wr-invite-copy">
+          Table code <b className="wr-code mono">{roomCode}</b>
+          <br />Send the link, or read the code out — friends type it in the lobby. This table is not listed and bots stay out.
+        </div>
+      ) : (
+        <div className="wr-invite-copy">Invite more traders and start the match sooner. If seats are still empty when the door closes, house bots take up to two of them — the hand always runs.</div>
+      )}
       <div className="wr-invite-glyph" aria-hidden="true">
         <svg viewBox="0 0 48 24" width="72" height="36">
           <circle cx="12" cy="9" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />
