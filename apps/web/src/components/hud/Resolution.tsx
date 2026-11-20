@@ -53,8 +53,12 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const rematch = useGameStore((s) => s.rematch)
   const nextTable = useGameStore((s) => s.nextTable)
   const followTable = useGameStore((s) => s.followTable)
-  const [left, setLeft] = useState(8)
+  const [left, setLeft] = useState(10)
   const [sitOut, setSitOut] = useState(false)
+  // A fresh count for every result: a countdown left at zero by the last hand must never
+  // carry this one off the screen before it has been read.
+  const resultOf = useGameStore((s) => s.settlement?.matchId ?? null)
+  useEffect(() => { setLeft(10); setSitOut(false) }, [resultOf])
   // Dealing the next hand spends another buy-in, so it never happens unless the player
   // ticked the box themselves — free chips or not.
   const guest = false

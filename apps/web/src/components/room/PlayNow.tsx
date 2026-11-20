@@ -161,6 +161,17 @@ function CodeEntry() {
   const joinByCode = useGameStore((s) => s.joinByCode)
   const [code, setCode] = useState('')
   const value = code || pending || ''
+  // A friends-only table is listed nowhere, so the lobby itself has to remember it.
+  const myRoom = useGameStore((s) => s.myRoom)
+  const returnToSeat = useGameStore((s) => s.returnToSeat)
+  if (myRoom) {
+    return (
+      <span className="code-entry code-entry--invited">
+        <span className="code-entry-note">Your friends table <b className="mono">{myRoom.code}</b> is open — your chips are at it</span>
+        <button className="ghost-btn" type="button" onClick={() => void returnToSeat(myRoom.matchId)}>Return to it</button>
+      </span>
+    )
+  }
   return (
     <form className={`code-entry ${pending ? 'code-entry--invited' : ''}`} onSubmit={(e) => { e.preventDefault(); if (value) void joinByCode(value) }}>
       {pending && <span className="code-entry-note">{from ? `${from} invited you` : 'You were invited'} to a friends table</span>}

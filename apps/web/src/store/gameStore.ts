@@ -201,6 +201,8 @@ interface GameState {
   /** Deal the next table for friends only: hidden from the lobby, joined with a code. */
   privateTable: boolean
   setPrivateTable: (on: boolean) => void
+  /** The friends-only table this player holds a seat at (it is not listed anywhere else). */
+  myRoom: { code: string; matchId: string } | null
   /** A friends-table code that arrived in a link, waiting for the player to accept it. */
   pendingCode: string | null
   /** The code of the friends-only table we are at (shown to share), if it is one. */
@@ -1588,6 +1590,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
       // Dealt as a rematch: tell the table we just left where the next hand is, so the
       // same people can follow with one click instead of hunting for a link.
+      if (intent.room_code && matchUuid) set({ myRoom: { code: intent.room_code, matchId: matchUuid } })
       if (rematchFrom) {
         const where = intent.room_code ? `next:code:${intent.room_code}` : matchUuid ? `next:${matchUuid}` : null
         if (where) gateway?.send({ t: 'emote', match_id: rematchFrom, emote: where })
@@ -1855,6 +1858,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   /** Leave the finished match and matchmake into a fresh one — no page refresh.
    * Keeps the wallet/chain so the balance carries over; re-runs Play Now. */
   privateTable: false,
+  myRoom: null,
   pendingCode: null,
   setPrivateTable: (on) => set({ privateTable: on }),
   roomCode: null,
@@ -1878,6 +1882,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (!wallet || !(await ensureRestSession(adapters, wallet, set))) throw new Error('Could not reach the table server (sign-in failed).')
       const room = await api.getRoomByCode(code)
       await get().joinGame(room.match_id, { code, commitment: room.join_commitment })
+      set({ myRoom: { code, matchId: room.match_id } })
     } catch (e) {
       const msg = e instanceof Error && /sign-in|reach/.test(e.message) ? e.message : 'No open table has that code — it may have started already. Ask for the new one.'
       set({ playResolving: false, playError: msg })
@@ -1996,6 +2001,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       view: 'discovery',
       match: null,
       roomCode: null,
+      myRoom: null,
       nextTable: null,
       yourTurn: null,
       actPending: null,
