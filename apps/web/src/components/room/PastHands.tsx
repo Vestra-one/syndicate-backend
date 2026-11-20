@@ -53,7 +53,8 @@ function PastCard({ hand }: { hand: PastHand }) {
 
   const winnerPredictionWad = detail?.reveal?.predictions?.find((p) => p.wallet === hand.winner?.wallet)?.prediction_wad
   const margin = hand.settlementPriceWad && winnerPredictionWad
-    ? formatWad(wadDiff(hand.settlementPriceWad, winnerPredictionWad).toString())
+    // rounded the same way as the result card, so the two never differ by a cent
+    ? (Number(wadDiff(hand.settlementPriceWad, winnerPredictionWad)) / 1e18).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : null
 
   const solscanUrl = hand.settlementTxSig ? `https://solscan.io/tx/${hand.settlementTxSig}?cluster=devnet` : null
@@ -96,7 +97,7 @@ function PastCard({ hand }: { hand: PastHand }) {
           </span>
         )}
         <span className="card-act">
-          <span className="hint">{isVoided ? 'table voided — full refunds' : 'every street, every call — on the record'}</span>
+          <span className="hint">{isVoided ? 'table voided — full refunds' : 'every sealed call, who folded, who won — on the record'}</span>
           <span className="go">{expanded ? 'Hide detail ▴' : 'Show detail ▾'}</span>
         </span>
       </button>
@@ -112,8 +113,16 @@ function PastCard({ hand }: { hand: PastHand }) {
               {detail.seats.map((s) => (
                 <div key={s.seat_index} className={`card-expand-row ${s.pot_won_chips ? 'winner' : ''}`}>
                   <span className="who">{displayName(s.wallet, s.handle)}</span>
-                  <span className="pred">called {formatWad(s.prediction_wad)}</span>
-                  <span className="payout mono">{s.payout_chips != null ? formatChips(s.payout_chips) : '—'} USDC</span>
+                  <span className="pred">
+                    sealed {formatWad(s.prediction_wad)}
+                    {hand.settlementPriceWad && s.prediction_wad ? ` · $${(Number(wadDiff(hand.settlementPriceWad, s.prediction_wad)) / 1e18).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} off` : ''}
+                    {s.pot_won_chips ? ' · took the pot' : s.folded ? ' · folded' : s.folded === false ? ' · lost at showdown' : ''}
+                  </span>
+                  <span className="payout mono">
+                    {s.total_contribution != null
+                      ? (() => { const net = (s.pot_won_chips ?? 0) - s.total_contribution; return `${net >= 0 ? '+' : '−'}${formatChips(Math.abs(net))} USDC` })()
+                      : `${s.payout_chips != null ? formatChips(s.payout_chips) : '—'} USDC back`}
+                  </span>
                 </div>
               ))}
               {solscanUrl && (

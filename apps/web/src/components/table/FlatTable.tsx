@@ -17,7 +17,7 @@ export function FlatTable() {
   const callPx = call != null ? Number(call) / scale : null
   // While you are choosing a number the seal box takes the lower half of the screen —
   // the chart moves up out of its way instead of hiding behind it.
-  const sealing = useGameStore((st) => st.match?.phase === 'SEALING')
+  const sealing = useGameStore((st) => st.match?.phase === 'SEALING' || st.match?.phase === 'FILLING' || (!st.match && st.view === 'table'))
   // Your own seat, at the near edge of the table like everyone else's.
   const seatedAs = useGameStore((st) => (st.view === 'table' && st.match?.yourSeat != null && (st.match.phase === 'SEALING' || st.match.phase === 'LIVE') ? `You · seat ${st.match.yourSeat + 1}` : null))
   // Once the hand settles, every call goes on the chart against the print: this is the

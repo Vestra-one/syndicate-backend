@@ -163,9 +163,15 @@ pub fn verify_settlement(input: &SettleInput, claimed: &SettleResult) -> Result<
 }
 
 /// Pot rake = `min(bps * amount / 10_000, cap)`, clamped to the pot (`04 §14`).
+/// One cent, in chip base units.
+const CENT: Chips = 10_000;
+
 fn pot_rake(amount: Chips, bps: u32, cap: Chips) -> Chips {
     let r = ((amount as u128) * (bps as u128) / 10_000u128) as u64;
-    r.min(cap).min(amount)
+    // Whole cents only (chips carry six decimals): a rake of 0.665 would leave every
+    // payout ending in half a cent, and the screens would disagree by a cent on rounding.
+    let r = r.min(cap).min(amount);
+    if amount >= CENT { r - r % CENT } else { r }
 }
 
 fn player(players: &[PlayerState], id: PlayerId) -> &PlayerState {
