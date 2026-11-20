@@ -1030,7 +1030,13 @@ const STYLES: [(f64, f64); 3] = [(0.75, 0.85), (1.5, 1.0), (0.7, 1.35)];
     let c = if matches!(read, Read::Blind) { 0.35 } else { closeness };
     // On the price heads-up this is ~0.9; half a move away ~0.5; far away ~0.12 — and
     // every extra player still in takes a share of it.
-    let equity = (0.12 + 0.78 * c) / (1.0 + 0.22 * (alive - 2) as f64);
+    // An even share of the pot, scaled by how good the number looks: with four players in,
+    // a number on the price is worth ~0.46, an average one ~0.27, a far one ~0.1; heads-up
+    // those are ~0.9, ~0.55 and ~0.2. (The four shares must add up to about one — an
+    // earlier version gave everyone half the pot, and so nobody ever folded.)
+    // (Heads-up the other player's bet says more about their number, so less is assumed.)
+    let (base, slope) = if alive == 2 { (0.2, 1.2) } else { (0.35, 1.5) };
+    let equity = ((base + slope * c) / alive as f64).clamp(0.04, 0.92);
     let noise = (rng.unit() - 0.5) * 0.24; // nobody reads a spot the same way twice
     let nerve = (style.1 - 1.0) * 0.5; // the wild one pays off lighter, the careful one tighter
 

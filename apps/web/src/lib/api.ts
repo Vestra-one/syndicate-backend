@@ -638,6 +638,11 @@ export function requestFaucet(): Promise<{ ok: boolean; chips: number; lamports:
   return request('/faucet', { method: 'POST', auth: true, signal: AbortSignal.timeout(45_000) })
 }
 
+/** `POST /v1/faucet/fees` — tops up network-fee money only, when the wallet is low. */
+export function requestFees(): Promise<{ ok: boolean; lamports: number }> {
+  return request('/faucet/fees', { method: 'POST', auth: true, signal: AbortSignal.timeout(30_000) })
+}
+
 export interface FibsBoard {
   leaders: { rank: number; wallet: string; handle: string | null; fibs: number; bot: boolean }[]
   you: { today: number; rank: number; fibs: number } | null

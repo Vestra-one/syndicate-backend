@@ -5674,3 +5674,5 @@
 .code-entry-input:focus { border-color: rgba(212, 175, 55, 0.7); }
 .code-entry--invited { padding: 6px 10px; border-radius: 10px; background: rgba(212, 175, 55, 0.1); border: 1px solid rgba(212, 175, 55, 0.35); }
 .code-entry-note { font-size: 12px; color: #f1e6c8; margin-right: 4px; }
+
+.default-note { display: block; margin-top: 6px; font-size: 10px; color: rgba(241, 230, 200, 0.55); }

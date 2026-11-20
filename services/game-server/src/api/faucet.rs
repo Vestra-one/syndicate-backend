@@ -101,18 +101,27 @@ pub async fn post_faucet(
         .map_err(|_| ApiError::internal("chips mint not configured"))?;
 
     // Reserve the slot before sending, so a double click cannot draw twice.
-    {
+    let cooling = {
         let mut seen = f.last_grant.lock().unwrap();
-        if let Some(at) = seen.get(&wallet) {
-            let left = f.cooldown.saturating_sub(at.elapsed());
-            if !left.is_zero() {
-                return Err(ApiError::too_many(format!(
-                    "chips already sent — try again in {} min",
-                    left.as_secs() / 60 + 1
-                )));
-            }
+        let left = seen
+            .get(&wallet)
+            .map(|at| f.cooldown.saturating_sub(at.elapsed()))
+            .filter(|left| !left.is_zero());
+        if left.is_none() {
+            seen.insert(wallet.clone(), Instant::now());
         }
-        seen.insert(wallet.clone(), Instant::now());
+        left
+    };
+    if let Some(left) = cooling {
+        // Chips are on cooldown, but a wallet that cannot pay a network fee cannot play at
+        // all: keep the fee money topped up regardless. No chips move here.
+        if let Some(lamports) = top_up_fees(f, &st.cfg.rpc_url, &to).await {
+            return Ok(Json(json!({ "ok": true, "chips": 0, "lamports": lamports })));
+        }
+        return Err(ApiError::too_many(format!(
+            "chips already sent — try again in {} min",
+            left.as_secs() / 60 + 1
+        )));
     }
 
     let result = send(f, &st.cfg.rpc_url, &mint, &to).await;
@@ -126,6 +135,41 @@ pub async fn post_faucet(
         "lamports": lamports,
         "signature": signature,
     })))
+}
+
+/// `POST /v1/faucet/fees` — fee money only, no chips and no cooldown: called by the app
+/// before a table is dealt or joined, so a test player is never stopped by an empty fee
+/// wallet. A wallet that already has enough gets nothing.
+pub async fn post_fees(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let wallet = require_session(&st, &headers).await?;
+    let f = faucet()
+        .ok_or_else(|| ApiError::forbidden("faucet_off", "no faucet on this deployment"))?;
+    let to = Pubkey::from_str(&wallet).map_err(|_| ApiError::bad_request("bad wallet"))?;
+    let lamports = top_up_fees(f, &st.cfg.rpc_url, &to).await.unwrap_or(0);
+    Ok(Json(json!({ "ok": true, "lamports": lamports })))
+}
+
+/// Fee money only: bring a wallet that has run low back up to twice the grant. Returns the
+/// lamports sent, or None when the wallet has enough (or the transfer failed).
+async fn top_up_fees(f: &Faucet, rpc_url: &str, to: &Pubkey) -> Option<u64> {
+    let rpc = RpcClient::new_with_commitment(
+        rpc_url.to_string(),
+        solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+    );
+    let balance = rpc.get_balance(to).await.ok()?;
+    if balance >= f.lamports {
+        return None;
+    }
+    let lamports = (f.lamports * 2).saturating_sub(balance);
+    let from = f.keypair.pubkey();
+    let ix = solana_sdk::system_instruction::transfer(&from, to, lamports);
+    let blockhash = rpc.get_latest_blockhash().await.ok()?;
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&from), &[&f.keypair], blockhash);
+    rpc.send_and_confirm_transaction(&tx).await.ok()?;
+    Some(lamports)
 }
 
 async fn send(
@@ -169,7 +213,7 @@ async fn send(
     ];
     // Fees: top the wallet up only when it could not pay for a few transactions itself.
     let balance = rpc.get_balance(to).await.unwrap_or(0);
-    let lamports = if balance < f.lamports { f.lamports } else { 0 };
+    let lamports = if balance < f.lamports { (f.lamports * 2).saturating_sub(balance) } else { 0 };
     if lamports > 0 {
         ixs.push(solana_sdk::system_instruction::transfer(
             &from, to, lamports,

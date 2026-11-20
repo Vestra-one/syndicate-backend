@@ -32,7 +32,7 @@ export function MyReclaimableMatches() {
       <div className="dash-section-head">
         <span className="dash-section-dot dash-section-dot--live" />
         <span className="dash-section-label">Needs your attention</span>
-        <span className="dash-section-sub">stuck rooms — cancel &amp; reclaim your funds</span>
+        <span className="dash-section-sub">tables that never dealt — take your chips back</span>
       </div>
       <div className="dash-reclaim-list">
         {ids.map((id) => <ReclaimCard key={id} onchainMatchId={id} />)}

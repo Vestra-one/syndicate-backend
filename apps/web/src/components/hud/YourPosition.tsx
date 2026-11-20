@@ -157,6 +157,7 @@ function DefaultToggle() {
           </button>
         ))}
       </div>
+      <span className="default-note">Either way, a call that costs one blind or less is made for you.</span>
     </div>
   )
 }

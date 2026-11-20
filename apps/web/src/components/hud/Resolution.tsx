@@ -226,6 +226,10 @@ function SettledCeremony() {
   const [run, setRun] = useState<SessionStats>(() => readStats(wallet))
   useEffect(() => {
     if (yourSeat == null || !amountsKnown) return
+    // The seats on screen must be the seats of THIS result: after moving to another table
+    // the same seat numbers belong to other players, and the books would go to the wrong ones.
+    const at = useGameStore.getState().match?.matchId
+    if (at && at !== settlement.matchId) return
     // Head-to-head is about chips, the only thing a hand settles: whoever came out of it
     // better off took that hand from the other. Equal results (two players who both just
     // lost their ante) count for nobody — a bot that never won a pot leads no one.

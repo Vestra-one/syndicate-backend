@@ -129,7 +129,7 @@ export function nextGoal(s: SessionStats): { label: string; done: number; of: nu
   const leading = rivals.filter((r) => r.w > r.l).length
   const ladder: { label: string; done: number; of: number }[] = [
     { label: 'Play 3 hands', done: s.hands, of: 3 },
-    { label: 'Take a hand off 3 different opponents', done: beaten, of: 3 },
+    { label: 'Finish a hand ahead of 3 different opponents', done: beaten, of: 3 },
     { label: 'Win 2 hands in a row', done: s.bestStreak >= 2 ? 2 : s.streak, of: 2 },
     { label: 'Lead 3 opponents head-to-head', done: leading, of: 3 },
     { label: 'Win 3 hands in a row', done: s.bestStreak >= 3 ? 3 : s.streak, of: 3 },

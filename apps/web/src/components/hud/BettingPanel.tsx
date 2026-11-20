@@ -612,8 +612,8 @@ function ActionPanel() {
         )}
         {/* When calling already takes the whole stack, a second button for the same thing only invites a misclick. */}
         {!(toCall > 0n && toCall >= stack) && (
-        <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''} ${sure ? 'pk-allin--sure' : ''}`} onClick={() => (sure ? send({ type: 'allIn' }) : setSure(true))} disabled={pending} aria-busy={pendingType === 'allIn'}>
-          {pendingType === 'allIn' ? 'Sending…' : sure ? `Confirm all-in ${formatChips(stack)}` : `All-in ${formatChips(stack)}`}
+        <button className={`pk-btn pk-allin ${pendingType === 'allIn' ? 'pk-btn--busy' : ''} ${sure ? 'pk-allin--sure' : ''}`} onClick={() => (sure || remaining <= 7000 ? send({ type: 'allIn' }) : setSure(true))} disabled={pending} aria-busy={pendingType === 'allIn'}>
+          {pendingType === 'allIn' ? 'Sending…' : sure ? `Confirm all-in ${formatChips(stack)}` : `All-in ${formatChips(stack)}`}{/* with the clock nearly out, one click is enough */}
         </button>
         )}
       </div>

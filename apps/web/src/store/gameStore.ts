@@ -58,7 +58,7 @@ import {
   type CreateIntentResponse,
   type MatchDetail,
   type LeaderboardEntry,
-  requestFaucet,
+  requestFaucet, requestFees,
 } from '@/lib/api'
 
 /** Resolved Play Now action: join an existing open table, or create a new one. */
@@ -1415,6 +1415,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   joinTable: async () => {
     const { match, terms, seated } = get()
     if (!adapters || !terms || seated) return
+    await ensureFees()
 
     // v2 has no client-chosen seat index — a deposit makes you a *candidate* and the backend
     // assigns the engine seat FCFS at lock (§5). matchId is the server UUID; onchainMatchId
@@ -1493,6 +1494,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   createTable: async () => {
     const { seated, terms } = get()
     if (!adapters || !createCtx || !terms || seated) return
+    await ensureFees()
     const { config, feed } = createCtx
 
     // The host may have edited buy-in / fill window in the create Lobby (§4) — clamp to bounds.
@@ -1896,7 +1898,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       if (!(await ensureRestSession(adapters, wallet, set))) throw new Error('Sign in to get chips')
       const res = await requestFaucet()
-      set({ faucetNote: `${formatChips(BigInt(res.chips))} test chips sent` })
+      set({ faucetNote: res.chips > 0 ? `${formatChips(BigInt(res.chips))} test chips sent` : 'Fee money topped up — more chips after the cooldown' })
       await refreshBalance(set, true)
     } catch (err) {
       set({ faucetNote: err instanceof Error ? err.message : 'Could not send chips — try again' })
@@ -2208,6 +2210,13 @@ function recallDeposit(matchId: string): string | null {
  * Tell the server about a deposit until it has heard. One lost request here used to cost
  * the player the hand: the chips were in, the table dealt without them.
  */
+/** On a test network, make sure the wallet can pay the network fee before a transaction
+ *  that needs one (dealing a table costs noticeably more than sitting at one). Silent:
+ *  where there is no faucet this does nothing, and the transaction reports its own error. */
+async function ensureFees(): Promise<void> {
+  try { await requestFees() } catch { /* no faucet here, or it is busy */ }
+}
+
 async function reportDeposit(matchId: string, txSig: string, set: SetState): Promise<void> {
   for (let i = 0; i < 10; i++) {
     try {
