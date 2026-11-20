@@ -99,8 +99,7 @@ export function readLine(wallet: string | null | undefined): { label: string; hi
   if (r.shown >= 2 && r.shownWeak * 2 >= r.shown) return { label: `Bluffs: ${r.shownWeak} of ${r.shown} shown`, hint }
   if (r.faced >= 3 && r.folded * 3 >= r.faced * 2) return { label: `Folds to bets ${r.folded}/${r.faced}`, hint }
   if (r.faced >= 3 && r.folded * 3 <= r.faced) return { label: `Calls bets ${r.faced - r.folded}/${r.faced}`, hint }
-  if (r.pressed * 2 >= r.hands) return { label: `Bets ${r.pressed} of ${r.hands} hands`, hint }
-  if (r.pressed === 0) return { label: `Never bet in ${r.hands} hands`, hint }
+  if (r.pressed * 2 >= r.hands) return { label: `Bet in ${r.pressed} of last ${r.hands}`, hint }
   if (r.faced >= 2) return { label: `Folds to bets ${r.folded}/${r.faced}`, hint }
-  return { label: `Bets ${r.pressed} of ${r.hands} hands`, hint }
+  return r.pressed > 0 ? { label: `Bet in ${r.pressed} of last ${r.hands}`, hint } : null
 }

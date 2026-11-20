@@ -1,3 +1,4 @@
+import { hasHouseBots } from '@/lib/houseBots'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { heldMove } from '@/lib/edge'
@@ -420,6 +421,8 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
   const engineRound = useGameStore((s) => s.match?.round ?? 0)
   const now = useNow(500)
   const cur = schedule?.length ? (schedule.find((e) => now < e.end) ?? null) : null
+  const endLeft = schedule?.length ? schedule[schedule.length - 1].end - now : null
+  const moveOn = useGameStore((s) => s.moveOn)
   const nextStreet = cur ? schedule?.[cur.street + 1] : null
   const gapLeft = cur && nextStreet && (engineRound > cur.street + 1 || now >= cur.close) && nextStreet.open > now ? nextStreet.open - now : null
 
@@ -440,6 +443,17 @@ function WaitingPanel({ armed, setArmed }: { armed: Armed; setArmed: (a: Armed) 
         <p className="seal-note eyebrow">
           No more betting. {alive} calls are still in — the closest to the price when the clock runs out takes the pot.
         </p>
+        {endLeft != null && endLeft > 0 && (
+          <div className="sweat-clock">
+            <span className="eyebrow">the price is read in</span>
+            <b className="mono">{formatCountdown(endLeft)}</b>
+          </div>
+        )}
+        {endLeft != null && endLeft > 20_000 && hasHouseBots() && (
+          <button className="ghost-btn sweat-next" onClick={() => void moveOn()}>
+            Don’t want to wait? Play the next hand — this result will find you
+          </button>
+        )}
       </div>
     )
   }

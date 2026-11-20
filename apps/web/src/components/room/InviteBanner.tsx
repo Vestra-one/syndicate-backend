@@ -1,3 +1,4 @@
+import { inviteHost } from '@/lib/invite'
 import { useEffect, useState } from 'react'
 import { useGameStore } from '@/store/gameStore'
 import { toEpochMs } from '@/lib/discovery'
@@ -83,7 +84,7 @@ export function InviteBanner({
   const hostWallet = listed?.creatorWallet
     ?? active.find((g) => g.matchId === matchId || g.onchainMatchId === matchId)?.creatorWallet
     ?? detail?.creator_wallet
-    ?? null
+    ?? inviteHost()
   const successor = mode === 'closed' && hostWallet
     ? upcoming
         .filter((g) => g.creatorWallet === hostWallet && g.matchId !== matchId && g.seated < g.maxPlayers && !(g.fillDeadline != null && g.fillDeadline <= now))

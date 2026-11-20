@@ -12,11 +12,22 @@ const FROM = 'from'
  * An optional `from` alias lets the invitee's banner name the inviter
  * ("The Duchess invited you") — a pseudonymous table alias, never a wallet.
  */
-export function buildInviteUrl(matchId: string, from?: string): string {
+export function buildInviteUrl(matchId: string, from?: string, host?: string | null): string {
   const url = new URL(window.location.origin + window.location.pathname)
   url.searchParams.set(PARAM, matchId)
   if (from) url.searchParams.set(FROM, from)
+  // The host's public table address (already on-chain next to this table id). It lets the
+  // link outlive the hand: when this table is over, the invite follows the host to the next.
+  if (host) url.searchParams.set(HOST, host)
   return url.toString()
+}
+
+const HOST = 'host'
+let lastHost: string | null = null
+/** The host named by the invite link this page was opened with, if any. */
+export function inviteHost(): string | null {
+  if (lastHost) return lastHost
+  try { return sessionStorage.getItem('st-invite-host') } catch { return null }
 }
 
 export interface InviteParam {
@@ -38,6 +49,9 @@ export function consumeInviteParam(): InviteParam | null {
   const url = new URL(window.location.href)
   url.searchParams.delete(PARAM)
   url.searchParams.delete(FROM)
+  lastHost = params.get(HOST)
+  if (lastHost) { try { sessionStorage.setItem('st-invite-host', lastHost) } catch { /* no storage */ } }
+  url.searchParams.delete(HOST)
   window.history.replaceState({}, '', url.toString())
   return { matchId: id, inviter }
 }

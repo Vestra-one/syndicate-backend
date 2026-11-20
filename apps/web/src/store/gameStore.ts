@@ -1047,7 +1047,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   setPriceBoardRange: (range) => set({ priceBoardRange: range }),
-  openPriceChart: () => set({ priceChartOpen: true }),
+  // Never over the seal box: while a number still has to be sealed the big chart stays shut.
+  openPriceChart: () => { const st = get(); if (st.match?.phase === 'SEALING' && st.yourPrediction == null) return; set({ priceChartOpen: true }) },
   closePriceChart: () => set({ priceChartOpen: false }),
 
   setDashboardSort: (key) => set({ dashboardSort: key }),
@@ -2374,6 +2375,7 @@ function handleServerFrame(frame: ServerFrame, set: SetState, get: () => GameSta
 
     case 'phase': {
       const phase = mapPhase(frame.phase)
+      if (phase === 'SEALING') set({ priceChartOpen: false })
       const fb = (frame as { button?: number | null }).button
       if (fb != null) liveButton = fb
       set((s) => ({

@@ -581,9 +581,10 @@ function InviteCard({ filled, max }: { filled: number; max: number }) {
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
   const me = useGameStore((s) => s.walletAddress)
+  const hostWallet = useGameStore((s) => s.upcomingGames.find((g) => g.matchId === matchId || g.onchainMatchId === matchId)?.creatorWallet ?? null)
   if (!matchId || filled >= max) return null
   // Sign the link with the inviter's own name so the invitee sees "<name> invited you".
-  const url = buildInviteUrl(matchId, me ? displayName(me) : undefined)
+  const url = buildInviteUrl(matchId, me ? displayName(me) : undefined, hostWallet ?? me)
 
   const copy = () => {
     // Only show "copied" if the write actually succeeded — a denied/insecure-context clipboard

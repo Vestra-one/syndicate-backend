@@ -5648,7 +5648,7 @@
 .flat-chart { transition: top 0.35s ease, left 0.35s ease, width 0.35s ease; }
 
 /* Your read on an opponent, under their plaque. */
-.pod-read { display: inline-block; margin-top: 3px; padding: 2px 8px; border-radius: 999px; font-size: 10px; letter-spacing: 0.04em; color: #e8d9a8; background: rgba(212, 175, 55, 0.12); border: 1px solid rgba(212, 175, 55, 0.28); white-space: nowrap; cursor: help; }
+.pod-read { position: absolute; bottom: -11px; left: 116px; display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; letter-spacing: 0.04em; color: #e8d9a8; background: rgba(212, 175, 55, 0.12); border: 1px solid rgba(212, 175, 55, 0.28); white-space: nowrap; cursor: help; }
 
 /* Typed table talk. */
 .table-talk-say { display: inline-flex; }
@@ -5661,3 +5661,8 @@
 .ceremony-goal b { font-weight: 600; }
 .ceremony-goal-bar { width: 90px; height: 5px; border-radius: 3px; background: rgba(241, 230, 200, 0.14); overflow: hidden; }
 .ceremony-goal-bar i { display: block; height: 100%; background: linear-gradient(90deg, #b8912e, #f0d77b); }
+
+/* The closing sweat: a clock, and a way out for the impatient. */
+.sweat-clock { display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px; }
+.sweat-clock b { font-size: 22px; color: #f0d77b; }
+.sweat-next { width: 100%; margin-top: 10px; font-size: 11px; }

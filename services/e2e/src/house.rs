@@ -1088,6 +1088,12 @@ const STYLES: [(f64, f64); 3] = [(0.75, 0.85), (1.5, 1.0), (0.7, 1.35)];
                 _ => 1.0,
             };
             let want = want.min(min_raise_to.max((max_total as f64 * early_cap) as u64));
+            // A whole stack goes in only behind a number that is actually near the price.
+            let want = if want as f64 >= max_total as f64 * 0.8 && c < 0.6 {
+                min_raise_to.max((max_total as f64 * 0.45) as u64)
+            } else {
+                want
+            };
             // Whole cents (chips have six decimals): no half-cent bets on the table.
             let raise_to = if want < max_total {
                 (want / 10_000 * 10_000).max(min_raise_to)
