@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy the backend to a server from your own machine, in one command:
 #
-#   scripts/deploy-remote.sh root@${DEPLOY_HOST:?set DEPLOY_HOST to the server address}
+#   scripts/deploy-remote.sh root@<server-address>
 #
 # Copies this working tree to /opt/satoshi-table on the server (no git access needed
 # there) and runs scripts/server-bootstrap.sh. You are asked for the server password once.
