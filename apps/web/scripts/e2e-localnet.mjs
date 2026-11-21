@@ -783,6 +783,16 @@ async function main() {
     }
     await shot(host, '11-claimed')
 
+    // "Deal this table again": the host deals, and the other player — still looking at the
+    // finished hand — is told where, and follows with one action.
+    await host.page.evaluate(() => void window.__gameStore.getState().rematch())
+    await waitFor(guest, 'guest is told the host dealt the next table', () => window.__gameStore.getState().nextTable != null, 90_000)
+    const finished = await guest.page.evaluate(() => window.__gameStore.getState().settlement?.matchId ?? null)
+    await guest.page.evaluate(() => void window.__gameStore.getState().followTable())
+    await waitFor(guest, 'guest is at the join sheet of the new table', (old) => { const st = window.__gameStore.getState(); return st.playMode === 'join' && !st.playResolving && st.roomModal?.kind === 'join' && st.roomModal.matchId !== old && !st.settlement }, 60_000, finished)
+    await guest.page.evaluate(() => void window.__gameStore.getState().joinTable())
+    await waitFor(guest, 'guest seated at the rematch', () => { const st = window.__gameStore.getState(); return st.view === 'table' && st.seated }, 120_000)
+
     const noise = (e) => /favicon|WebGL|GPU|swiftshader|deprecat/i.test(e)
     for (const p of players) {
       const real = p.errors.filter((e) => !noise(e))

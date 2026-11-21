@@ -553,6 +553,9 @@ export const api = {
     postJson<CreateIntentResponse>('/rooms/intents', body, true),
   submitRoom: (intentId: string, txSig: string) =>
     postJson<SubmitRoomResponse>('/rooms', { intent_id: intentId, tx_sig: txSig }, true),
+  /** Has someone from this finished table dealt the next one? (seated players only) */
+  getNextTable: (matchId: string) =>
+    request<{ next: { by: string; place: string } | null }>(`/matches/${encodeURIComponent(matchId)}/next`, { auth: true }),
   getRoomByCode: (code: string) =>
     request<RoomByCodeResponse>(`/rooms/code/${encodeURIComponent(code)}`, { auth: true }),
 

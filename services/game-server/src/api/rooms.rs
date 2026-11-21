@@ -468,6 +468,36 @@ pub async fn post_room(
     })))
 }
 
+/// `GET /v1/matches/{id}/next` — did someone from this (finished) table deal the next one?
+/// Answers only players who sat at it, and never the dealer themself. `next` is null until
+/// someone has; otherwise `{ by, place }` where `place` is a table id or `code:<room code>`.
+pub async fn get_next_table(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let wallet = require_session(&st, &headers).await?;
+    let Some(entry) = st.registry.next_table.get(&id).map(|e| e.clone()) else {
+        return Ok(Json(json!({ "next": null })));
+    };
+    let (by, place, at) = entry;
+    if by == wallet || now_ms().saturating_sub(at) > 600_000 {
+        return Ok(Json(json!({ "next": null })));
+    }
+    let client = st.pool.get().await?;
+    let seated = client
+        .query_opt(
+            "SELECT 1 FROM match_seats WHERE match_id = $1 AND wallet_address = $2",
+            &[&id, &wallet],
+        )
+        .await?
+        .is_some();
+    if !seated {
+        return Ok(Json(json!({ "next": null })));
+    }
+    Ok(Json(json!({ "next": { "by": by, "place": place } })))
+}
+
 /// `GET /v1/rooms/code/{code}` — validate a private room code for the caller.
 pub async fn get_room_code(
     State(st): State<AppState>,

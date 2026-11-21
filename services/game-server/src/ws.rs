@@ -226,6 +226,27 @@ impl Conn {
                 if self.st.limits.check_actions(&wallet).is_err() {
                     return self.error("rate_limited", "slow down").await;
                 }
+                if let Some(place) = emote.strip_prefix("next:") {
+                    // Remember it for the players still at the finished table's result
+                    // screen (they poll GET /v1/matches/{id}/next). Only someone who sat
+                    // at that table may say where its next hand is.
+                    if let Ok(client) = self.st.pool.get().await {
+                        let seated = client
+                            .query_opt(
+                                "SELECT 1 FROM match_seats WHERE match_id = $1 AND wallet_address = $2",
+                                &[&match_id, &wallet],
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
+                        if seated {
+                            let now = crate::util::now_ms();
+                            self.st.registry.next_table.retain(|_, v| now.saturating_sub(v.2) < 600_000);
+                            self.st.registry.next_table.insert(match_id, (wallet.clone(), place.to_string(), now));
+                        }
+                    }
+                }
                 // Not seated / not started yet: dropped silently, there is nobody to tell.
                 self.st
                     .registry

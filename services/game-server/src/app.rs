@@ -98,6 +98,7 @@ pub fn router(state: AppState) -> Router {
             post(crate::api::matches::post_session_key),
         )
         .route("/v1/matches/{id}", get(crate::api::matches::get_match))
+        .route("/v1/matches/{id}/next", get(crate::api::rooms::get_next_table))
         .route(
             "/v1/matches/{id}/events",
             get(crate::api::matches::get_events),

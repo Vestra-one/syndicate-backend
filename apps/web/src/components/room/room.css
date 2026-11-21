@@ -641,3 +641,10 @@
   .livedot, .room-spin, .sheet-spinner-dot, .skel-bar { animation: none; }
   .statstrip, .zone, .rail-panel { animation-duration: 0.01ms; animation-delay: 0s; }
 }
+
+/* Phone: the header wraps instead of pushing "Play instantly" off the edge. */
+@media (max-width: 620px) {
+  .chrome { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .chrome-right { width: 100%; justify-content: flex-start; gap: 6px; }
+  .roomnav { overflow-x: auto; }
+}

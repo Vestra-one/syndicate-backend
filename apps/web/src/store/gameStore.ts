@@ -210,7 +210,9 @@ interface GameState {
   /** Take a seat at a friends-only table by its code. */
   joinByCode: (code: string) => Promise<void>
   /** Someone at the table just finished dealt the next one: where to follow them. */
-  nextTable: { by: number; matchId?: string; code?: string } | null
+  nextTable: { by: number | null; byWallet?: string; matchId?: string; code?: string } | null
+  /** Ask the server whether someone from the finished table has dealt the next one. */
+  checkNextTable: () => Promise<void>
   followTable: () => Promise<void>
 
   settlement: SettlementView | null
@@ -1863,6 +1865,17 @@ export const useGameStore = create<GameState>((set, get) => ({
   setPrivateTable: (on) => set({ privateTable: on }),
   roomCode: null,
   nextTable: null,
+  checkNextTable: async () => {
+    const st = get()
+    const id = st.settlement?.matchId ?? st.match?.matchId
+    if (!id || st.nextTable || st.view !== 'table') return
+    try {
+      const { next } = await api.getNextTable(id)
+      if (!next) return
+      const seat = get().match?.seats.find((x) => x.wallet === next.by)?.seat ?? null
+      set({ nextTable: next.place.startsWith('code:') ? { by: seat, byWallet: next.by, code: next.place.slice(5) } : { by: seat, byWallet: next.by, matchId: next.place } })
+    } catch { /* not seated there, or offline: nothing to show */ }
+  },
   followTable: async () => {
     const next = get().nextTable
     if (!next) return
@@ -1986,8 +1999,9 @@ export const useGameStore = create<GameState>((set, get) => ({
         priceFeedId: keep.feed,
         buyIn: keep.buyIn,
         maxPlayers: keep.maxPlayers,
-        // A short door: the players are already here, and bots take what is left.
-        fillWindowSec: limits ? Math.max(limits.fillWindowMinSec, 30) : 30,
+        // The players are already here but need a moment to see the invitation and click;
+        // a full table deals at once, and on a public one bots take what is left.
+        fillWindowSec: limits ? Math.max(limits.fillWindowMinSec, wasPrivate ? 120 : 60) : 60,
       },
     })
     set({ privateTable: wasPrivate })

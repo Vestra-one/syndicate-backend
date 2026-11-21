@@ -57,6 +57,10 @@ pub struct MatchHandle {
 pub struct Registry {
     inner: Arc<DashMap<Uuid, MatchHandle>>,
     pub lobby: Arc<LobbyChannel>,
+    /// "Dealt again": finished table → (who dealt, where the next one is, when). A table's
+    /// own channel is gone the moment it settles, so the people still looking at its
+    /// result ask for this instead of being told. Kept in memory only; entries are short-lived.
+    pub next_table: Arc<DashMap<Uuid, (String, String, u64)>>,
 }
 
 #[derive(Default)]

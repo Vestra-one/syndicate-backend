@@ -1,3 +1,4 @@
+import { displayName } from '@/lib/seats'
 import { recordReads } from '@/lib/reads'
 import { hasHouseBots, isHouseBot } from '@/lib/houseBots'
 import { useEffect, useRef, useState } from 'react'
@@ -53,6 +54,14 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
   const rematch = useGameStore((s) => s.rematch)
   const nextTable = useGameStore((s) => s.nextTable)
   const followTable = useGameStore((s) => s.followTable)
+  // The finished table can no longer tell us anything, so ask: has anyone dealt it again?
+  const checkNextTable = useGameStore((s) => s.checkNextTable)
+  useEffect(() => {
+    if (nextTable) return
+    let n = 0
+    const t = setInterval(() => { if (++n > 60) clearInterval(t); else void checkNextTable() }, 3000)
+    return () => clearInterval(t)
+  }, [nextTable, checkNextTable])
   const [left, setLeft] = useState(10)
   const [sitOut, setSitOut] = useState(false)
   // A fresh count for every result: a countdown left at zero by the last hand must never
@@ -101,7 +110,7 @@ function CeremonyActions({ primary = 'again', autoNext = false }: { primary?: 'a
       )}
       {nextTable ? (
         <button className="ghost-btn ghost-btn--primary" onClick={() => void followTable()}>
-          {seatAlias(nextTable.by)} dealt the next hand — take your seat
+          {nextTable.by != null ? seatAlias(nextTable.by) : nextTable.byWallet ? displayName(nextTable.byWallet) : 'A player'} dealt the next hand — take your seat
         </button>
       ) : !here && (
         <button className="ghost-btn" onClick={() => void rematch()}>Deal this table again</button>
