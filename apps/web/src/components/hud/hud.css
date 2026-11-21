@@ -5754,3 +5754,14 @@
   .net-anchor { position: static; }
   .code-entry { flex-wrap: wrap; margin: 0 0 8px; }
 }
+
+/* Staged reveal without holes: every row's frame is on the table from the start, like a
+   face-down card, and only what is written on it turns over in sequence. (Fading the
+   whole row in left an empty gap where the best calls were still to come.) */
+.reveal-row { opacity: 1; animation: none; min-height: 34px; }
+.reveal-row > * { opacity: 0; animation: reveal-pop 0.5s var(--ease) forwards; animation-delay: inherit; }
+.reveal-row--win > * { animation-duration: 0.9s; }
+
+/* Panel headings: title and its small label never run together on a narrow screen. */
+.betpanel-head { gap: 4px 12px; flex-wrap: wrap; }
+.reveal-row--folded { opacity: 0.5; }
