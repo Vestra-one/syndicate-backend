@@ -58,7 +58,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ```bash
 # Set private key environment variable
-export ECDSA_PRIVATE_KEY=0xfb145a6fda5b798284b6edcfc3e2a6eff86f19fcc306e6edc2345ea1772b50c2
+export ECDSA_PRIVATE_KEY=<your-secp256k1-private-key-hex>
 
 # Run the Syndicate devnet config
 CONFIG_PATH=config/devnet.toml make run
