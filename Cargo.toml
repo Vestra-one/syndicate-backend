@@ -17,5 +17,12 @@ members = [
 # The Anchor program builds with the Solana toolchain (`anchor build`), not the host
 # cargo workspace, so it is excluded here. It still links `services/shared` by path.
 exclude = [
+    "services/vendor/tlock",
     "services/programs",
 ]
+
+# tlock 0.0.8 derives the IBE scalar differently from the reference implementations for
+# about 9% of messages, and panics instead of returning an error on a failed check. The
+# vendored copy fixes both (see services/vendor/tlock/src/ibe.rs, marked PATCHED).
+[patch.crates-io]
+tlock = { path = "services/vendor/tlock" }

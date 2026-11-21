@@ -44,8 +44,14 @@ impl TimelockScheme for DrandTlockScheme {
     }
 
     fn decrypt(&self, ciphertext: &[u8], key: &RoundKey) -> Option<Price> {
-        let mut pt = Vec::new();
-        tlock_age::decrypt(&mut pt, ciphertext, &self.chain_hash, &key.key).ok()?;
+        // A ciphertext is player input. Whatever is wrong with one, the answer is "this seat
+        // did not open" (the hand is voided and refunded) — never a crash of the worker,
+        // which would stall every other table's settlement too.
+        let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut out = Vec::new();
+            tlock_age::decrypt(&mut out, ciphertext, &self.chain_hash, &key.key).map(|_| out)
+        }));
+        let pt = opened.ok()?.ok()?;
         let arr: [u8; 16] = pt.try_into().ok()?;
         Some(i128::from_le_bytes(arr))
     }
