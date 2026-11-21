@@ -17,6 +17,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 ARG BIN
 COPY --from=planner /app/recipe.json recipe.json
+# The root Cargo.toml patches crates.io `tlock` with services/vendor/tlock. That crate is not
+# a workspace member, so the recipe does not recreate it; the cook needs the real sources.
+COPY services/vendor ./services/vendor
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY services ./services
