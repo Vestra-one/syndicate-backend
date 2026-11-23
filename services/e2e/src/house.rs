@@ -278,8 +278,25 @@ async fn recover(
     for (bot, handle) in bots.iter().zip(&house.handles) {
         set_handle(&ctx, bot, handle).await;
     }
-    for bot in &bots {
-        sweep(&ctx, bot).await;
+    // The claimables list keeps every payout ever owed, collected or not, so the sweep is one
+    // transaction attempt per past table and takes longer with every hand played. It only
+    // gathers old money: run it beside the tables instead of holding the lobby empty for it.
+    {
+        let ctx = ctx.clone();
+        let bots: Vec<Player> = bots
+            .iter()
+            .map(|b| Player {
+                name: b.name,
+                kp: b.kp.insecure_clone(),
+                session: b.session.clone(),
+            })
+            .collect();
+        tokio::spawn(async move {
+            for bot in &bots {
+                sweep(&ctx, bot).await;
+            }
+            println!("house: startup sweep finished");
+        });
     }
     let active = get(&ctx, &format!("/v1/wallets/{}/active", bots[0].pubkey())).await;
     for row in active["active"].as_array().cloned().unwrap_or_default() {
