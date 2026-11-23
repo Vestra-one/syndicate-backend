@@ -547,6 +547,7 @@ pub async fn get_room_code(
         "candidates": counts.get::<_, i64>("candidates"),
         "fill_deadline": m.fill_deadline_ts.map(ts_ms),
         "join_commitment": hex::encode(join_commitment),
+        "creator_wallet": m.creator_wallet,
     })))
 }
 

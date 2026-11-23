@@ -24,6 +24,8 @@ export function JoinSheet({ matchId }: { matchId: string }) {
   const playError = useGameStore((s) => s.playError)
   const fillDeadline = useGameStore((s) => s.fillDeadline)
   const upcomingGames = useGameStore((s) => s.upcomingGames)
+  const joinHost = useGameStore((s) => s.joinHost)
+  const inviteFrom = useGameStore((s) => s.inviteFrom)
   const join = useGameStore((s) => s.joinTable)
   const close = useGameStore((s) => s.closeRoomModal)
   const txProgress = useGameStore((s) => s.txProgress)
@@ -31,7 +33,11 @@ export function JoinSheet({ matchId }: { matchId: string }) {
   const { setVisible } = useWalletModal()
 
   const listed = upcomingGames.find((g) => g.matchId === matchId)
-  const dealtBy = listed?.creatorWallet ? displayName(listed.creatorWallet, listed.creatorHandle) : (listed?.creatorHandle ?? hostAlias(matchId))
+  // A friends table is not listed: name its host from the code lookup or the invite, and
+  // say nothing rather than a made-up name when neither is known.
+  const dealtBy = listed?.creatorWallet ? displayName(listed.creatorWallet, listed.creatorHandle)
+    : listed ? (listed.creatorHandle ?? hostAlias(matchId))
+    : joinHost ? displayName(joinHost) : inviteFrom
   const busy = !!txProgress
 
   if (playResolving) {
@@ -75,7 +81,7 @@ export function JoinSheet({ matchId }: { matchId: string }) {
         </div>
         {!busy && <button className="sheet-x" type="button" onClick={close} aria-label="Close">✕</button>}
       </div>
-      <p className="sheet-sub">Dealt by {dealtBy}{countdown ? ` · closes in ${countdown}` : ''}</p>
+      <p className="sheet-sub">{dealtBy ? `Dealt by ${dealtBy}` : 'Friends table'}{countdown ? ` · closes in ${countdown}` : ''}</p>
 
       <div className="seatline">
         <SeatPips seated={filled} total={terms.maxPlayers} youAt={filled + 1} />

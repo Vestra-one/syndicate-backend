@@ -233,6 +233,8 @@ interface GameState {
   playMode: PlayMode | null // resolved action for the current lobby card
   playError: string | null // resolution / commit failure surfaced to the user
   walletError: string | null // wallet-extension connect failure (set by main.tsx's onError, cleared on connect)
+  /** Who dealt the friends table being joined by code (it is not in the lobby listing). */
+  joinHost: string | null
   lobbySeated: number | null // seats already taken in the room being joined (from the lobby listing)
   lastTx: { sig: string; label: string } | null // most recent on-chain tx (banner + explorer link)
   txProgress: TxCommit | null // live commit tx being narrated by the waiting ceremony
@@ -369,7 +371,7 @@ function defaultStreets(config: ApiConfig): { count: number; durations_sec: numb
 /** Build the create-Lobby `TableTerms` from config defaults/bounds for a chosen feed. */
 function configToTerms(config: ApiConfig, feed: string): TableTerms {
   const d = config.defaults
-  const buyIn = clamp(1_000_000, config.bounds.buy_in.min, config.bounds.buy_in.max)
+  const buyIn = clamp(5_000_000, config.bounds.buy_in.min, config.bounds.buy_in.max)
   const streets = defaultStreets(config)
   return {
     tableId: feed,
@@ -1001,6 +1003,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   playMode: null,
   playError: null,
   walletError: null,
+  joinHost: null,
   lobbySeated: null,
   lastTx: null,
   txProgress: null,
@@ -1887,7 +1890,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const code = raw.trim().toUpperCase()
     if (!code) return
     if (!adapters) adapters = createAdapters()
-    set({ playError: null, playResolving: true, pendingCode: null })
+    set({ playError: null, playResolving: true, pendingCode: null, joinHost: null })
     try {
       const addr = await adapters.wallet.connect()
       set({ walletAddress: addr })
@@ -1895,7 +1898,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (!wallet || !(await ensureRestSession(adapters, wallet, set))) throw new Error('Could not reach the table server (sign-in failed).')
       const room = await api.getRoomByCode(code)
       await get().joinGame(room.match_id, { code, commitment: room.join_commitment })
-      set({ myRoom: { code, matchId: room.match_id } })
+      // A friends table is not in the lobby listing: its host and seat count come from the code lookup.
+      set({ myRoom: { code, matchId: room.match_id }, joinHost: room.creator_wallet ?? null, lobbySeated: Math.max(get().lobbySeated ?? 0, room.seats_confirmed) })
     } catch (e) {
       const msg = e instanceof Error && /sign-in|reach/.test(e.message) ? e.message : 'No open table has that code — it may have started already. Ask for the new one.'
       set({ playResolving: false, playError: msg })
@@ -1932,13 +1936,13 @@ export const useGameStore = create<GameState>((set, get) => ({
     let table: UpcomingGame | undefined
     set({ findingTable: true, playError: null })
     try {
-      for (let i = 0; i < 20 && !table; i++) {
+      for (let i = 0; i < 10 && !table; i++) {
         await get().loadDiscovery({ silent: i > 0 })
         table = get().upcomingGames.find((g) => isHouseBot(g.creatorWallet) && !isScheduledTable(g))
         if (!table) await new Promise((r) => setTimeout(r, 2000))
       }
       if (!table) {
-        set({ playError: 'No table is open this second — a new one opens every few minutes. Try again shortly.' })
+        set({ playError: 'The house table is not running right now. Deal your own table below and invite a friend with the code.' })
         return
       }
       await get().joinGame(table.matchId)

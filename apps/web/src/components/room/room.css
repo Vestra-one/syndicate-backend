@@ -648,3 +648,5 @@
   .chrome-right { width: 100%; justify-content: flex-start; gap: 6px; }
   .roomnav { overflow-x: auto; }
 }
+.statstrip--quiet { align-items: center; gap: 18px; }
+.statstrip--quiet p { margin: 0; max-width: 520px; font-family: var(--font-serif, Georgia, serif); font-size: clamp(15px, 1.5vw, 18px); line-height: 1.45; color: var(--text, #f3ead2); text-align: center; }

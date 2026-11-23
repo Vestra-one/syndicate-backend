@@ -86,6 +86,9 @@ let judged = false
 export function reportFrame(ms: number): void {
   if (judged || lite || why === 'user') return
   if (document.hidden) return
+  // A frame this late was held back by the browser (tab in the background, window covered),
+  // not drawn slowly: it says nothing about the machine.
+  if (ms > 400) return
   frames++
   if (frames <= 10) return // warm-up: shader compiles, first uploads
   total += ms

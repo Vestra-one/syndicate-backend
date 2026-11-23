@@ -3179,7 +3179,8 @@
     rgba(0, 0, 0, 0.45) 64%,
     rgba(0, 0, 0, 0.82)
   );
-  animation: ceremony-fade 0.5s var(--ease);
+  /* Held back a beat so the pot is seen sliding to the winner before the card covers the felt. */
+  animation: ceremony-fade 0.5s var(--ease) 1.6s both;
 }
 @keyframes ceremony-fade {
   from {
@@ -5594,7 +5595,7 @@
 .table-notice .ghost-btn { white-space: nowrap; }
 /* Short screens: the quick call shrinks to its question and two buttons so it never
    sits on a seat. */
-@media (max-height: 860px) {
+@media (max-height: 980px) {
   .quick-call { padding: 10px 12px; gap: 6px; }
   .quick-call-bar, .quick-call-foot, .quick-call-what { display: none; }
 }

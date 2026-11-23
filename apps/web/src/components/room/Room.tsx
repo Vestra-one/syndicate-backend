@@ -41,6 +41,16 @@ function StatStrip() {
 
   const fmt = (base: bigint) => (Number(base) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+  // A quiet room should invite, not report a row of zeros.
+  if (stats.tablesLive === 0 && stats.seated === 0) {
+    return (
+      <div className="statstrip statstrip--quiet">
+        <p>The room is quiet. Deal a table and send a friend the code: two players is a game.</p>
+        {stats.biggest > 0n && <div className="stat"><b>{fmt(stats.biggest)}<em>USDC</em></b><span className="eyebrow">biggest pot tonight</span></div>}
+      </div>
+    )
+  }
+
   return (
     <div className="statstrip">
       <div className="stat stat--live"><b>{stats.tablesLive}</b><span className="eyebrow">tables live</span></div>

@@ -286,14 +286,14 @@ function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; ma
   // Two ways this table deals: the moment the last seat is taken, or when this clock runs
   // out with enough players. Say both — a countdown alone reads as a promise of a wait.
   else if (counting) clock = houseTable ? 'Bots are sitting down — you seal your call in a few seconds' : `Deals when full · or in ${formatCountdown(remaining)}`
-  else if (expired) clock = 'Fill window closed'
+  else if (expired) clock = enough ? 'Door closed — dealing' : 'Door closed — not enough players. Your buy-in is coming back.'
   // Still short of the minimum: the table closes (and refunds) at the deadline — a player
   // waiting alone needs to know how long that is.
   else clock = remaining != null
     ? `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'} · closes in ${formatCountdown(remaining)}`
     : `Waiting for ${need} more ${need === 1 ? 'trader' : 'traders'}`
 
-  const eyebrow = full ? 'Table ready' : counting ? 'Match starting' : 'Table filling'
+  const eyebrow = full ? 'Table ready' : counting ? 'Match starting' : expired ? 'Table closed' : 'Table filling'
 
   return (
     <div ref={ref} className={`wr-felt ${finalSecs || full ? 'wr-felt--final' : ''}`} style={{ opacity: 0 }}>
@@ -303,7 +303,7 @@ function FeltCaption({ filled, max, fillDeadline, enough }: { filled: number; ma
         <span className="wr-felt-slash">/</span>
         {max}
       </div>
-      {!full && !counting && (
+      {!full && !counting && !expired && (
         <div className="wr-felt-need">
           Waiting for {need} more {need === 1 ? 'trader' : 'traders'}
         </div>

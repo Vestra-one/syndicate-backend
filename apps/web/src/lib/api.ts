@@ -317,6 +317,7 @@ export interface RoomByCodeResponse {
   candidates: number
   fill_deadline: number | null
   join_commitment: string // hex (32B)
+  creator_wallet?: string | null
 }
 
 export interface SubmitDepositResponse {
