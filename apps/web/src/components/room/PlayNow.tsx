@@ -167,7 +167,7 @@ function CodeEntry() {
   if (myRoom) {
     return (
       <span className="code-entry code-entry--invited">
-        <span className="code-entry-note">Your friends table <b className="mono">{myRoom.code}</b> is open — your chips are at it</span>
+        <span className="code-entry-note">Your friends table <b className="mono">{myRoom.code}</b> is open</span>
         <button className="ghost-btn" type="button" onClick={() => void returnToSeat(myRoom.matchId)}>Return to it</button>
       </span>
     )
