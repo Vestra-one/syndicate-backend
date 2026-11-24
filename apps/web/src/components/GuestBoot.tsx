@@ -56,6 +56,8 @@ export function GuestBoot() {
     void (async () => {
       try {
         if (pending === 'house') await s.playHouse({ sit: true })
+        // Invited to a friends table: open its join sheet, never a house hand they did not ask for.
+        else if (pending.startsWith('code:')) await s.joinByCode(pending.slice(5))
         else {
           await s.joinGame(pending)
           const now = useGameStore.getState()

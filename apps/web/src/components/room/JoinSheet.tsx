@@ -115,7 +115,7 @@ export function JoinSheet({ matchId }: { matchId: string }) {
         {connected ? `Take your seat · deposit ${formatChips(total)} USDC` : 'Connect wallet to continue'}
       </button>
       {!connected && guestAllowed() && (
-        <button className="guest-btn" type="button" onClick={() => startGuest(matchId)}>
+        <button className="guest-btn" type="button" onClick={() => { const c = useGameStore.getState().roomCode; startGuest(c ? `code:${c}` : matchId) }}>
           Play instantly — no wallet needed
           <small>A table wallet is made in this browser and filled with test chips.</small>
         </button>

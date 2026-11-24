@@ -97,7 +97,7 @@ export function WalletMenu() {
         {connecting ? <><span className="wc-spinner" /> Connecting…</> : <>◎ Connect Wallet</>}
       </button>
       {guestAllowed() && (
-        <button className="wc-btn wc-btn--guest" onClick={() => startGuest()} title="A table wallet is made in this browser and filled with test chips.">
+        <button className="wc-btn wc-btn--guest" onClick={() => { const c = useGameStore.getState().pendingCode; startGuest(c ? `code:${c}` : 'house') }} title="A table wallet is made in this browser and filled with test chips.">
           Play instantly
         </button>
       )}
